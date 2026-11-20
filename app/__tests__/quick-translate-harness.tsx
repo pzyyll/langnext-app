@@ -42,6 +42,8 @@ function QuickTranslateHarness(config: {
   const unregisterCount = signal(0);
   const doubleCopyRegisterCount = signal(0);
   const doubleCopyStopCount = signal(0);
+  const pointerPressRegisterCount = signal(0);
+  const pointerPressStopCount = signal(0);
   const clipboardReadCount = signal(0);
   const trayMenuLabels = signal("");
   const lastRegisteredShortcut = signal("");
@@ -71,6 +73,12 @@ function QuickTranslateHarness(config: {
             readClipboardText: async () => {
               clipboardReadCount.set(clipboardReadCount() + 1);
               return nextClipboardText;
+            },
+            onPointerPress() {
+              pointerPressRegisterCount.set(pointerPressRegisterCount() + 1);
+              return () => {
+                pointerPressStopCount.set(pointerPressStopCount() + 1);
+              };
             },
           }}
           doubleCopy={{
@@ -189,7 +197,7 @@ function QuickTranslateHarness(config: {
           })()}
         </Text>
         <Text testID="harness-metrics">
-          {`reg=${registerCount()}|unreg=${unregisterCount()}|dcReg=${doubleCopyRegisterCount()}|dcStop=${doubleCopyStopCount()}|dcReads=${clipboardReadCount()}|shortcut=${lastRegisteredShortcut()}|tray=${trayMenuLabels()}|mainHidden=${mainHidden()}`}
+          {`reg=${registerCount()}|unreg=${unregisterCount()}|dcReg=${doubleCopyRegisterCount()}|dcStop=${doubleCopyStopCount()}|dcReads=${clipboardReadCount()}|ppReg=${pointerPressRegisterCount()}|ppStop=${pointerPressStopCount()}|shortcut=${lastRegisteredShortcut()}|tray=${trayMenuLabels()}|mainHidden=${mainHidden()}`}
         </Text>
       </View>
     </View>

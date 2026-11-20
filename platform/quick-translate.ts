@@ -1,16 +1,26 @@
-import type { CursorAnchor, DoubleCopyEvent } from "my-translator/native";
-import type { Point, Size } from "nsh";
+import type { CursorAnchor, DoubleCopyEvent, PointerPress } from "my-translator/native";
+import type { Bounds, Point, Size } from "nsh";
 import type { Display, DisplayId, WindowRef, WindowState } from "nsh/desktop";
 
 export type CursorAnchorPoint = CursorAnchor;
+export type PointerPressPoint = PointerPress;
 export type DoubleCopyActivationEvent = DoubleCopyEvent;
 
 export interface DoubleCopyBinding {
   onDoubleCopy: (listener: (event: DoubleCopyActivationEvent) => void) => () => void;
 }
 
+export interface PointerPressBinding {
+  onPointerPress: (listener: (event: PointerPressPoint) => void) => () => void;
+}
+
 /** Double-Ctrl+C Raw Input monitoring is only supported on Windows. */
 export function canUseDoubleCopy(os: string): boolean {
+  return os === "windows";
+}
+
+/** Global pointer press monitoring uses Windows Raw Input. */
+export function canMonitorPointerPress(os: string): boolean {
   return os === "windows";
 }
 
@@ -49,6 +59,54 @@ function capSizeToWorkArea(desiredSize: Size, display: Display | undefined): Siz
 
 function clamp(value: number, min: number, max: number): number {
   return Math.min(Math.max(value, min), max);
+}
+
+/** A display-relative physical point resolved to screen points on the display it belongs to. */
+export interface AnchoredDisplayPoint {
+  display: Display;
+  point: Point;
+}
+
+/**
+ * Resolves a cursor or press anchor to screen points: the display's origin plus its physical
+ * offset at that display's scale.
+ * Returns null when the anchor is malformed, or names a display that is missing or has no scale.
+ */
+export function resolveAnchoredDisplayPoint(
+  anchor: CursorAnchorPoint | null | undefined,
+  availableDisplays: readonly Display[],
+): AnchoredDisplayPoint | null {
+  if (
+    !anchor ||
+    typeof anchor.displayId !== "string" ||
+    !Number.isFinite(anchor.offsetX) ||
+    !Number.isFinite(anchor.offsetY)
+  ) {
+    return null;
+  }
+
+  const display = availableDisplays.find((item) => item.id === anchor.displayId);
+  if (!display || !Number.isFinite(display.scaleFactor) || display.scaleFactor <= 0) {
+    return null;
+  }
+
+  return {
+    display,
+    point: {
+      x: display.bounds.origin.x + anchor.offsetX / display.scaleFactor,
+      y: display.bounds.origin.y + anchor.offsetY / display.scaleFactor,
+    },
+  };
+}
+
+/** Whether screen point `point` falls inside `bounds`, whose right and bottom edges are open. */
+export function boundsContainPoint(bounds: Bounds, point: Point): boolean {
+  return (
+    point.x >= bounds.origin.x &&
+    point.x < bounds.origin.x + bounds.size.width &&
+    point.y >= bounds.origin.y &&
+    point.y < bounds.origin.y + bounds.size.height
+  );
 }
 
 /** Fits the measured content without changing width. Move up only when the work area requires it. */
@@ -96,32 +154,17 @@ export function resolvePopupPlacement(
     size: capSizeToWorkArea(desiredSize, fallbackDisplay),
   });
 
-  if (
-    !anchor ||
-    typeof anchor.displayId !== "string" ||
-    !Number.isFinite(anchor.offsetX) ||
-    !Number.isFinite(anchor.offsetY)
-  ) {
+  const anchored = resolveAnchoredDisplayPoint(anchor, availableDisplays);
+  if (!anchored) {
     return fallbackPlacement();
   }
 
-  const targetDisplay = availableDisplays.find((item) => item.id === anchor.displayId);
-  if (
-    !targetDisplay ||
-    !Number.isFinite(targetDisplay.scaleFactor) ||
-    targetDisplay.scaleFactor <= 0
-  ) {
-    return fallbackPlacement();
-  }
-
+  const targetDisplay = anchored.display;
   const size = capSizeToWorkArea(desiredSize, targetDisplay);
   const work = targetDisplay.visibleBounds;
 
-  const cursorX = targetDisplay.bounds.origin.x + anchor.offsetX / targetDisplay.scaleFactor;
-  const cursorY = targetDisplay.bounds.origin.y + anchor.offsetY / targetDisplay.scaleFactor;
-
-  const rawX = cursorX + CURSOR_OFFSET_X_PT;
-  const rawY = cursorY + CURSOR_OFFSET_Y_PT;
+  const rawX = anchored.point.x + CURSOR_OFFSET_X_PT;
+  const rawY = anchored.point.y + CURSOR_OFFSET_Y_PT;
 
   const minX = work.origin.x;
   const maxX = Math.max(minX, minX + work.size.width - size.width);

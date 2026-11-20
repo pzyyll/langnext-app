@@ -16,8 +16,12 @@ import {
   saveQuickTranslatePopupState,
 } from "../features/quick-translate/preferences";
 import { createQuickTranslateSession } from "../features/quick-translate/session";
-import type { DoubleCopyBinding } from "../platform/quick-translate";
-import { nativeDoubleCopyBinding, readCursorAnchor } from "../platform/quick-translate-native";
+import { canMonitorPointerPress, type DoubleCopyBinding } from "../platform/quick-translate";
+import {
+  nativeDoubleCopyBinding,
+  nativePointerPressBinding,
+  readCursorAnchor,
+} from "../platform/quick-translate-native";
 import {
   canRegisterGlobalQuickTranslateShortcut,
   createQuickTranslateController as createPureQuickTranslateController,
@@ -46,6 +50,9 @@ export function createQuickTranslateController(
     readCursorAnchor,
     readClipboardText: () => Clipboard.readText(),
     isDoubleCopyActive: doubleCopyEnabled,
+    onPointerPress: canMonitorPointerPress(platform.os)
+      ? nativePointerPressBinding.onPointerPress
+      : () => () => {},
     autoTranslate: autoTranslatePreference,
     onToggleAutoTranslate: () => {
       void saveQuickTranslatePopupState({ autoTranslate: !autoTranslatePreference() });

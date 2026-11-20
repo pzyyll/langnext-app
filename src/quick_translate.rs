@@ -50,6 +50,42 @@ pub struct DoubleCopyEvent {
     pub has_valid_copy: bool,
 }
 
+/// Global pointer press, located like [`CursorAnchor`]: its display and physical offset.
+#[derive(Debug, Clone, PartialEq, JsObject)]
+pub struct PointerPress {
+    /// Stable NSH display identifier formatted identically to `displays()[i].id`.
+    pub display_id: nsh_core::desktop::DisplayId,
+    /// Horizontal press offset in physical pixels from `rcMonitor.left`.
+    pub offset_x: f64,
+    /// Vertical press offset in physical pixels from `rcMonitor.top`.
+    pub offset_y: f64,
+}
+
+/// Raw Input mouse button-down flags: left, right, middle, back (4) and forward (5).
+const MOUSE_PRESS_FLAGS: u16 = 0x0001 | 0x0004 | 0x0010 | 0x0040 | 0x0100;
+
+/// Whether Raw Input mouse `button_flags` report any button going down.
+pub const fn is_mouse_press(button_flags: u16) -> bool {
+    button_flags & MOUSE_PRESS_FLAGS != 0
+}
+
+#[cfg(windows)]
+const _: () = {
+    use windows_sys::Win32::UI::WindowsAndMessaging::{
+        RI_MOUSE_BUTTON_4_DOWN, RI_MOUSE_BUTTON_5_DOWN, RI_MOUSE_LEFT_BUTTON_DOWN,
+        RI_MOUSE_MIDDLE_BUTTON_DOWN, RI_MOUSE_RIGHT_BUTTON_DOWN,
+    };
+
+    assert!(
+        MOUSE_PRESS_FLAGS
+            == (RI_MOUSE_LEFT_BUTTON_DOWN
+                | RI_MOUSE_RIGHT_BUTTON_DOWN
+                | RI_MOUSE_MIDDLE_BUTTON_DOWN
+                | RI_MOUSE_BUTTON_4_DOWN
+                | RI_MOUSE_BUTTON_5_DOWN) as u16
+    );
+};
+
 /// Active modifier state evaluated on keyboard events.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct Modifiers {
@@ -406,7 +442,7 @@ impl<T> LatestSignal<T> {
 }
 
 struct WorkerSession {
-    stopped: AtomicBool,
+    stopped: Arc<AtomicBool>,
     latest_pair: AtomicU64,
     signal: Arc<LatestSignal<DoubleCopyEvent>>,
 }
@@ -414,7 +450,7 @@ struct WorkerSession {
 impl WorkerSession {
     fn new() -> Arc<Self> {
         Arc::new(Self {
-            stopped: AtomicBool::new(false),
+            stopped: Arc::new(AtomicBool::new(false)),
             latest_pair: AtomicU64::new(0),
             signal: LatestSignal::new(),
         })
@@ -427,6 +463,30 @@ impl WorkerSession {
     fn stop(&self) {
         self.stopped.store(true, Ordering::Release);
         self.latest_pair.fetch_add(1, Ordering::AcqRel);
+        self.signal.close();
+    }
+}
+
+/// Bounded capacity-1 delivery of the newest pointer press.
+struct PressSession {
+    stopped: Arc<AtomicBool>,
+    signal: Arc<LatestSignal<PointerPress>>,
+}
+
+impl PressSession {
+    fn new() -> Arc<Self> {
+        Arc::new(Self {
+            stopped: Arc::new(AtomicBool::new(false)),
+            signal: LatestSignal::new(),
+        })
+    }
+
+    fn is_stopped(&self) -> bool {
+        self.stopped.load(Ordering::Acquire)
+    }
+
+    fn stop(&self) {
+        self.stopped.store(true, Ordering::Release);
         self.signal.close();
     }
 }
@@ -459,7 +519,13 @@ impl QuickTranslateNative {
         cx: CallCx<'_>,
     ) -> Result<Stop, String> {
         let session = WorkerSession::new();
-        let stop_worker = platform_start_double_copy(session.clone())?;
+        let stop_worker = match platform_start_double_copy(session.clone()) {
+            Ok(stop) => stop,
+            Err(message) => {
+                session.stop();
+                return Err(message);
+            }
+        };
 
         let delivery_session = session.clone();
         cx.start(async move {
@@ -468,6 +534,43 @@ impl QuickTranslateNative {
                     break;
                 }
                 listener.post(event);
+            }
+            drop(listener);
+        });
+
+        Ok(Stop::new(move || {
+            session.stop();
+            stop_worker();
+        }))
+    }
+
+    /// Listens for global Windows mouse button presses and returns a stop handle.
+    ///
+    /// # Rust
+    ///
+    /// Registers mouse-only Raw Input (`RIDEV_INPUTSINK`) on a dedicated worker thread,
+    /// confirms registration before returning, and posts each press's display and physical
+    /// offset back onto the NSH engine thread as `PointerPress`.
+    pub fn on_pointer_press(
+        #[args(event)] listener: Callback<PointerPress>,
+        cx: CallCx<'_>,
+    ) -> Result<Stop, String> {
+        let session = PressSession::new();
+        let stop_worker = match platform_start_pointer_press(session.clone()) {
+            Ok(stop) => stop,
+            Err(message) => {
+                session.stop();
+                return Err(message);
+            }
+        };
+
+        let delivery_session = session.clone();
+        cx.start(async move {
+            while let Some(press) = delivery_session.signal.recv().await {
+                if delivery_session.is_stopped() {
+                    break;
+                }
+                listener.post(press);
             }
             drop(listener);
         });
@@ -497,11 +600,6 @@ fn resolve_monitor_key(device_id: &[u16], sz_device: &[u16]) -> String {
 #[cfg(windows)]
 fn platform_cursor_anchor() -> Option<CursorAnchor> {
     use windows_sys::Win32::Foundation::POINT;
-    use windows_sys::Win32::Graphics::Gdi::{
-        DISPLAY_DEVICEW, EnumDisplayDevicesW, GetMonitorInfoW, MONITOR_DEFAULTTONEAREST,
-        MONITORINFO, MONITORINFOEXW, MonitorFromPoint,
-    };
-    use windows_sys::Win32::UI::WindowsAndMessaging::EDD_GET_DEVICE_INTERFACE_NAME;
     use windows_sys::Win32::UI::WindowsAndMessaging::GetCursorPos;
 
     let mut point = POINT { x: 0, y: 0 };
@@ -510,7 +608,19 @@ fn platform_cursor_anchor() -> Option<CursorAnchor> {
         return None;
     }
 
-    // SAFETY: `point` is initialized by `GetCursorPos`.
+    monitor_anchor(point)
+}
+
+/// Display ID and offset of screen point `point` from that display's origin.
+#[cfg(windows)]
+fn monitor_anchor(point: windows_sys::Win32::Foundation::POINT) -> Option<CursorAnchor> {
+    use windows_sys::Win32::Graphics::Gdi::{
+        DISPLAY_DEVICEW, EnumDisplayDevicesW, GetMonitorInfoW, MONITOR_DEFAULTTONEAREST,
+        MONITORINFO, MONITORINFOEXW, MonitorFromPoint,
+    };
+    use windows_sys::Win32::UI::WindowsAndMessaging::EDD_GET_DEVICE_INTERFACE_NAME;
+
+    // SAFETY: `point` is initialized by the caller.
     let monitor = unsafe { MonitorFromPoint(point, MONITOR_DEFAULTTONEAREST) };
     if monitor.is_null() {
         return None;
@@ -568,7 +678,7 @@ fn platform_cursor_anchor() -> Option<CursorAnchor> {
 static NEXT_RAW_INPUT_CLASS_ID: AtomicU64 = AtomicU64::new(1);
 
 #[cfg(windows)]
-const WM_APP_STOP_DOUBLE_COPY: u32 = 0x8001;
+const WM_APP_STOP_RAW_INPUT: u32 = 0x8001;
 
 #[cfg(windows)]
 unsafe extern "system" fn raw_input_wnd_proc(
@@ -620,18 +730,15 @@ fn is_vkey_async_down(vkey: u16) -> bool {
     (unsafe { GetAsyncKeyState(i32::from(vkey)) } as u16 & 0x8000) != 0
 }
 
+/// Reads the Raw Input event `lparam` names, or `None` when it cannot be read.
 #[cfg(windows)]
-fn handle_win32_raw_input(
+fn read_raw_input(
     lparam: windows_sys::Win32::Foundation::LPARAM,
-    recognizer: &mut DoubleCopyRecognizer,
-    session: &Arc<WorkerSession>,
-) {
+) -> Option<windows_sys::Win32::UI::Input::RAWINPUT> {
     use std::mem::size_of;
-    use windows_sys::Win32::System::DataExchange::GetClipboardSequenceNumber;
     use windows_sys::Win32::UI::Input::{
-        GetRawInputData, HRAWINPUT, RAWINPUT, RAWINPUTHEADER, RID_INPUT, RIM_TYPEKEYBOARD,
+        GetRawInputData, HRAWINPUT, RAWINPUT, RAWINPUTHEADER, RID_INPUT,
     };
-    use windows_sys::Win32::UI::WindowsAndMessaging::RI_KEY_BREAK;
 
     let mut stack_buf = [0u64; 16];
     let mut size = size_of::<[u64; 16]>() as u32;
@@ -650,7 +757,7 @@ fn handle_win32_raw_input(
 
     let raw: RAWINPUT = if copied != u32::MAX {
         if (copied as usize) < size_of::<RAWINPUTHEADER>() {
-            return;
+            return None;
         }
         // SAFETY: `stack_buf` holds `copied` bytes written by `GetRawInputData`.
         unsafe { std::ptr::read_unaligned(stack_buf.as_ptr().cast::<RAWINPUT>()) }
@@ -667,7 +774,7 @@ fn handle_win32_raw_input(
             )
         };
         if res == u32::MAX || (needed as usize) < size_of::<RAWINPUT>() {
-            return;
+            return None;
         }
         let mut heap_buf = vec![0u8; needed as usize];
         // SAFETY: `heap_buf` has `needed` bytes available.
@@ -681,11 +788,25 @@ fn handle_win32_raw_input(
             )
         };
         if read_bytes == u32::MAX || (read_bytes as usize) < size_of::<RAWINPUT>() {
-            return;
+            return None;
         }
         // SAFETY: `heap_buf` contains at least `size_of::<RAWINPUT>()` initialized bytes.
         unsafe { std::ptr::read_unaligned(heap_buf.as_ptr().cast::<RAWINPUT>()) }
     };
+
+    Some(raw)
+}
+
+/// Feeds one Raw Input event to the double-copy recognizer and clipboard settle.
+#[cfg(windows)]
+fn handle_keyboard_input(
+    raw: &windows_sys::Win32::UI::Input::RAWINPUT,
+    recognizer: &mut DoubleCopyRecognizer,
+    session: &Arc<WorkerSession>,
+) {
+    use windows_sys::Win32::System::DataExchange::GetClipboardSequenceNumber;
+    use windows_sys::Win32::UI::Input::RIM_TYPEKEYBOARD;
+    use windows_sys::Win32::UI::WindowsAndMessaging::RI_KEY_BREAK;
 
     if raw.header.dwType != RIM_TYPEKEYBOARD {
         return;
@@ -745,23 +866,103 @@ fn handle_win32_raw_input(
 
 #[cfg(windows)]
 fn platform_start_double_copy(session: Arc<WorkerSession>) -> Result<Box<dyn FnOnce()>, String> {
-    use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
-    use windows_sys::Win32::UI::Input::{
-        RAWINPUTDEVICE, RIDEV_INPUTSINK, RIDEV_REMOVE, RegisterRawInputDevices,
+    use windows_sys::Win32::UI::Input::RIM_TYPEKEYBOARD;
+
+    let worker_session = Arc::clone(&session);
+    let mut recognizer = DoubleCopyRecognizer::new();
+    platform_start_raw_input(&[(0x01, 0x06)], Arc::clone(&session.stopped), move |raw| {
+        if raw.header.dwType == RIM_TYPEKEYBOARD {
+            handle_keyboard_input(&raw, &mut recognizer, &worker_session);
+        }
+    })
+}
+
+#[cfg(not(windows))]
+fn platform_start_double_copy(_session: Arc<WorkerSession>) -> Result<Box<dyn FnOnce()>, String> {
+    Err("Double copy is only supported on Windows.".to_owned())
+}
+
+/// Reports the newest global mouse button press to `session`.
+#[cfg(windows)]
+fn handle_pointer_press(
+    raw: &windows_sys::Win32::UI::Input::RAWINPUT,
+    session: &Arc<PressSession>,
+) {
+    use windows_sys::Win32::UI::Input::RIM_TYPEMOUSE;
+
+    if raw.header.dwType != RIM_TYPEMOUSE {
+        return;
+    }
+    // SAFETY: `dwType == RIM_TYPEMOUSE` selects the `mouse` union variant.
+    let mouse = unsafe { raw.data.mouse };
+    // SAFETY: reading the button flags of an initialized `RAWMOUSE`.
+    let flags = unsafe { mouse.Anonymous.Anonymous.usButtonFlags };
+    if !is_mouse_press(flags) {
+        return;
+    }
+    let Some(press) = cursor_pointer_press() else {
+        return;
     };
+    session.signal.send_latest(press);
+}
+
+/// The cursor's display and physical offset now, located as `cursor_anchor` locates it.
+#[cfg(windows)]
+fn cursor_pointer_press() -> Option<PointerPress> {
+    use windows_sys::Win32::Foundation::POINT;
+    use windows_sys::Win32::UI::WindowsAndMessaging::GetCursorPos;
+
+    let mut point = POINT { x: 0, y: 0 };
+    // SAFETY: `point` is a stack-allocated Win32 POINT out-parameter.
+    if unsafe { GetCursorPos(&mut point) } == 0 {
+        return None;
+    }
+    let anchor = monitor_anchor(point)?;
+    Some(PointerPress {
+        display_id: anchor.display_id,
+        offset_x: anchor.offset_x,
+        offset_y: anchor.offset_y,
+    })
+}
+
+#[cfg(windows)]
+fn platform_start_pointer_press(session: Arc<PressSession>) -> Result<Box<dyn FnOnce()>, String> {
+    let worker_session = Arc::clone(&session);
+    platform_start_raw_input(&[(0x01, 0x02)], Arc::clone(&session.stopped), move |raw| {
+        handle_pointer_press(&raw, &worker_session);
+    })
+}
+
+#[cfg(not(windows))]
+fn platform_start_pointer_press(_session: Arc<PressSession>) -> Result<Box<dyn FnOnce()>, String> {
+    Err("Pointer press monitoring is only supported on Windows.".to_owned())
+}
+
+/// Registers Raw Input sinks for `usages` (HID page, usage) on a dedicated worker thread, hands
+/// every event to `on_input` there, and returns a handle that stops and joins the thread.
+#[cfg(windows)]
+fn platform_start_raw_input(
+    usages: &[(u16, u16)],
+    stopped: Arc<AtomicBool>,
+    mut on_input: impl FnMut(windows_sys::Win32::UI::Input::RAWINPUT) + Send + 'static,
+) -> Result<Box<dyn FnOnce()>, String> {
+    use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
+    use windows_sys::Win32::UI::Input::{RAWINPUTDEVICE, RIDEV_INPUTSINK, RegisterRawInputDevices};
     use windows_sys::Win32::UI::WindowsAndMessaging::{
         CreateWindowExW, DestroyWindow, DispatchMessageW, GetMessageW, HWND_MESSAGE, MSG,
         PostMessageW, RegisterClassExW, TranslateMessage, UnregisterClassW, WM_INPUT, WNDCLASSEXW,
     };
 
+    let usages = usages.to_vec();
+    let device_size = std::mem::size_of::<RAWINPUTDEVICE>() as u32;
     let (ready_tx, ready_rx) = std::sync::mpsc::sync_channel::<Result<isize, String>>(1);
-    let worker_session = Arc::clone(&session);
+    let worker_stopped = Arc::clone(&stopped);
 
     let join = std::thread::Builder::new()
         .name("quick-translate-raw-input".into())
         .spawn(move || {
             let class_id = NEXT_RAW_INPUT_CLASS_ID.fetch_add(1, Ordering::Relaxed);
-            let class_name: Vec<u16> = format!("MyTranslatorDoubleCopy_{class_id}\0")
+            let class_name: Vec<u16> = format!("MyTranslatorRawInput_{class_id}\0")
                 .encode_utf16()
                 .collect();
 
@@ -805,15 +1006,18 @@ fn platform_start_double_copy(session: Arc<WorkerSession>) -> Result<Box<dyn FnO
                 return;
             }
 
-            let device = RAWINPUTDEVICE {
-                usUsagePage: 0x01,
-                usUsage: 0x06,
-                dwFlags: RIDEV_INPUTSINK,
-                hwndTarget: hwnd,
-            };
-            // SAFETY: Registering keyboard-only HID page (0x01/0x06) targeting our valid `hwnd`.
+            let devices: Vec<RAWINPUTDEVICE> = usages
+                .iter()
+                .map(|&(page, usage)| RAWINPUTDEVICE {
+                    usUsagePage: page,
+                    usUsage: usage,
+                    dwFlags: RIDEV_INPUTSINK,
+                    hwndTarget: hwnd,
+                })
+                .collect();
+            // SAFETY: Every device targets our valid message-only window.
             if unsafe {
-                RegisterRawInputDevices(&device, 1, std::mem::size_of::<RAWINPUTDEVICE>() as u32)
+                RegisterRawInputDevices(devices.as_ptr(), devices.len() as u32, device_size)
             } == 0
             {
                 // SAFETY: Clean up created `hwnd` and window class before reporting failure.
@@ -821,42 +1025,33 @@ fn platform_start_double_copy(session: Arc<WorkerSession>) -> Result<Box<dyn FnO
                     DestroyWindow(hwnd);
                     UnregisterClassW(class_name.as_ptr(), hinstance);
                 }
-                let _ =
-                    ready_tx.send(Err("Failed to register keyboard Raw Input listener.".into()));
+                let _ = ready_tx.send(Err("Failed to register the Raw Input listener.".into()));
                 return;
             }
 
             if ready_tx.send(Ok(hwnd as isize)).is_err() {
-                let remove = RAWINPUTDEVICE {
-                    usUsagePage: 0x01,
-                    usUsage: 0x06,
-                    dwFlags: RIDEV_REMOVE,
-                    hwndTarget: std::ptr::null_mut(),
-                };
-                // SAFETY: `hwndTarget` must be NULL when passing `RIDEV_REMOVE`.
+                let remove = raw_input_devices_to_remove(&usages);
+                // SAFETY: `hwndTarget` is NULL for `RIDEV_REMOVE`, as that flag requires.
                 unsafe {
-                    RegisterRawInputDevices(
-                        &remove,
-                        1,
-                        std::mem::size_of::<RAWINPUTDEVICE>() as u32,
-                    );
+                    RegisterRawInputDevices(remove.as_ptr(), remove.len() as u32, device_size);
                     DestroyWindow(hwnd);
                     UnregisterClassW(class_name.as_ptr(), hinstance);
                 }
                 return;
             }
 
-            let mut recognizer = DoubleCopyRecognizer::new();
             let mut msg = MSG::default();
             // SAFETY: Standard Win32 thread message loop for our thread-owned window.
-            while !worker_session.is_stopped()
+            while !worker_stopped.load(Ordering::Acquire)
                 && unsafe { GetMessageW(&mut msg, std::ptr::null_mut(), 0, 0) } > 0
             {
-                if msg.message == WM_APP_STOP_DOUBLE_COPY || worker_session.is_stopped() {
+                if msg.message == WM_APP_STOP_RAW_INPUT || worker_stopped.load(Ordering::Acquire) {
                     break;
                 }
                 if msg.message == WM_INPUT {
-                    handle_win32_raw_input(msg.lParam, &mut recognizer, &worker_session);
+                    if let Some(raw) = read_raw_input(msg.lParam) {
+                        on_input(raw);
+                    }
                 } else {
                     // SAFETY: Standard message dispatch for thread window messages.
                     unsafe {
@@ -866,50 +1061,57 @@ fn platform_start_double_copy(session: Arc<WorkerSession>) -> Result<Box<dyn FnO
                 }
             }
 
-            recognizer.reset();
-            let remove = RAWINPUTDEVICE {
-                usUsagePage: 0x01,
-                usUsage: 0x06,
-                dwFlags: RIDEV_REMOVE,
-                hwndTarget: std::ptr::null_mut(),
-            };
-            // SAFETY: Remove keyboard Raw Input sink, destroy message window, and unregister class.
+            let remove = raw_input_devices_to_remove(&usages);
+            // SAFETY: Removes the sinks registered above; then the window and class go.
             unsafe {
-                RegisterRawInputDevices(&remove, 1, std::mem::size_of::<RAWINPUTDEVICE>() as u32);
+                RegisterRawInputDevices(remove.as_ptr(), remove.len() as u32, device_size);
                 DestroyWindow(hwnd);
                 UnregisterClassW(class_name.as_ptr(), hinstance);
             }
         })
-        .map_err(|err| format!("Failed to spawn double-copy listener thread: {err}"))?;
+        .map_err(|err| format!("Failed to spawn the Raw Input listener thread: {err}"))?;
 
     let hwnd_raw = match ready_rx.recv() {
         Ok(Ok(hwnd_raw)) => hwnd_raw,
         Ok(Err(message)) => {
-            session.stop();
+            stopped.store(true, Ordering::Release);
             let _ = join.join();
             return Err(message);
         }
         Err(_) => {
-            session.stop();
+            stopped.store(true, Ordering::Release);
             let _ = join.join();
-            return Err("Double-copy listener terminated during initialization.".into());
+            return Err("The Raw Input listener terminated during initialization.".into());
         }
     };
 
     Ok(Box::new(move || {
         use windows_sys::Win32::Foundation::HWND;
-        session.stop();
+        stopped.store(true, Ordering::Release);
         // SAFETY: `hwnd_raw` is valid until `join` completes below.
         unsafe {
-            PostMessageW(hwnd_raw as HWND, WM_APP_STOP_DOUBLE_COPY, 0, 0);
+            PostMessageW(hwnd_raw as HWND, WM_APP_STOP_RAW_INPUT, 0, 0);
         }
         let _ = join.join();
     }))
 }
 
-#[cfg(not(windows))]
-fn platform_start_double_copy(_session: Arc<WorkerSession>) -> Result<Box<dyn FnOnce()>, String> {
-    Err("Double copy is only supported on Windows.".to_owned())
+/// The `RIDEV_REMOVE` devices that release the sinks `usages` registered.
+#[cfg(windows)]
+fn raw_input_devices_to_remove(
+    usages: &[(u16, u16)],
+) -> Vec<windows_sys::Win32::UI::Input::RAWINPUTDEVICE> {
+    use windows_sys::Win32::UI::Input::{RAWINPUTDEVICE, RIDEV_REMOVE};
+
+    usages
+        .iter()
+        .map(|&(page, usage)| RAWINPUTDEVICE {
+            usUsagePage: page,
+            usUsage: usage,
+            dwFlags: RIDEV_REMOVE,
+            hwndTarget: std::ptr::null_mut(),
+        })
+        .collect()
 }
 
 #[cfg(test)]
@@ -948,6 +1150,33 @@ mod tests {
             assert!(!session.is_stopped());
             stop();
             assert!(session.is_stopped());
+        }
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_pointer_press_worker_starts_and_stops_cleanly_across_restarts() {
+        for _ in 0..2 {
+            let session = PressSession::new();
+            let stop = platform_start_pointer_press(Arc::clone(&session))
+                .expect("Win32 Raw Input worker should register cleanly");
+            assert!(!session.is_stopped());
+            stop();
+            assert!(session.is_stopped());
+        }
+    }
+
+    #[test]
+    fn mouse_press_flags_accept_every_button_down_and_ignore_ups_and_motion() {
+        // Left, right, middle, back and forward going down.
+        for down in [0x0001u16, 0x0004, 0x0010, 0x0040, 0x0100] {
+            assert!(is_mouse_press(down));
+        }
+        // The same buttons going up, a wheel turn, and pure motion report no press.
+        for other in [
+            0x0000u16, 0x0002, 0x0008, 0x0020, 0x0080, 0x0200, 0x0400, 0x0800,
+        ] {
+            assert!(!is_mouse_press(other));
         }
     }
 }

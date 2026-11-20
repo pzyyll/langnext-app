@@ -427,6 +427,102 @@ test("quick placement: window controller corrects shifted initial bounds once an
   expect(setBoundsCalls).toHaveLength(1);
 });
 
+test("quick press: an outside pointer press closes the unpinned popup, while inside presses, other displays and pinned popups keep it", async () => {
+  const display = {
+    id: "disp-1",
+    bounds: { origin: { x: 0, y: 0 }, size: { width: 1280, height: 800 } },
+    visibleBounds: { origin: { x: 0, y: 0 }, size: { width: 1280, height: 760 } },
+    primary: true,
+    name: "Primary",
+    scaleFactor: 2,
+    cutouts: [],
+  };
+  // The popup sits at (400, 300) pt, 420 x 360 pt, on a 2x display.
+  const popupBounds = { origin: { x: 400, y: 300 }, size: { width: 420, height: 360 } };
+  const popupState: WindowState = {
+    mode: "normal",
+    minimized: false,
+    visible: true,
+    focused: false,
+    bounds: popupBounds,
+    contentBounds: popupBounds,
+    placement: { bounds: popupBounds },
+    display,
+    scaleFactor: 2,
+  };
+  const fakeWindow: Pick<WindowRef, "focus" | "setBounds" | "state"> = {
+    focus: () => {},
+    setBounds: () => {},
+    state: () => popupState,
+  };
+
+  let pressListener:
+    | ((press: { displayId: string; offsetX: number; offsetY: number }) => void)
+    | null = null;
+  let monitorStarts = 0;
+  let monitorStops = 0;
+  const controller = createQuickTranslateController({
+    getDisplays: () => [display],
+    onPointerPress: (listener) => {
+      monitorStarts += 1;
+      pressListener = listener;
+      return () => {
+        monitorStops += 1;
+        if (pressListener === listener) {
+          pressListener = null;
+        }
+      };
+    },
+  });
+
+  controller.open();
+  controller.attachWindow(fakeWindow as WindowRef);
+  // Opening twice keeps one monitor.
+  controller.open();
+  expect(monitorStarts).toBe(1);
+
+  // Inside the popup: 500 pt of 2x display = 1000 px.
+  pressListener!({ displayId: "disp-1", offsetX: 1000, offsetY: 800 });
+  expect(controller.isOpen()).toBe(true);
+  // A press the displays cannot locate is ignored.
+  pressListener!({ displayId: "missing", offsetX: 200, offsetY: 200 });
+  expect(controller.isOpen()).toBe(true);
+  // Above and left of the popup closes it, and the monitor goes with it.
+  pressListener!({ displayId: "disp-1", offsetX: 200, offsetY: 200 });
+  expect(controller.isOpen()).toBe(false);
+  expect(monitorStops).toBe(1);
+  expect(pressListener).toBeNull();
+
+  // A pinned popup ignores outside presses until it closes.
+  controller.open();
+  controller.attachWindow(fakeWindow as WindowRef);
+  controller.togglePinned();
+  expect(monitorStarts).toBe(2);
+  pressListener!({ displayId: "disp-1", offsetX: 200, offsetY: 200 });
+  expect(controller.isOpen()).toBe(true);
+  controller.close();
+  expect(monitorStops).toBe(2);
+});
+
+test("desktop: quick window monitors global presses only while it is open", async () => {
+  const app = await open(HARNESS_ENTRY, {
+    ...viewport,
+    storage: { "settings.language": "en" },
+  });
+  const metrics = () => app.texts().join(" ");
+
+  await app.waitFor("id:harness-metrics");
+  expect(metrics()).toContain("ppReg=0|ppStop=0|");
+
+  await app.press("id:harness-tray-quick-translate");
+  await app.waitFor("id:quick-translate-pin");
+  await app.waitUntil(() => metrics().includes("ppReg=1|"));
+
+  await app.keyboard.press("escape");
+  await app.waitUntil(() => app.window("quick-translate").state() === null);
+  await app.waitUntil(() => metrics().includes("ppStop=1|"));
+});
+
 test("double copy: controller reads clipboard once, skips when disabled or empty, and drops slow reads superseded by close, newer activation, or manual edit", async () => {
   let doubleCopyActive = false;
   let readCalls = 0;

@@ -9,10 +9,13 @@ import {
   type WindowState,
 } from "nsh/desktop";
 import {
+  boundsContainPoint,
+  resolveAnchoredDisplayPoint,
   resolvePopupContentFit,
   resolvePopupPlacement,
   type CursorAnchorPoint,
   type DoubleCopyActivationEvent,
+  type PointerPressPoint,
   type ResolvedPopupPlacement,
 } from "../platform/quick-translate";
 
@@ -29,6 +32,7 @@ export interface QuickTranslateControllerOptions {
   getDisplays?: () => readonly Display[];
   readClipboardText?: () => Promise<string>;
   isDoubleCopyActive?: () => boolean;
+  onPointerPress?: (listener: (event: PointerPressPoint) => void) => () => void;
   autoTranslate?: Accessor<boolean>;
   onToggleAutoTranslate?: () => void;
 }
@@ -81,6 +85,7 @@ export function createQuickTranslateController(
   const getDisplaysList = options.getDisplays ?? displays;
   const readClipboard = options.readClipboardText ?? (async () => "");
   const isDoubleCopyEnabledFn = options.isDoubleCopyActive ?? (() => false);
+  const onPointerPress = options.onPointerPress ?? (() => () => {});
 
   const openSignal = signal(false);
   const pinnedSignal = signal(false);
@@ -96,6 +101,7 @@ export function createQuickTranslateController(
   let windowRef: WindowRef | null = null;
   let sourceInputRef: InputRef | null = null;
   let closeCleanup: (() => void) | null = null;
+  let stopPressMonitor: (() => void) | null = null;
   let needsBoundsCheck = false;
   let userMovedSinceOpen = false;
   let expectingOwnSetBounds = false;
@@ -131,6 +137,41 @@ export function createQuickTranslateController(
     userMovedSinceOpen = false;
     expectingOwnSetBounds = false;
     closeCleanup?.();
+    stopPressMonitor?.();
+    stopPressMonitor = null;
+  };
+
+  const hasOpenOverlay = () => Object.values(openMenusSignal()).some(Boolean);
+
+  /**
+   * Closes the unpinned popup when a global press lands outside it: the press never reached the
+   * window, so neither `closeOnBlur` nor the in-window overlays hear it.
+   */
+  const handlePointerPress = (press: PointerPressPoint) => {
+    if (!openSignal() || pinnedSignal()) {
+      return;
+    }
+    const state = (windowRef ?? Window.get(QUICK_TRANSLATE_WINDOW_ID))?.state();
+    if (!state?.visible) {
+      return;
+    }
+    const target = resolveAnchoredDisplayPoint(press, getDisplaysList());
+    if (!target || boundsContainPoint(state.bounds, target.point)) {
+      return;
+    }
+    close();
+  };
+
+  const startPressMonitor = () => {
+    if (stopPressMonitor) {
+      return;
+    }
+    try {
+      stopPressMonitor = onPointerPress(handlePointerPress);
+    } catch {
+      // Without the monitor, dismissal falls back to the window's own blur handling.
+      stopPressMonitor = null;
+    }
   };
 
   const open = () => {
@@ -150,6 +191,7 @@ export function createQuickTranslateController(
     expectingOwnSetBounds = false;
     placementSignal.set(placement);
     openSignal.set(true);
+    startPressMonitor();
   };
 
   const activateDoubleCopy = async (event: DoubleCopyActivationEvent): Promise<void> => {
@@ -277,7 +319,7 @@ export function createQuickTranslateController(
       delete next[menuId];
       openMenusSignal.set(next);
     },
-    hasOpenOverlay: () => Object.values(openMenusSignal()).some(Boolean),
+    hasOpenOverlay,
     attachWindow: (win: WindowRef | null) => {
       windowRef = win;
       attachedWindowSignal.set(win);

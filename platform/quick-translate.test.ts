@@ -1,6 +1,11 @@
 import type { Display } from "nsh/desktop";
 import { expect, test } from "nsh/test";
-import { resolvePopupContentFit, resolvePopupPlacement } from "./quick-translate";
+import {
+  boundsContainPoint,
+  resolveAnchoredDisplayPoint,
+  resolvePopupContentFit,
+  resolvePopupPlacement,
+} from "./quick-translate";
 
 function makeDisplay(overrides: Partial<Display> = {}): Display {
   return {
@@ -188,4 +193,53 @@ test("quick placement: falls back to centered main-display placement when cursor
     display: "disp-main",
     size: { width: 420, height: 360 },
   });
+});
+
+test("quick press: resolves a press point on its own display and leaves malformed anchors unresolved", () => {
+  const primary = makeDisplay({
+    id: "disp-1x",
+    bounds: { origin: { x: 0, y: 0 }, size: { width: 1707, height: 960 } },
+    scaleFactor: 1.5,
+  });
+  const secondary = makeDisplay({
+    id: "disp-2x",
+    bounds: { origin: { x: 1707, y: 100 }, size: { width: 1920, height: 1080 } },
+    primary: false,
+    scaleFactor: 2,
+  });
+
+  // Offset (1000, 600) px at 2x => (500, 300) pt from (1707, 100).
+  expect(
+    resolveAnchoredDisplayPoint({ displayId: "disp-2x", offsetX: 1000, offsetY: 600 }, [
+      primary,
+      secondary,
+    ]),
+  ).toEqual({ display: secondary, point: { x: 2207, y: 400 } });
+
+  expect(
+    resolveAnchoredDisplayPoint({ displayId: "missing", offsetX: 10, offsetY: 10 }, [primary]),
+  ).toBeNull();
+  expect(
+    resolveAnchoredDisplayPoint({ displayId: "disp-1x", offsetX: Number.NaN, offsetY: 0 }, [
+      primary,
+    ]),
+  ).toBeNull();
+  expect(
+    resolveAnchoredDisplayPoint({ displayId: "disp-zero", offsetX: 10, offsetY: 10 }, [
+      makeDisplay({ id: "disp-zero", scaleFactor: 0 }),
+    ]),
+  ).toBeNull();
+  expect(resolveAnchoredDisplayPoint(undefined, [primary])).toBeNull();
+});
+
+test("quick press: popup bounds include their left and top edges and exclude right and bottom", () => {
+  const bounds = { origin: { x: 400, y: 300 }, size: { width: 420, height: 360 } };
+
+  expect(boundsContainPoint(bounds, { x: 400, y: 300 })).toBe(true);
+  expect(boundsContainPoint(bounds, { x: 610, y: 480 })).toBe(true);
+  expect(boundsContainPoint(bounds, { x: 819.5, y: 659.5 })).toBe(true);
+  expect(boundsContainPoint(bounds, { x: 820, y: 480 })).toBe(false);
+  expect(boundsContainPoint(bounds, { x: 610, y: 660 })).toBe(false);
+  expect(boundsContainPoint(bounds, { x: 399.5, y: 480 })).toBe(false);
+  expect(boundsContainPoint(bounds, { x: 610, y: 299.5 })).toBe(false);
 });

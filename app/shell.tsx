@@ -1,4 +1,4 @@
-import { effect, signal, View } from "nsh";
+import { cleanup, effect, signal, View } from "nsh";
 import { Application, currentWindow, titleBar, Tray, Window, type TrayOptions } from "nsh/desktop";
 import { t } from "nsh/i18n";
 import trayIcon from "../assets/logos/icon.svg";
@@ -49,6 +49,9 @@ export function buildShellTrayOptions(onQuickTranslate: () => void): TrayOptions
 export function AppShell(props: AppShellProps = {}) {
   const quickTranslate = createQuickTranslateController(props.quickTranslateOptions);
   const trayApi = props.trayModule ?? Tray;
+
+  // The popup's global press monitor runs only while it is open: disposal closes it.
+  cleanup(() => quickTranslate.close());
 
   effect(() => {
     trayApi.set(buildShellTrayOptions(() => quickTranslate.open()));
