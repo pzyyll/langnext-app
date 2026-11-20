@@ -200,13 +200,16 @@ test("language detection: saves and restores the ordered detector chain and lang
   await app.waitFor("id:settings-detection-card");
 
   // Off is the initial mode and hides the detection model controls.
-  expect(app.shows("id:settings-detection-mode-off")).toBe(true);
+  expect(app.shows("id:settings-detection-mode")).toBe(true);
+  expect(app.texts()).toContain("Off");
   expect(app.shows("id:settings-detection-primary")).toBe(false);
   expect(app.shows("id:settings-detection-add-backup")).toBe(false);
   expect(app.shows("id:settings-detection-disclosure")).toBe(false);
   expect(app.storage()[LANGUAGE_DETECTION_STORAGE_KEY]).toBeUndefined();
 
-  await app.press("id:settings-detection-mode-ai");
+  await app.press("id:settings-detection-mode");
+  await app.waitFor("role:option[AI]");
+  await app.press("role:option[AI]");
   await app.waitFor("id:settings-detection-primary");
   expect(app.enabled("id:settings-detection-add-backup")).toBe(false);
   await app.press("id:settings-detection-save");
@@ -282,7 +285,9 @@ test("language detection: saves Google detection without model configuration", a
   await app.press("id:settings-nav-language-detection");
   await app.waitFor("id:settings-detection-card");
 
-  await app.press("id:settings-detection-mode-google");
+  await app.press("id:settings-detection-mode");
+  await app.waitFor("role:option[Google]");
+  await app.press("role:option[Google]");
   await app.waitFor("id:settings-detection-google-disclosure");
   expect(app.shows("id:settings-detection-primary")).toBe(false);
   expect(app.shows("id:settings-detection-add-backup")).toBe(false);
@@ -359,7 +364,9 @@ test("language detection: keeps the draft and shows a localized alert when valid
 
   await app.press("id:nav-settings");
   await app.press("id:settings-nav-language-detection");
-  await app.press("id:settings-detection-mode-ai");
+  await app.press("id:settings-detection-mode");
+  await app.waitFor("role:option[AI]");
+  await app.press("role:option[AI]");
   await app.press("id:settings-detection-primary");
   await app.waitFor("role:option[OpenAI Main · gpt-4.1-mini]");
   await app.press("role:option[OpenAI Main · gpt-4.1-mini]");
@@ -393,12 +400,17 @@ test("language detection: localizes labels and help text in both languages", asy
   await app.waitFor("id:settings-detection-card");
   expect(app.texts()).toContain("Language Detection");
   expect(app.texts()).toContain("Off");
-  expect(app.texts()).toContain("Google");
   expect(app.texts()).toContain("Native language");
   expect(app.texts()).toContain("Translate my native language into");
   expect(app.texts()).toContain(
     "When the target is set to Automatic, text in other languages is translated into your native language. Text in your native language is translated into the language selected above.",
   );
+
+  // The detector list carries every mode, with the saved one selected.
+  await app.press("id:settings-detection-mode");
+  await app.waitFor("role:option[Google]");
+  expect(app.texts()).toContain("AI");
+  await app.press("role:option[Off]");
 
   await app.press("id:settings-nav-general");
   await app.press("id:language-zh-CN");

@@ -1,7 +1,5 @@
 import { signal, Text, View } from "nsh";
-import { Radio, RadioGroup } from "nsh/base";
 import { t } from "nsh/i18n";
-import { motion } from "../../components/motion";
 import { Button } from "../../components/ui/button";
 import { Card, SectionHeading } from "../../components/ui/card";
 import { Icon } from "../../components/ui/icon";
@@ -24,24 +22,14 @@ import { readAvailableModelChoices, resolveModelBindingInfo } from "../presets/m
 /** Select value for an unset language preference (`null` in storage). */
 const UNSET_LANGUAGE_CHOICE = "__unset__";
 
-interface ModeOptionProps {
-  testID: string;
-  checked: boolean;
-  label: string;
-  onSelect: () => void;
-}
+/** Detection modes in display order; each value is stored unchanged. */
+const MODE_CHOICES: readonly LanguageDetectionMode[] = ["off", "ai", "google"];
 
-function ModeOption(props: ModeOptionProps) {
-  return (
-    <Radio
-      testID={props.testID}
-      checked={props.checked}
-      onChange={() => props.onSelect()}
-      class={`flex-1 rounded-lg border border-border p-4 checked:border-primary checked:bg-accent hover:bg-muted focus-visible:ring-2 focus-visible:ring-ring ${motion.navigationFeedback}`}
-    >
-      <Text class="text-sm font-medium text-card-foreground">{props.label}</Text>
-    </Radio>
-  );
+function modeItems(): SelectItem[] {
+  return MODE_CHOICES.map((mode) => ({
+    value: mode,
+    title: t(`settings.languageDetection.${mode}`),
+  }));
 }
 
 function languageItems(): SelectItem[] {
@@ -217,32 +205,19 @@ export function LanguageDetectionSection(props: LanguageDetectionSectionProps) {
       </If>
 
       <View class="gap-2">
-        <Text class="text-xs font-medium text-foreground">
-          {t("settings.languageDetection.detection")}
-        </Text>
-        <RadioGroup
-          accessibilityLabel={t("settings.languageDetection.detection")}
-          class="flex-row gap-3"
-        >
-          <ModeOption
-            testID="settings-detection-mode-off"
-            checked={draft().mode === "off"}
-            label={t("settings.languageDetection.off")}
-            onSelect={() => setMode("off")}
+        <FormField label={t("settings.languageDetection.detection")}>
+          <Select
+            testID="settings-detection-mode"
+            items={modeItems()}
+            value={draft().mode}
+            disabled={saving()}
+            accessibilityLabel={t("settings.languageDetection.detection")}
+            onChange={(value) => {
+              if (value === null || !MODE_CHOICES.includes(value as LanguageDetectionMode)) return;
+              setMode(value as LanguageDetectionMode);
+            }}
           />
-          <ModeOption
-            testID="settings-detection-mode-ai"
-            checked={draft().mode === "ai"}
-            label={t("settings.languageDetection.ai")}
-            onSelect={() => setMode("ai")}
-          />
-          <ModeOption
-            testID="settings-detection-mode-google"
-            checked={draft().mode === "google"}
-            label={t("settings.languageDetection.google")}
-            onSelect={() => setMode("google")}
-          />
-        </RadioGroup>
+        </FormField>
         <If when={draft().mode === "google"}>
           <Text testID="settings-detection-google-disclosure" class="text-xs text-muted-foreground">
             {t("settings.languageDetection.googleDisclosure")}
