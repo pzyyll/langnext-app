@@ -401,7 +401,7 @@ test("quick placement: window controller corrects shifted initial bounds once an
 
   controller.open();
   expect(controller.openingDisplay()).toBe("disp-1");
-  expect(controller.openingPosition()).toEqual({ x: 610, y: 400 });
+  expect(controller.openingPosition()).toEqual({ x: 590, y: 390 });
   expect(controller.openingSize()).toEqual({ width: 420, height: 360 });
   controller.attachWindow(fakeWindow as WindowRef);
 
@@ -417,10 +417,10 @@ test("quick placement: window controller corrects shifted initial bounds once an
     scaleFactor: 1,
   };
   controller.verifyInitialBounds(shiftedState);
-  expect(setBoundsCalls).toEqual([{ origin: { x: 610, y: 400 } }]);
+  expect(setBoundsCalls).toEqual([{ origin: { x: 590, y: 390 } }]);
 
   // Echo from our own setBounds clears expectation, and a subsequent user move disables repositioning.
-  controller.handleBoundsChange({ origin: { x: 610, y: 400 }, size: { width: 420, height: 360 } });
+  controller.handleBoundsChange({ origin: { x: 590, y: 390 }, size: { width: 420, height: 360 } });
   controller.handleBoundsChange({ origin: { x: 510, y: 220 }, size: { width: 420, height: 360 } });
   controller.open();
   controller.verifyInitialBounds(shiftedState);

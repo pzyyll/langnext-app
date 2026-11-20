@@ -76,7 +76,7 @@ test("quick placement: clamps left/top edge against display visibleBounds", () =
     scaleFactor: 1,
   });
 
-  // Cursor (10, 5) sits above the work area; the 10 pt offset still lands outside it.
+  // Cursor (10, 5) sits above the work area; the -10 pt offset still lands outside it.
   const placed = resolvePopupPlacement(
     { displayId: "disp-top", offsetX: 10, offsetY: 5 },
     [display],
@@ -110,7 +110,7 @@ test("quick placement: converts per-display physical offset using matched displa
   });
 
   // Offset (1000, 600) px at 2x => (500, 300) pt from (1707, 100) => cursor (2207, 400).
-  // Top-left corner is 10 pt right and below the cursor => (2217, 410).
+  // Top-left corner is 10 pt left of and above the cursor => (2197, 390).
   const placed = resolvePopupPlacement(
     { displayId: "disp-2x", offsetX: 1000, offsetY: 600 },
     [primary, secondary],
@@ -122,7 +122,7 @@ test("quick placement: converts per-display physical offset using matched displa
     kind: "cursor",
     display: "disp-2x",
     bounds: {
-      origin: { x: 2217, y: 410 },
+      origin: { x: 2197, y: 390 },
       size: { width: 420, height: 360 },
     },
   });

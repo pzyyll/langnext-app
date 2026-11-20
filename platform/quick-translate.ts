@@ -14,9 +14,9 @@ export function canUseDoubleCopy(os: string): boolean {
   return os === "windows";
 }
 
-/** Gap in points between the cursor hotspot and the popup's top-left corner. */
-const CURSOR_OFFSET_X_PT = 10;
-const CURSOR_OFFSET_Y_PT = 10;
+/** Offset in points from the cursor hotspot to the popup's top-left corner. */
+const CURSOR_OFFSET_X_PT = -10;
+const CURSOR_OFFSET_Y_PT = -10;
 
 export type ResolvedPopupPlacement =
   | {
@@ -79,7 +79,8 @@ export function resolvePopupContentFit(
 
 /**
  * Resolves popup display, size, and initial origin from a cursor monitor anchor.
- * The popup hangs below-right of the cursor, clamped to the display work area.
+ * The popup's top-left corner sits up-left of the cursor, so the cursor lands 10 pt inside it,
+ * clamped to the display work area.
  * Falls back to centered main-display placement when cursor, display, or scale is unavailable.
  */
 export function resolvePopupPlacement(
