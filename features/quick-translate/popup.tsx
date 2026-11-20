@@ -17,7 +17,7 @@ export interface QuickTranslatePopupProps {
 }
 
 function buildTemplateItems(preset: TranslationPreset | null): SelectItem[] {
-  if (!preset) return [];
+  if (!preset || preset.engine.kind !== "ai") return [];
   return preset.engine.templates.map((tpl) => ({
     value: tpl.id,
     title: tpl.name,
@@ -127,6 +127,8 @@ function PresetCardRow(props: PresetCardRowProps) {
 
   const templateItems = () => buildTemplateItems(resolvedPreset());
 
+  const hasTemplates = () => resolvedPreset()?.engine.kind === "ai";
+
   const activeTemplateValue = () => {
     const preset = resolvedPreset();
     if (!preset) return null;
@@ -153,20 +155,22 @@ function PresetCardRow(props: PresetCardRowProps) {
           onOpenChange={(open) => props.onOverlayOpenChange(`card-preset-${props.card().id}`, open)}
           onChange={(value) => props.onSelectPreset(props.card().id, value)}
         />
-        <Select
-          testID="quick-translate-template"
-          size="sm"
-          class="min-w-0 flex-1"
-          items={templateItems()}
-          value={activeTemplateValue()}
-          placeholder={t("quickTranslate.templateLabel")}
-          accessibilityLabel={t("quickTranslate.templateLabel")}
-          disabled={templateItems().length === 0}
-          onOpenChange={(open) =>
-            props.onOverlayOpenChange(`card-template-${props.card().id}`, open)
-          }
-          onChange={(value) => props.onSelectTemplate(props.card().id, value)}
-        />
+        <If when={hasTemplates()}>
+          <Select
+            testID="quick-translate-template"
+            size="sm"
+            class="min-w-0 flex-1"
+            items={templateItems()}
+            value={activeTemplateValue()}
+            placeholder={t("quickTranslate.templateLabel")}
+            accessibilityLabel={t("quickTranslate.templateLabel")}
+            disabled={templateItems().length === 0}
+            onOpenChange={(open) =>
+              props.onOverlayOpenChange(`card-template-${props.card().id}`, open)
+            }
+            onChange={(value) => props.onSelectTemplate(props.card().id, value)}
+          />
+        </If>
         <View class="flex-row items-center gap-1">
           <Button
             testID="quick-translate-collapse"

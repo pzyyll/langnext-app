@@ -1,11 +1,24 @@
 import { expect, test } from "nsh/test";
-import { createPresetsStore, PRESETS_STORAGE_KEY } from "./store";
-import type { ModelChoiceId, PresetsStorage, SavePresetInput } from "./types";
+import {
+  createPresetsStore,
+  DEEPL_CREDENTIAL_KEY_PREFIX,
+  deepLCredentialStorageKey,
+  PRESETS_STORAGE_KEY,
+} from "./store";
+import type {
+  AiPresetEngine,
+  ModelChoiceId,
+  PresetsStorage,
+  SaveAiPresetEngineInput,
+  SavePresetInput,
+  TranslationPreset,
+} from "./types";
 
 function createMemoryStorage(initial: Record<string, string> = {}) {
   const backing: Record<string, string> = { ...initial };
   let failGetError: Error | null = null;
   let failSetError: Error | null = null;
+  let failSetPredicate: ((key: string) => boolean) | null = null;
   let setCalls = 0;
 
   const storage: PresetsStorage = {
@@ -15,8 +28,11 @@ function createMemoryStorage(initial: Record<string, string> = {}) {
     },
     setItem: async (key, value) => {
       setCalls += 1;
-      if (failSetError) throw failSetError;
+      if (failSetError && (!failSetPredicate || failSetPredicate(key))) throw failSetError;
       backing[key] = value;
+    },
+    removeItem: async (key) => {
+      delete backing[key];
     },
   };
 
@@ -26,35 +42,58 @@ function createMemoryStorage(initial: Record<string, string> = {}) {
     setGetError: (err: Error | null) => {
       failGetError = err;
     },
-    setSetError: (err: Error | null) => {
+    setSetError: (err: Error | null, predicate?: (key: string) => boolean) => {
       failSetError = err;
+      failSetPredicate = predicate ?? null;
     },
     getSetCalls: () => setCalls,
   };
+}
+
+function makeAiEngine(overrides: Partial<SaveAiPresetEngineInput> = {}): SaveAiPresetEngineInput {
+  return {
+    kind: "ai",
+    modelIds: ["m-1"],
+    temperature: null,
+    maxOutputTokens: null,
+    disableReasoning: true,
+    templates: [
+      {
+        id: "tpl-1",
+        name: "Default",
+        systemTemplate: "Translate from {{source_language}} to {{target_language}} only.",
+        userTemplate: "{{text}}",
+      },
+    ],
+    defaultTemplateId: "tpl-1",
+    ...overrides,
+  };
+}
+
+function aiEngine(preset: TranslationPreset): AiPresetEngine {
+  if (preset.engine.kind !== "ai") throw new Error("expected an AI preset");
+  return preset.engine;
+}
+
+function makeDeepLInput(overrides: Partial<SavePresetInput> = {}): SavePresetInput {
+  return {
+    name: "DeepL Preset",
+    enabled: true,
+    engine: { kind: "deepl", apiKey: "deepl-key:fx" },
+    ...overrides,
+  };
+}
+
+function deeplRef(preset: TranslationPreset): string {
+  if (preset.engine.kind !== "deepl") throw new Error("expected a DeepL preset");
+  return preset.engine.credentialRef;
 }
 
 function makeBaseInput(overrides: Partial<SavePresetInput> = {}): SavePresetInput {
   return {
     name: "Technical EN to ZH",
     enabled: true,
-    sourceLanguage: "en",
-    targetLanguage: "zh",
-    engine: {
-      kind: "ai",
-      modelIds: ["m-1"],
-      temperature: null,
-      maxOutputTokens: null,
-      disableReasoning: true,
-      templates: [
-        {
-          id: "tpl-1",
-          name: "Default",
-          systemTemplate: "Translate from {{source_language}} to {{target_language}} only.",
-          userTemplate: "{{text}}",
-        },
-      ],
-      defaultTemplateId: "tpl-1",
-    },
+    engine: makeAiEngine(),
     ...overrides,
   };
 }
@@ -73,26 +112,28 @@ test("presets store: restores a saved preset", async () => {
   expect(created.id.length).toBeGreaterThan(0);
   expect(created.name).toBe("Technical EN to ZH");
   expect(created.enabled).toBe(true);
-  expect(created.sourceLanguage).toBe("en");
-  expect(created.targetLanguage).toBe("zh");
   expect(created.createdAt).toBeTruthy();
   expect(created.updatedAt).toBeTruthy();
+  expect(Object.keys(created).sort()).toEqual([
+    "createdAt",
+    "enabled",
+    "engine",
+    "id",
+    "name",
+    "updatedAt",
+  ]);
 
   const updated = await store1.save(
     makeBaseInput({
       id: created.id,
       name: "Updated Preset",
       enabled: false,
-      sourceLanguage: "auto",
-      targetLanguage: "auto",
     }),
   );
   expect(updated.id).toBe(created.id);
   expect(updated.createdAt).toBe(created.createdAt);
   expect(updated.name).toBe("Updated Preset");
   expect(updated.enabled).toBe(false);
-  expect(updated.sourceLanguage).toBe("auto");
-  expect(updated.targetLanguage).toBe("auto");
 
   const store2 = createPresetsStore(mem.storage, choices);
   await store2.load();
@@ -187,7 +228,7 @@ test("presets store: validates model order and parameters", async () => {
     store.save(
       makeBaseInput({
         engine: {
-          ...makeBaseInput().engine,
+          ...makeAiEngine(),
           modelIds: ["m-1", "m-2", "m-1"],
         },
       }),
@@ -199,7 +240,7 @@ test("presets store: validates model order and parameters", async () => {
     store.save(
       makeBaseInput({
         engine: {
-          ...makeBaseInput().engine,
+          ...makeAiEngine(),
           modelIds: ["m-1", "m-missing"],
         },
       }),
@@ -209,7 +250,7 @@ test("presets store: validates model order and parameters", async () => {
   // Temperature uses a fixed 0.0–2.0 grid for both text and numeric inputs.
   for (const temperature of ["-0.1", "hot", "2.1", "1.05", "1e0", 2.1, 1.05]) {
     await expect(
-      store.save(makeBaseInput({ engine: { ...makeBaseInput().engine, temperature } })),
+      store.save(makeBaseInput({ engine: { ...makeAiEngine(), temperature } })),
     ).rejects.toMatchObject({ key: "temperature_invalid", field: "temperature" });
   }
 
@@ -218,7 +259,7 @@ test("presets store: validates model order and parameters", async () => {
     await expect(
       store.save(
         makeBaseInput({
-          engine: { ...makeBaseInput().engine, maxOutputTokens: invalidTokens },
+          engine: { ...makeAiEngine(), maxOutputTokens: invalidTokens },
         }),
       ),
     ).rejects.toMatchObject({ key: "max_output_tokens_invalid", field: "maxOutputTokens" });
@@ -228,32 +269,32 @@ test("presets store: validates model order and parameters", async () => {
   const created = await store.save(
     makeBaseInput({
       engine: {
-        ...makeBaseInput().engine,
+        ...makeAiEngine(),
         modelIds: ["m-3", "m-1", "m-2"],
         temperature: "0",
         maxOutputTokens: "4096",
       },
     }),
   );
-  expect(created.engine.modelIds).toEqual(["m-3", "m-1", "m-2"]);
-  expect(created.engine.temperature).toBe(0);
-  expect(created.engine.maxOutputTokens).toBe(4096);
+  expect(aiEngine(created).modelIds).toEqual(["m-3", "m-1", "m-2"]);
+  expect(aiEngine(created).temperature).toBe(0);
+  expect(aiEngine(created).maxOutputTokens).toBe(4096);
 
   // Blank optional numeric fields normalize to null cleanly.
   const cleared = await store.save(
     makeBaseInput({
       id: created.id,
       engine: {
-        ...makeBaseInput().engine,
+        ...makeAiEngine(),
         modelIds: ["m-3", "m-2", "m-1"],
         temperature: "   ",
         maxOutputTokens: "",
       },
     }),
   );
-  expect(cleared.engine.modelIds).toEqual(["m-3", "m-2", "m-1"]);
-  expect(cleared.engine.temperature).toBeNull();
-  expect(cleared.engine.maxOutputTokens).toBeNull();
+  expect(aiEngine(cleared).modelIds).toEqual(["m-3", "m-2", "m-1"]);
+  expect(aiEngine(cleared).temperature).toBeNull();
+  expect(aiEngine(cleared).maxOutputTokens).toBeNull();
 
   // Existing bound unavailable models can stay across unrelated edits/reorders, while new unavailable ones fail.
   available = [{ id: "m-1" }];
@@ -262,18 +303,18 @@ test("presets store: validates model order and parameters", async () => {
       id: cleared.id,
       name: "Renamed Stale",
       engine: {
-        ...makeBaseInput().engine,
+        ...makeAiEngine(),
         modelIds: ["m-3", "m-1"],
       },
     }),
   );
-  expect(renamedWithStale.engine.modelIds).toEqual(["m-3", "m-1"]);
+  expect(aiEngine(renamedWithStale).modelIds).toEqual(["m-3", "m-1"]);
   await expect(
     store.save(
       makeBaseInput({
         id: renamedWithStale.id,
         engine: {
-          ...makeBaseInput().engine,
+          ...makeAiEngine(),
           modelIds: ["m-3", "m-newly-bad"],
         },
       }),
@@ -292,7 +333,7 @@ test("presets store: validates every prompt template", async () => {
   await expect(
     store.save({
       ...base,
-      engine: { ...base.engine, templates: [] },
+      engine: { ...makeAiEngine(), templates: [] },
     }),
   ).rejects.toMatchObject({ key: "templates_required", field: "templates" });
 
@@ -301,7 +342,7 @@ test("presets store: validates every prompt template", async () => {
     store.save({
       ...base,
       engine: {
-        ...base.engine,
+        ...makeAiEngine(),
         templates: [
           { id: "tpl-dup", name: "One", systemTemplate: "", userTemplate: "{{text}}" },
           { id: "tpl-dup", name: "Two", systemTemplate: "", userTemplate: "{{text}}" },
@@ -316,9 +357,9 @@ test("presets store: validates every prompt template", async () => {
     store.save({
       ...base,
       engine: {
-        ...base.engine,
+        ...makeAiEngine(),
         templates: [
-          base.engine.templates[0]!,
+          makeAiEngine().templates[0]!,
           { id: "tpl-2", name: "   ", systemTemplate: "", userTemplate: "{{text}}" },
         ],
       },
@@ -333,7 +374,7 @@ test("presets store: validates every prompt template", async () => {
   await expect(
     store.save({
       ...base,
-      engine: { ...base.engine, defaultTemplateId: "tpl-missing" },
+      engine: { ...makeAiEngine(), defaultTemplateId: "tpl-missing" },
     }),
   ).rejects.toMatchObject({ key: "default_template_invalid", field: "defaultTemplate" });
 
@@ -342,7 +383,7 @@ test("presets store: validates every prompt template", async () => {
     store.save({
       ...base,
       engine: {
-        ...base.engine,
+        ...makeAiEngine(),
         templates: [
           {
             id: "tpl-1",
@@ -363,7 +404,7 @@ test("presets store: validates every prompt template", async () => {
     store.save({
       ...base,
       engine: {
-        ...base.engine,
+        ...makeAiEngine(),
         templates: [
           {
             id: "tpl-1",
@@ -385,7 +426,7 @@ test("presets store: validates every prompt template", async () => {
     store.save({
       ...base,
       engine: {
-        ...base.engine,
+        ...makeAiEngine(),
         templates: [{ id: "tpl-1", name: "Default", systemTemplate: "", userTemplate: "Hello" }],
       },
     }),
@@ -399,7 +440,7 @@ test("presets store: validates every prompt template", async () => {
     store.save({
       ...base,
       engine: {
-        ...base.engine,
+        ...makeAiEngine(),
         templates: [
           {
             id: "tpl-1",
@@ -420,7 +461,7 @@ test("presets store: validates every prompt template", async () => {
   const saved = await store.save({
     ...base,
     engine: {
-      ...base.engine,
+      ...makeAiEngine(),
       templates: [
         {
           id: "tpl-1",
@@ -439,8 +480,8 @@ test("presets store: validates every prompt template", async () => {
     },
   });
 
-  expect(saved.engine.defaultTemplateId).toBe("tpl-2");
-  expect(saved.engine.templates).toEqual([
+  expect(aiEngine(saved).defaultTemplateId).toBe("tpl-2");
+  expect(aiEngine(saved).templates).toEqual([
     {
       id: "tpl-1",
       name: "Minimal",
@@ -484,49 +525,165 @@ test("presets store: removes only the requested preset", async () => {
   expect(JSON.parse(mem.backing[PRESETS_STORAGE_KEY]!).items).toEqual([p2]);
 });
 
-test("automatic target: saves and restores an automatic target", async () => {
+test("presets store: engine data holds no languages", async () => {
   const mem = createMemoryStorage();
   const choices = (): ModelChoiceId[] => [{ id: "m-1" }];
   const store = createPresetsStore(mem.storage, choices);
   await store.load();
 
-  const saved = await store.save(makeBaseInput({ targetLanguage: "auto" }));
-  expect(saved.targetLanguage).toBe("auto");
+  const created = await store.save(makeBaseInput());
+  const raw = mem.backing[PRESETS_STORAGE_KEY]!;
+  expect(raw).not.toContain("sourceLanguage");
+  expect(raw).not.toContain("targetLanguage");
+  expect(JSON.parse(raw).items[0]).toEqual(created);
 
   const reloaded = createPresetsStore(mem.storage, choices);
   await reloaded.load();
-  expect(reloaded.status()).toEqual({ kind: "ready", skippedCount: 0 });
-  expect(reloaded.records()[0]!.targetLanguage).toBe("auto");
-  expect(JSON.parse(mem.backing[PRESETS_STORAGE_KEY]!).items[0].targetLanguage).toBe("auto");
+  expect(reloaded.records()).toEqual([created]);
 
-  const concrete = await store.save(makeBaseInput({ id: saved.id, targetLanguage: "ja" }));
-  expect(concrete.targetLanguage).toBe("ja");
-  const reloadedConcrete = createPresetsStore(mem.storage, choices);
-  await reloadedConcrete.load();
-  expect(reloadedConcrete.records()[0]!.targetLanguage).toBe("ja");
+  // A readable record with legacy values stays readable; the next save drops them.
+  const legacyMem = createMemoryStorage({
+    [PRESETS_STORAGE_KEY]: JSON.stringify({
+      version: 1,
+      items: [{ ...created, sourceLanguage: "en", targetLanguage: "fr" }],
+    }),
+  });
+  const legacyStore = createPresetsStore(legacyMem.storage, choices);
+  await legacyStore.load();
+  expect(legacyStore.status()).toEqual({ kind: "ready", skippedCount: 0 });
+  expect(legacyStore.records()[0]!.id).toBe(created.id);
+  expect(legacyStore.records()[0]!.name).toBe(created.name);
+
+  const edited = await legacyStore.save(makeBaseInput({ id: created.id, name: "Renamed" }));
+  expect(Object.keys(edited)).not.toContain("sourceLanguage");
+  expect(Object.keys(edited)).not.toContain("targetLanguage");
+  const written = JSON.parse(legacyMem.backing[PRESETS_STORAGE_KEY]!).items[0];
+  expect(written.sourceLanguage).toBeUndefined();
+  expect(written.targetLanguage).toBeUndefined();
+  expect(written.name).toBe("Renamed");
 });
 
-test("automatic target: rejects an unsupported or missing target", async () => {
+test("presets store: records a DeepL preset without AI models or the secret", async () => {
   const mem = createMemoryStorage();
-  const choices = (): ModelChoiceId[] => [{ id: "m-1" }];
-  const store = createPresetsStore(mem.storage, choices);
+  // Saving DeepL must not read the Models snapshot at all.
+  const store = createPresetsStore(mem.storage, () => {
+    throw new Error("Models must not be read for a DeepL preset");
+  });
   await store.load();
 
-  const unsupported = await store
-    .save(makeBaseInput({ targetLanguage: "__none__" as unknown as "auto" }))
-    .then(
-      () => null,
-      (error: unknown) => error,
-    );
-  expect((unsupported as { key?: string } | null)?.key).toBe("target_language_invalid");
+  const saved = await store.save(makeDeepLInput({ name: "  DeepL Free  " }));
+  expect(saved.name).toBe("DeepL Free");
+  expect(saved.engine.kind).toBe("deepl");
+  const ref = deeplRef(saved);
+  expect(ref.length).toBeGreaterThan(0);
+  expect(mem.backing[deepLCredentialStorageKey(ref)]).toBe("deepl-key:fx");
 
-  const missing = await store
-    .save(makeBaseInput({ targetLanguage: null as unknown as "auto" }))
-    .then(
-      () => null,
-      (error: unknown) => error,
-    );
-  expect((missing as { key?: string } | null)?.key).toBe("target_language_invalid");
+  const raw = mem.backing[PRESETS_STORAGE_KEY]!;
+  expect(raw).not.toContain("deepl-key:fx");
+  expect(raw).not.toContain("apiKey");
+  expect(await store.readDeepLCredential(saved.id)).toBe("deepl-key:fx");
+  expect(await store.readDeepLCredential("missing-id")).toBeNull();
+
+  const reloaded = createPresetsStore(mem.storage, () => []);
+  await reloaded.load();
+  expect(reloaded.records()).toEqual([saved]);
+  expect(await reloaded.readDeepLCredential(saved.id)).toBe("deepl-key:fx");
+});
+
+test("presets store: validates DeepL keys and locked engine types", async () => {
+  const mem = createMemoryStorage();
+  const store = createPresetsStore(mem.storage, () => [{ id: "m-1" }]);
+  await store.load();
+
+  await expect(store.save(makeDeepLInput({ engine: { kind: "deepl" } }))).rejects.toMatchObject({
+    key: "deepl_key_required",
+    field: "deeplKey",
+  });
+  await expect(
+    store.save(makeDeepLInput({ engine: { kind: "deepl", apiKey: "   " } })),
+  ).rejects.toMatchObject({
+    key: "deepl_key_required",
+    field: "deeplKey",
+  });
+  await expect(
+    store.save(makeDeepLInput({ engine: { kind: "deepl", apiKey: "deepl key:fx" } })),
+  ).rejects.toMatchObject({ key: "deepl_key_invalid", field: "deeplKey" });
+
+  const saved = await store.save(
+    makeDeepLInput({ engine: { kind: "deepl", apiKey: "  deepl-key-1:fx  " } }),
+  );
+  expect(mem.backing[deepLCredentialStorageKey(deeplRef(saved))]).toBe("deepl-key-1:fx");
+
+  // A saved preset keeps its engine type in both directions.
+  await expect(
+    store.save({ ...makeDeepLInput({ id: saved.id }), engine: makeBaseInput().engine }),
+  ).rejects.toMatchObject({ key: "engine_type_locked" });
+
+  const ai = await store.save(makeBaseInput());
+  const setCallsBeforeTypeChange = mem.getSetCalls();
+  await expect(
+    store.save({ ...makeBaseInput({ id: ai.id }), engine: { kind: "deepl", apiKey: "key:fx" } }),
+  ).rejects.toMatchObject({ key: "engine_type_locked" });
+  expect(mem.getSetCalls()).toBe(setCallsBeforeTypeChange);
+});
+
+test("presets store: keeps, replaces, and removes DeepL keys with the record", async () => {
+  const mem = createMemoryStorage();
+  const store = createPresetsStore(mem.storage, () => []);
+  await store.load();
+
+  const saved = await store.save(
+    makeDeepLInput({ engine: { kind: "deepl", apiKey: "first-key:fx" } }),
+  );
+  const firstRef = deeplRef(saved);
+  const firstKey = deepLCredentialStorageKey(firstRef);
+
+  // A blank input on edit keeps the stored key and reference.
+  const kept = await store.save(
+    makeDeepLInput({ id: saved.id, name: "Renamed", engine: { kind: "deepl", apiKey: "   " } }),
+  );
+  expect(deeplRef(kept)).toBe(firstRef);
+  expect(mem.backing[firstKey]).toBe("first-key:fx");
+
+  // Replacement writes a new reference first and removes the old key after the commit.
+  const replaced = await store.save(
+    makeDeepLInput({ id: saved.id, engine: { kind: "deepl", apiKey: "second-key:fx" } }),
+  );
+  const secondRef = deeplRef(replaced);
+  expect(secondRef).not.toBe(firstRef);
+  expect(mem.backing[deepLCredentialStorageKey(secondRef)]).toBe("second-key:fx");
+  expect(mem.backing[firstKey]).toBeUndefined();
+
+  // A failed key write leaves the existing record and key untouched.
+  mem.setSetError(new Error("ERR_NSH_QUOTA_EXCEEDED"), (key) =>
+    key.startsWith(DEEPL_CREDENTIAL_KEY_PREFIX),
+  );
+  await expect(
+    store.save(
+      makeDeepLInput({ id: replaced.id, engine: { kind: "deepl", apiKey: "third-key:fx" } }),
+    ),
+  ).rejects.toMatchObject({ key: "storage_write_failed" });
+  expect(store.records()).toEqual([replaced]);
+  expect(await store.readDeepLCredential(replaced.id)).toBe("second-key:fx");
+
+  // A failed record write removes the unused new key and keeps the old record usable.
+  mem.setSetError(new Error("ERR_DISK_LOCKED"), (key) => key === PRESETS_STORAGE_KEY);
+  await expect(
+    store.save(
+      makeDeepLInput({ id: replaced.id, engine: { kind: "deepl", apiKey: "fourth-key:fx" } }),
+    ),
+  ).rejects.toMatchObject({ key: "storage_write_failed" });
+  expect(store.records()).toEqual([replaced]);
+  expect(await store.readDeepLCredential(replaced.id)).toBe("second-key:fx");
+  expect(
+    Object.keys(mem.backing).filter((key) => key.startsWith(DEEPL_CREDENTIAL_KEY_PREFIX)),
+  ).toEqual([deepLCredentialStorageKey(secondRef)]);
+
+  // Delete removes the referenced key.
+  mem.setSetError(null);
+  await store.remove(replaced.id);
+  expect(store.records()).toEqual([]);
+  expect(mem.backing[deepLCredentialStorageKey(secondRef)]).toBeUndefined();
 });
 
 test("preset recovery: skips invalid entries and preserves them when modifying valid presets", async () => {
@@ -536,9 +693,9 @@ test("preset recovery: skips invalid entries and preserves them when modifying v
     createdAt: "2026-01-01T00:00:00.000Z",
     updatedAt: "2026-01-01T00:00:00.000Z",
   };
-  const legacy = { ...valid, id: "p-legacy", name: "Legacy", targetLanguage: null };
+  const legacy = { ...valid, id: "p-legacy", enabled: "yes" };
   // A malformed entry can even reuse the ID of a valid preset.
-  const malformed = { ...valid, targetLanguage: "__none__" };
+  const malformed = { ...valid, engine: { ...valid.engine, modelIds: [] } };
   const raw = JSON.stringify({ version: 1, items: [legacy, valid, malformed] });
   const mem = createMemoryStorage({ [PRESETS_STORAGE_KEY]: raw });
   const choices = (): ModelChoiceId[] => [{ id: "m-1" }];

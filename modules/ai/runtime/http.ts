@@ -74,6 +74,7 @@ function sanitizeNetworkDetail(raw: string): string {
   const sanitized = raw
     .replace(/https?:\/\/[^\s"'<>()]+/gi, "")
     .replace(/Bearer\s+\S+/gi, "")
+    .replace(/DeepL-Auth-Key\s+\S+/gi, "")
     .replace(/\b(?:sk|AIza)[A-Za-z0-9_-]+/g, "")
     .replace(/[?&](?:key|api_key|token)=[^&\s)]+/gi, "")
     .replace(/\(\s*\)/g, "")

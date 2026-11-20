@@ -2,26 +2,17 @@ import { Scroll, Text, View, windowSize, type InputRef, type ViewRef } from "nsh
 import { t } from "nsh/i18n";
 import { Badge } from "../../components/ui/badge";
 import { Button } from "../../components/ui/button";
-import { Card, SectionHeading } from "../../components/ui/card";
+import { Card } from "../../components/ui/card";
 import { Input } from "../../components/ui/input";
-import { Select, type SelectItem } from "../../components/ui/select";
 import { Switch } from "../../components/ui/switch";
 import { FormField } from "../../modules/ai/ui/form-field";
 import type { PresetDraft } from "./draft";
-import {
-  AUTO_LANGUAGE,
-  getLanguageLabel,
-  getTargetLanguageLabel,
-  LANGUAGE_IDS,
-  type SourceLanguageId,
-  type TargetLanguageId,
-} from "./languages";
 import { ModelsSection } from "./models-section";
 import { PromptTemplates, type TemplateEditableField } from "./prompt-templates";
 import type { ModelChoice, PresetValidationField, PromptTemplate } from "./types";
 
 export type FocusableEditorField =
-  | { kind: "name" | "temperature" | "maxOutputTokens" }
+  | { kind: "name" | "temperature" | "maxOutputTokens" | "deeplKey" }
   | { kind: "template"; templateId: string; field: TemplateEditableField };
 
 interface PresetEditorProps {
@@ -43,6 +34,7 @@ interface PresetEditorProps {
   onDelete: () => void;
   onManageModels: () => void;
   onNameRef: (node: InputRef) => void;
+  onDeepLKeyRef: (node: InputRef) => void;
   onPrimaryModelRef: (node: ViewRef) => void;
   onFallbackRef: (index: number, node: ViewRef | null) => void;
   onTemperatureRef: (node: InputRef) => void;
@@ -53,27 +45,11 @@ interface PresetEditorProps {
   onFieldFocus: (target: FocusableEditorField) => void;
 }
 
-function buildSourceLanguageItems(): SelectItem[] {
-  return [AUTO_LANGUAGE, ...LANGUAGE_IDS].map((id) => ({
-    value: id,
-    title: getLanguageLabel(id),
-  }));
-}
-
-function buildTargetLanguageItems(): SelectItem[] {
-  return [AUTO_LANGUAGE, ...LANGUAGE_IDS].map((id) => ({
-    value: id,
-    title: getTargetLanguageLabel(id),
-  }));
-}
-
 /** Detail-pane editor for creating or editing a translation preset. */
 export function PresetEditor(props: PresetEditorProps) {
   const compact = () => windowSize().width < 860;
   const bodyPaddingClass = () => (compact() ? "px-4 pb-4 pt-1" : "px-6 pb-6 pt-2");
   const cardClass = () => (compact() ? "gap-4 p-4" : "gap-5 p-5");
-  const sourceLanguageItems = () => buildSourceLanguageItems();
-  const targetLanguageItems = () => buildTargetLanguageItems();
 
   const fieldError = (field: PresetValidationField): string | null =>
     props.errorField === field ? props.errorMessage : null;
@@ -81,10 +57,13 @@ export function PresetEditor(props: PresetEditorProps) {
   const canSave = () => {
     if (props.saving) return false;
     if (props.draft.sourceId === null) {
+      if (props.draft.engineKind === "deepl") return true;
       return props.modelChoices.length > 0 && props.modelsError === null;
     }
     return props.dirty;
   };
+
+  const isDeepL = () => props.draft.engineKind === "deepl";
 
   const canCancel = () => {
     if (props.saving) return false;
@@ -233,100 +212,81 @@ export function PresetEditor(props: PresetEditorProps) {
             </FormField>
           </Card>
 
-          <Card class={cardClass()}>
-            <SectionHeading title={t("presets.section.languages")} />
-            <View class={compact() ? "gap-4" : "flex-row gap-4"}>
-              <FormField
-                class={compact() ? "" : "min-w-0 flex-1"}
-                label={t("presets.field.sourceLanguage")}
-                error={fieldError("sourceLanguage")}
-              >
-                <Select
-                  testID="preset-source-language"
-                  items={sourceLanguageItems()}
-                  value={props.draft.sourceLanguage}
+          <If when={!isDeepL()}>
+            <ModelsSection
+              primaryModelId={props.draft.primaryModelId}
+              fallbackModelIds={props.draft.fallbackModelIds}
+              temperatureText={props.draft.temperatureText}
+              maxOutputTokensText={props.draft.maxOutputTokensText}
+              disableReasoning={props.draft.disableReasoning}
+              saving={props.saving}
+              modelChoices={props.modelChoices}
+              modelsError={props.modelsError}
+              errorMessage={props.errorMessage}
+              errorField={props.errorField}
+              errorFallbackIndex={props.errorFallbackIndex}
+              onChangePrimary={(primaryModelId) => props.onChange({ primaryModelId })}
+              onAddFallback={() => addFallback()}
+              onChangeFallback={(index, id) => changeFallback(index, id)}
+              onMoveFallback={(index, direction) => moveFallback(index, direction)}
+              onRemoveFallback={(index) => removeFallback(index)}
+              onChangeTemperature={(temperatureText) => props.onChange({ temperatureText })}
+              onChangeMaxOutputTokens={(maxOutputTokensText) =>
+                props.onChange({ maxOutputTokensText })
+              }
+              onChangeDisableReasoning={(disableReasoning) => props.onChange({ disableReasoning })}
+              onManageModels={() => props.onManageModels()}
+              onPrimaryModelRef={(node) => props.onPrimaryModelRef(node)}
+              onFallbackRef={(index, node) => props.onFallbackRef(index, node)}
+              onTemperatureRef={(node) => props.onTemperatureRef(node)}
+              onMaxTokensRef={(node) => props.onMaxTokensRef(node)}
+              onFieldFocus={(field) => props.onFieldFocus({ kind: field })}
+            />
+
+            <PromptTemplates
+              templates={props.draft.templates}
+              defaultTemplateId={props.draft.defaultTemplateId}
+              selectedTemplateId={props.selectedTemplateId}
+              saving={props.saving}
+              errorMessage={props.errorMessage}
+              errorField={props.errorField}
+              errorTemplateId={props.errorTemplateId}
+              onSelectTemplate={(id) => props.onSelectTemplate(id)}
+              onAddTemplate={() => addTemplate()}
+              onUpdateTemplate={(id, patch) => updateTemplate(id, patch)}
+              onSetDefault={(id) => setDefaultTemplate(id)}
+              onRemoveTemplate={(id) => removeTemplate(id)}
+              onTemplateFieldRef={(tplId, field, node) =>
+                props.onTemplateFieldRef(tplId, field, node)
+              }
+              onTemplateFieldFocus={(templateId, field) =>
+                props.onFieldFocus({ kind: "template", templateId, field })
+              }
+              onClearTemplateRefs={(tplId) => props.onClearTemplateRefs(tplId)}
+            />
+          </If>
+
+          <If when={isDeepL()}>
+            <Card class={cardClass()}>
+              <FormField label={t("presets.deepl.keyLabel")} error={fieldError("deeplKey")}>
+                <Input
+                  testID="preset-deepl-api-key"
+                  ref={(node) => props.onDeepLKeyRef(node)}
+                  masked
+                  value={props.draft.deepLApiKey}
+                  placeholder={
+                    props.draft.deepLApiKeyStored
+                      ? t("presets.deepl.keyStored")
+                      : t("presets.deepl.keyPlaceholder")
+                  }
+                  accessibilityLabel={t("presets.deepl.keyLabel")}
                   disabled={props.saving}
-                  accessibilityLabel={t("presets.field.sourceLanguage")}
-                  onChange={(value) => {
-                    if (value) {
-                      props.onChange({ sourceLanguage: value as SourceLanguageId });
-                    }
-                  }}
+                  onFocus={() => props.onFieldFocus({ kind: "deeplKey" })}
+                  onChange={(deepLApiKey) => props.onChange({ deepLApiKey })}
                 />
               </FormField>
-
-              <FormField
-                class={compact() ? "" : "min-w-0 flex-1"}
-                label={t("presets.field.targetLanguage")}
-                error={fieldError("targetLanguage")}
-              >
-                <Select
-                  testID="preset-target-language"
-                  items={targetLanguageItems()}
-                  value={props.draft.targetLanguage}
-                  disabled={props.saving}
-                  accessibilityLabel={t("presets.field.targetLanguage")}
-                  onChange={(value) => {
-                    if (value) {
-                      props.onChange({ targetLanguage: value as TargetLanguageId });
-                    }
-                  }}
-                />
-              </FormField>
-            </View>
-          </Card>
-
-          <ModelsSection
-            primaryModelId={props.draft.primaryModelId}
-            fallbackModelIds={props.draft.fallbackModelIds}
-            temperatureText={props.draft.temperatureText}
-            maxOutputTokensText={props.draft.maxOutputTokensText}
-            disableReasoning={props.draft.disableReasoning}
-            saving={props.saving}
-            modelChoices={props.modelChoices}
-            modelsError={props.modelsError}
-            errorMessage={props.errorMessage}
-            errorField={props.errorField}
-            errorFallbackIndex={props.errorFallbackIndex}
-            onChangePrimary={(primaryModelId) => props.onChange({ primaryModelId })}
-            onAddFallback={() => addFallback()}
-            onChangeFallback={(index, id) => changeFallback(index, id)}
-            onMoveFallback={(index, direction) => moveFallback(index, direction)}
-            onRemoveFallback={(index) => removeFallback(index)}
-            onChangeTemperature={(temperatureText) => props.onChange({ temperatureText })}
-            onChangeMaxOutputTokens={(maxOutputTokensText) =>
-              props.onChange({ maxOutputTokensText })
-            }
-            onChangeDisableReasoning={(disableReasoning) => props.onChange({ disableReasoning })}
-            onManageModels={() => props.onManageModels()}
-            onPrimaryModelRef={(node) => props.onPrimaryModelRef(node)}
-            onFallbackRef={(index, node) => props.onFallbackRef(index, node)}
-            onTemperatureRef={(node) => props.onTemperatureRef(node)}
-            onMaxTokensRef={(node) => props.onMaxTokensRef(node)}
-            onFieldFocus={(field) => props.onFieldFocus({ kind: field })}
-          />
-
-          <PromptTemplates
-            templates={props.draft.templates}
-            defaultTemplateId={props.draft.defaultTemplateId}
-            selectedTemplateId={props.selectedTemplateId}
-            saving={props.saving}
-            errorMessage={props.errorMessage}
-            errorField={props.errorField}
-            errorTemplateId={props.errorTemplateId}
-            onSelectTemplate={(id) => props.onSelectTemplate(id)}
-            onAddTemplate={() => addTemplate()}
-            onUpdateTemplate={(id, patch) => updateTemplate(id, patch)}
-            onSetDefault={(id) => setDefaultTemplate(id)}
-            onRemoveTemplate={(id) => removeTemplate(id)}
-            onTemplateFieldRef={(tplId, field, node) =>
-              props.onTemplateFieldRef(tplId, field, node)
-            }
-            onTemplateFieldFocus={(templateId, field) =>
-              props.onFieldFocus({ kind: "template", templateId, field })
-            }
-            onClearTemplateRefs={(tplId) => props.onClearTemplateRefs(tplId)}
-          />
+            </Card>
+          </If>
 
           <If when={props.draft.sourceId !== null}>
             <View class="flex-row justify-end">

@@ -1,5 +1,3 @@
-import type { SourceLanguageId, TargetLanguageId } from "./languages";
-
 export interface PromptTemplate {
   id: string;
   name: string;
@@ -18,15 +16,19 @@ export interface AiPresetEngine {
   defaultTemplateId: string;
 }
 
-/** Discriminated preset engine union for future non-AI engines. */
-export type PresetEngine = AiPresetEngine;
+/** DeepL engine: stores only a storage reference; the API key never lives in preset JSON. */
+export interface DeepLPresetEngine {
+  kind: "deepl";
+  credentialRef: string;
+}
+
+/** Discriminated preset engine union; presets store engine configuration only. */
+export type PresetEngine = AiPresetEngine | DeepLPresetEngine;
 
 export interface TranslationPreset {
   id: string;
   name: string;
   enabled: boolean;
-  sourceLanguage: SourceLanguageId;
-  targetLanguage: TargetLanguageId;
   createdAt: string;
   updatedAt: string;
   engine: PresetEngine;
@@ -42,13 +44,19 @@ export interface SaveAiPresetEngineInput {
   defaultTemplateId: string;
 }
 
+export interface SaveDeepLPresetEngineInput {
+  kind: "deepl";
+  /** New or replacement key; a blank value on an edit keeps the stored key. */
+  apiKey?: string | null;
+}
+
+export type SavePresetEngineInput = SaveAiPresetEngineInput | SaveDeepLPresetEngineInput;
+
 export interface SavePresetInput {
   id?: string | null;
   name: string;
   enabled: boolean;
-  sourceLanguage: SourceLanguageId;
-  targetLanguage: TargetLanguageId;
-  engine: SaveAiPresetEngineInput;
+  engine: SavePresetEngineInput;
 }
 
 export interface ModelChoice {
@@ -72,9 +80,10 @@ export type PresetErrorKey =
   | "mutation_in_progress"
   | "not_found"
   | "name_required"
-  | "source_language_invalid"
-  | "target_language_invalid"
   | "engine_unsupported"
+  | "engine_type_locked"
+  | "deepl_key_required"
+  | "deepl_key_invalid"
   | "primary_model_required"
   | "model_unavailable"
   | "model_duplicate"
@@ -92,8 +101,7 @@ export type PresetErrorKey =
 
 export type PresetValidationField =
   | "name"
-  | "sourceLanguage"
-  | "targetLanguage"
+  | "deeplKey"
   | "primaryModel"
   | "fallbackModel"
   | "temperature"
@@ -140,6 +148,7 @@ export type PresetsStoreStatus =
 export interface PresetsStorage {
   getItem(key: string): Promise<string | null>;
   setItem(key: string, value: string): Promise<void>;
+  removeItem(key: string): Promise<void>;
 }
 
 export interface PresetsStore {
@@ -149,4 +158,6 @@ export interface PresetsStore {
   mutating(): boolean;
   save(input: SavePresetInput): Promise<TranslationPreset>;
   remove(id: string): Promise<void>;
+  /** Reads a DeepL preset's stored key; returns null for other engines or a missing key. */
+  readDeepLCredential(presetId: string): Promise<string | null>;
 }

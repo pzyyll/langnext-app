@@ -1,4 +1,5 @@
-import { expect, open, test } from "nsh/test";
+import { t } from "nsh/i18n";
+import { expect, open, test, type App } from "nsh/test";
 import { SPLIT_RAIL_STORAGE_KEYS } from "../../components/layout/split-rail";
 import {
   emptyCatalogCache,
@@ -7,7 +8,19 @@ import {
   makeSeedStorage,
 } from "../models/__tests__/fixtures";
 import { PRESETS_STORAGE_KEY } from "./store";
-import type { TranslationPreset } from "./types";
+import type { AiPresetEngine, TranslationPreset } from "./types";
+
+/** Picks a preset type in the Add Preset picker and waits for the editor. */
+async function choosePresetType(app: App, kind: "ai" | "deepl") {
+  await app.waitFor("id:add-preset-dialog");
+  await app.press(`id:preset-type-${kind}`);
+  await app.waitUntil(() => !app.shows("id:add-preset-dialog"));
+}
+
+function aiEngine(preset: TranslationPreset): AiPresetEngine {
+  if (preset.engine.kind !== "ai") throw new Error("expected an AI preset");
+  return preset.engine;
+}
 
 const APP_ENTRY = "../../App.tsx";
 const viewport = { width: 1040, height: 720, platform: "windows" as const };
@@ -34,6 +47,7 @@ test("presets ui: saves a new preset", async () => {
   await app.waitFor("id:presets-page");
 
   await app.press("id:empty-add-preset-button");
+  await choosePresetType(app, "ai");
   await app.waitFor("id:preset-name");
 
   // Name field takes focus automatically when creating a new draft.
@@ -41,16 +55,6 @@ test("presets ui: saves a new preset", async () => {
   expect(app.value("id:preset-name")).toBe("a");
   await app.clear("id:preset-name");
   await app.type("id:preset-name", "Technical EN to ZH");
-
-  await app.press("id:preset-source-language");
-  await app.waitFor("role:option[Auto]");
-  await app.press("role:option[English]");
-
-  await app.press("id:preset-target-language");
-  await app.waitFor("role:option[Chinese]");
-  expect(app.shows("role:option[Auto]")).toBe(false);
-  expect(app.shows("role:option[Automatic]")).toBe(true);
-  await app.press("role:option[Chinese]");
 
   await app.press("id:preset-primary-model");
   await app.waitFor("role:option[OpenAI Main · gpt-4.1-mini]");
@@ -72,8 +76,6 @@ test("presets ui: saves a new preset", async () => {
   expect(parsed.items[0]).toMatchObject({
     name: "Technical EN to ZH",
     enabled: false,
-    sourceLanguage: "en",
-    targetLanguage: "zh",
     engine: {
       kind: "ai",
       modelIds: ["m-1"],
@@ -82,8 +84,9 @@ test("presets ui: saves a new preset", async () => {
       disableReasoning: true,
     },
   });
-  expect(parsed.items[0]!.engine.templates).toHaveLength(1);
-  expect(parsed.items[0]!.engine.defaultTemplateId).toBe(parsed.items[0]!.engine.templates[0]!.id);
+  const savedEngine = aiEngine(parsed.items[0]!);
+  expect(savedEngine.templates).toHaveLength(1);
+  expect(savedEngine.defaultTemplateId).toBe(savedEngine.templates[0]!.id);
 
   // Reopen the app from persisted storage and confirm fields reload faithfully.
   const reopened = await open(APP_ENTRY, {
@@ -93,8 +96,6 @@ test("presets ui: saves a new preset", async () => {
   await reopened.press("id:nav-presets");
   await reopened.waitFor("id:preset-name");
   expect(reopened.value("id:preset-name")).toBe("Technical EN to ZH");
-  expect(reopened.texts()).toContain("English");
-  expect(reopened.texts()).toContain("Chinese");
   expect(reopened.texts()).toContain("OpenAI Main · gpt-4.1-mini");
 
   // With zero eligible models, Save is blocked on a new draft and Manage Models offers recovery.
@@ -105,12 +106,220 @@ test("presets ui: saves a new preset", async () => {
   await emptyModelsApp.press("id:nav-presets");
   await emptyModelsApp.waitFor("id:presets-page");
   await emptyModelsApp.press("id:empty-add-preset-button");
+  await choosePresetType(emptyModelsApp, "ai");
   await emptyModelsApp.waitFor("id:preset-name");
   expect(emptyModelsApp.enabled("id:preset-save")).toBe(false);
   expect(emptyModelsApp.shows("id:preset-manage-models")).toBe(true);
 
   await emptyModelsApp.press("id:preset-manage-models");
   await emptyModelsApp.waitFor("id:models-page");
+});
+
+test("presets ui: no languages", async () => {
+  const savedPreset = makePresetRecord("p-language-free", "Language Free", ["m-1"]);
+  const app = await open(APP_ENTRY, {
+    ...viewport,
+    storage: makeSeedStorage({
+      channels: [makeChannel({ id: "ch-openai", displayName: "OpenAI Main", enabled: true })],
+      models: [
+        makeModel({
+          id: "m-1",
+          providerId: "ch-openai",
+          modelKey: "gpt-4.1",
+          enabled: true,
+        }),
+      ],
+      extra: {
+        [PRESETS_STORAGE_KEY]: JSON.stringify({ version: 1, items: [savedPreset] }),
+      },
+    }),
+  });
+
+  await app.press("id:nav-presets");
+  await app.waitFor("id:preset-name");
+
+  // A saved AI preset shows its engine configuration only.
+  expect(app.value("id:preset-name")).toBe("Language Free");
+  expect(app.shows("id:preset-source-language")).toBe(false);
+  expect(app.shows("id:preset-target-language")).toBe(false);
+  expect(app.texts()).not.toContain("Languages");
+  expect(app.shows("id:preset-enabled")).toBe(true);
+  expect(app.shows("id:preset-primary-model")).toBe(true);
+  expect(app.shows("id:preset-template-name")).toBe(true);
+
+  // A new AI draft saves engine configuration without a language selection.
+  await app.press("id:add-preset-button");
+  await choosePresetType(app, "ai");
+  await app.waitFor("id:preset-name");
+  expect(app.shows("id:preset-source-language")).toBe(false);
+  expect(app.shows("id:preset-target-language")).toBe(false);
+  await app.type("id:preset-name", "No Languages Draft");
+  await app.press("id:preset-primary-model");
+  await app.waitFor("role:option[OpenAI Main · gpt-4.1]");
+  await app.press("role:option[OpenAI Main · gpt-4.1]");
+  await app.press("id:preset-save");
+  await app.waitUntil(() => {
+    const raw = app.storage()[PRESETS_STORAGE_KEY];
+    if (!raw) return false;
+    const saved = JSON.parse(raw) as { items: TranslationPreset[] };
+    return saved.items.some((item) => item.name === "No Languages Draft");
+  });
+});
+
+test("presets ui: preset type", async () => {
+  const preset = makePresetRecord("p-type", "Type Preset", ["m-1"]);
+  const app = await open(APP_ENTRY, {
+    ...viewport,
+    storage: makeSeedStorage({
+      channels: [makeChannel({ id: "ch-openai", displayName: "OpenAI Main", enabled: true })],
+      models: [
+        makeModel({ id: "m-1", providerId: "ch-openai", modelKey: "gpt-4.1", enabled: true }),
+      ],
+      extra: {
+        [PRESETS_STORAGE_KEY]: JSON.stringify({ version: 1, items: [preset] }),
+      },
+    }),
+  });
+
+  await app.press("id:nav-presets");
+  await app.waitFor("id:preset-name");
+  expect(app.value("id:preset-name")).toBe("Type Preset");
+
+  // The rail entry point opens the picker before any draft exists.
+  await app.press("id:add-preset-button");
+  await app.waitFor("id:add-preset-dialog");
+  expect(app.value("id:preset-name")).toBe("Type Preset");
+  expect(app.shows("id:preset-draft-item")).toBe(false);
+  await app.keyboard.press("escape");
+  await app.waitUntil(() => !app.shows("id:add-preset-dialog"));
+  expect(app.value("id:preset-name")).toBe("Type Preset");
+
+  // Dismissing the picker with a dirty draft changes nothing and asks no confirmation.
+  await app.type("id:preset-name", " Edited");
+  await app.press("id:add-preset-button");
+  await app.waitFor("id:add-preset-dialog");
+  await app.press("id:preset-type-cancel");
+  await app.waitUntil(() => !app.shows("id:add-preset-dialog"));
+  expect(app.value("id:preset-name")).toBe("Type Preset Edited");
+  expect(app.shows("id:preset-discard-dialog")).toBe(false);
+
+  // Choosing a type closes the picker first, then runs the dirty-draft guard.
+  await app.press("id:add-preset-button");
+  await app.waitFor("id:add-preset-dialog");
+  await app.press("id:preset-type-ai");
+  await app.waitUntil(() => !app.shows("id:add-preset-dialog"));
+  await app.waitFor("id:preset-discard-dialog");
+  await app.press("id:preset-discard-keep-editing");
+  await app.waitUntil(() => !app.shows("id:preset-discard-dialog"));
+  expect(app.value("id:preset-name")).toBe("Type Preset Edited");
+
+  // Discarding opens the AI editor with the name focused and no language controls.
+  await app.press("id:add-preset-button");
+  await app.waitFor("id:add-preset-dialog");
+  await app.press("id:preset-type-ai");
+  await app.waitFor("id:preset-discard-dialog");
+  await app.press("id:preset-discard-confirm");
+  await app.waitUntil(() => !app.shows("id:preset-discard-dialog"));
+  await app.waitFor("id:preset-name");
+  expect(app.shows("id:preset-draft-item")).toBe(true);
+  expect(app.value("id:preset-name")).toBe("");
+  expect(app.shows("id:preset-source-language")).toBe(false);
+  expect(app.shows("id:preset-target-language")).toBe(false);
+  await app.keyboard.press("a");
+  expect(app.value("id:preset-name")).toBe("a");
+
+  // The empty-state entry point uses the same picker.
+  const emptyApp = await open(APP_ENTRY, { ...viewport, storage: makeSeedStorage({}) });
+  await emptyApp.press("id:nav-presets");
+  await emptyApp.waitFor("id:empty-add-preset-button");
+  await emptyApp.press("id:empty-add-preset-button");
+  await emptyApp.waitFor("id:add-preset-dialog");
+  expect(emptyApp.shows("id:preset-type-ai")).toBe(true);
+  expect(emptyApp.shows("id:preset-type-deepl")).toBe(true);
+  await emptyApp.press("id:preset-type-cancel");
+  await emptyApp.waitUntil(() => !emptyApp.shows("id:add-preset-dialog"));
+  expect(emptyApp.shows("id:empty-add-preset-button")).toBe(true);
+});
+
+test("presets ui: DeepL editor", async () => {
+  const app = await open(APP_ENTRY, { ...viewport, storage: makeSeedStorage({}) });
+  await app.press("id:nav-presets");
+  await app.waitFor("id:empty-add-preset-button");
+  await app.press("id:empty-add-preset-button");
+  await app.waitFor("id:add-preset-dialog");
+  await app.press("id:preset-type-deepl");
+  await app.waitUntil(() => !app.shows("id:add-preset-dialog"));
+  await app.waitFor("id:preset-deepl-api-key");
+
+  // A DeepL preset needs no AI model and shows no languages, models, or prompts.
+  expect(app.shows("id:preset-source-language")).toBe(false);
+  expect(app.shows("id:preset-target-language")).toBe(false);
+  expect(app.shows("id:preset-primary-model")).toBe(false);
+  expect(app.shows("id:preset-temperature")).toBe(false);
+  expect(app.shows("id:preset-template-name")).toBe(false);
+  expect(app.shows("id:preset-manage-models")).toBe(false);
+  expect(app.value("id:preset-deepl-api-key")).toBe("");
+  expect(app.texts()).toContain(t("presets.deepl.keyLabel"));
+
+  await app.type("id:preset-name", "DeepL Free");
+
+  // A missing key fails with the localized field error and focuses the key input.
+  await app.press("id:preset-save");
+  await app.waitUntil(() => app.texts().includes(t("presets.error.deeplKeyRequired")));
+  expect(app.storage()[PRESETS_STORAGE_KEY]).toBeUndefined();
+  await app.keyboard.press("d");
+  expect(app.value("id:preset-deepl-api-key")).toBe("d");
+  await app.clear("id:preset-deepl-api-key");
+  await app.type("id:preset-deepl-api-key", "deepl-test:fx");
+
+  await app.press("id:preset-save");
+  await app.waitUntil(() => Boolean(app.storage()[PRESETS_STORAGE_KEY]));
+  expect(app.requests()).toHaveLength(0);
+  expect(app.texts()).toContain("DeepL API");
+  const raw = app.storage()[PRESETS_STORAGE_KEY]!;
+  expect(raw).not.toContain("deepl-test:fx");
+  const savedItems = JSON.parse(raw).items as TranslationPreset[];
+  expect(savedItems[0]!.engine.kind).toBe("deepl");
+
+  // Reopening shows the stored-key placeholder state, not the key; a replacement is dirty.
+  const reopened = await open(APP_ENTRY, { ...viewport, storage: app.storage() });
+  await reopened.press("id:nav-presets");
+  await reopened.waitFor("id:preset-deepl-api-key");
+  expect(reopened.value("id:preset-deepl-api-key")).toBe("");
+  expect(reopened.enabled("id:preset-save")).toBe(false);
+  expect(reopened.texts()).toContain("DeepL API");
+  expect(reopened.requests()).toHaveLength(0);
+  await reopened.type("id:preset-deepl-api-key", "deepl-replacement:fx");
+  expect(reopened.enabled("id:preset-save")).toBe(true);
+  expect(reopened.storage()[PRESETS_STORAGE_KEY]).not.toContain("deepl-replacement:fx");
+});
+
+test("presets ui: picker and DeepL editor fit compact dark zh-CN with reduced motion", async () => {
+  const app = await open(APP_ENTRY, {
+    width: 720,
+    height: 520,
+    platform: "windows",
+    colorScheme: "dark",
+    reducedMotion: true,
+    storage: { ...makeSeedStorage({}), "settings.language": "zh-CN" },
+  });
+
+  await app.press("id:nav-presets");
+  await app.waitFor("id:empty-add-preset-button");
+  await app.press("id:empty-add-preset-button");
+  await app.waitFor("id:add-preset-dialog");
+  expect(app.shows("id:preset-type-ai >> text:AI 翻译")).toBe(true);
+  expect(app.shows("id:preset-type-deepl >> text:DeepL API")).toBe(true);
+
+  await app.press("id:preset-type-deepl");
+  await app.waitUntil(() => !app.shows("id:add-preset-dialog"));
+  await app.waitFor("id:preset-deepl-api-key");
+  expect(app.value("id:preset-name")).toBe("");
+  expect(app.enabled("id:preset-save")).toBe(true);
+  expect(app.texts()).toContain("API 密钥");
+  expect(app.shows("id:preset-source-language")).toBe(false);
+  expect(app.shows("id:preset-primary-model")).toBe(false);
+  expect(app.shows("id:preset-template-name")).toBe(false);
 });
 
 test("presets ui: does not promote a fallback into an empty primary slot", async () => {
@@ -123,6 +332,7 @@ test("presets ui: does not promote a fallback into an empty primary slot", async
   });
   await app.press("id:nav-presets");
   await app.press("id:empty-add-preset-button");
+  await choosePresetType(app, "ai");
   await app.type("id:preset-name", "Fallback only");
   await app.press("id:preset-add-fallback");
   await app.press("id:preset-fallback-0");
@@ -146,6 +356,7 @@ test("presets ui: steps temperature between 0.0 and 2.0", async () => {
   const decrease = "id:preset-temperature-down";
   await app.press("id:nav-presets");
   await app.press("id:empty-add-preset-button");
+  await choosePresetType(app, "ai");
   await app.type("id:preset-name", "Temperature");
   await app.press("id:preset-primary-model");
   await app.press("role:option[OpenAI Main · gpt-4o]");
@@ -182,6 +393,7 @@ test("presets ui: rejects invalid temperature edits", async () => {
   const temperature = "id:preset-temperature";
   await app.press("id:nav-presets");
   await app.press("id:empty-add-preset-button");
+  await choosePresetType(app, "ai");
   await app.type(temperature, "3");
   expect(app.value(temperature)).toBe("");
   await app.type(temperature, "2.1");
@@ -214,6 +426,7 @@ test("presets ui: reorders fallbacks and restores them", async () => {
   await app.press("id:nav-presets");
   await app.waitFor("id:empty-add-preset-button");
   await app.press("id:empty-add-preset-button");
+  await choosePresetType(app, "ai");
   await app.waitFor("id:preset-name");
   await app.type("id:preset-name", "Ordered Chain");
 
@@ -291,7 +504,7 @@ test("presets ui: reorders fallbacks and restores them", async () => {
     const raw = reopened.storage()[PRESETS_STORAGE_KEY];
     if (!raw) return false;
     const data = JSON.parse(raw) as { items: TranslationPreset[] };
-    return data.items[0]?.engine.modelIds.join(",") === "m-a,m-b";
+    return aiEngine(data.items[0]!).modelIds.join(",") === "m-a,m-b";
   });
 });
 
@@ -300,8 +513,6 @@ function makePresetRecord(id: string, name: string, modelIds: string[]): Transla
     id,
     name,
     enabled: true,
-    sourceLanguage: "auto",
-    targetLanguage: "zh",
     createdAt: "2026-01-01T00:00:00.000Z",
     updatedAt: "2026-01-01T00:00:00.000Z",
     engine: {
@@ -350,7 +561,7 @@ test("presets ui: toggles the reasoning switch and saves it", async () => {
     const raw = app.storage()[PRESETS_STORAGE_KEY];
     if (!raw) return false;
     const data = JSON.parse(raw) as { items: TranslationPreset[] };
-    return data.items[0]?.engine.disableReasoning === false;
+    return aiEngine(data.items[0]!).disableReasoning === false;
   });
 
   // Reopening shows the stored choice and saving it again keeps it.
@@ -363,7 +574,7 @@ test("presets ui: toggles the reasoning switch and saves it", async () => {
     const raw = reopened.storage()[PRESETS_STORAGE_KEY];
     if (!raw) return false;
     const data = JSON.parse(raw) as { items: TranslationPreset[] };
-    return data.items[0]?.engine.disableReasoning === true;
+    return aiEngine(data.items[0]!).disableReasoning === true;
   });
 });
 
@@ -464,7 +675,7 @@ test("presets ui: retains unavailable bindings", async () => {
   const afterRename = JSON.parse(app.storage()[PRESETS_STORAGE_KEY]!) as {
     items: TranslationPreset[];
   };
-  expect(afterRename.items[0]!.engine.modelIds).toEqual(["m-ch-off", "m-raw-deleted"]);
+  expect(aiEngine(afterRename.items[0]!).modelIds).toEqual(["m-ch-off", "m-raw-deleted"]);
 
   // 4. Replace primary and remove deleted fallback -> warnings clear cleanly.
   await app.press("id:preset-primary-model");
@@ -482,7 +693,7 @@ test("presets ui: retains unavailable bindings", async () => {
     const raw = app.storage()[PRESETS_STORAGE_KEY];
     if (!raw) return false;
     const saved = JSON.parse(raw) as { items: TranslationPreset[] };
-    return saved.items[0]?.engine.modelIds.join(",") === "m-ok";
+    return aiEngine(saved.items[0]!).modelIds.join(",") === "m-ok";
   });
 });
 
@@ -502,6 +713,7 @@ test("presets ui: saves multiple prompts and the chosen default", async () => {
   await app.press("id:nav-presets");
   await app.waitFor("id:empty-add-preset-button");
   await app.press("id:empty-add-preset-button");
+  await choosePresetType(app, "ai");
   await app.waitFor("id:preset-name");
   await app.type("id:preset-name", "Multi Prompt Preset");
   await app.press("id:preset-primary-model");
@@ -571,10 +783,10 @@ test("presets ui: saves multiple prompts and the chosen default", async () => {
 
   const persisted = app.storage();
   const parsed = JSON.parse(persisted[PRESETS_STORAGE_KEY]!) as { items: TranslationPreset[] };
-  expect(parsed.items[0]!.engine.templates).toHaveLength(2);
-  const formalTpl = parsed.items[0]!.engine.templates.find((tpl) => tpl.name === "Formal");
+  expect(aiEngine(parsed.items[0]!).templates).toHaveLength(2);
+  const formalTpl = aiEngine(parsed.items[0]!).templates.find((tpl) => tpl.name === "Formal");
   expect(formalTpl).toBeDefined();
-  expect(parsed.items[0]!.engine.defaultTemplateId).toBe(formalTpl!.id);
+  expect(aiEngine(parsed.items[0]!).defaultTemplateId).toBe(formalTpl!.id);
 
   // Reopen app and confirm templates, multi-line bodies, and single Default badge persist.
   const reopened = await open(APP_ENTRY, {
@@ -600,8 +812,6 @@ test("presets ui: removes only a nondefault prompt", async () => {
     id: "p-templates",
     name: "Template Removal",
     enabled: true,
-    sourceLanguage: "auto",
-    targetLanguage: "zh",
     createdAt: "2026-01-01T00:00:00.000Z",
     updatedAt: "2026-01-01T00:00:00.000Z",
     engine: {
@@ -664,8 +874,8 @@ test("presets ui: removes only a nondefault prompt", async () => {
   const beforeSave = JSON.parse(app.storage()[PRESETS_STORAGE_KEY]!) as {
     items: TranslationPreset[];
   };
-  expect(beforeSave.items[0]!.engine.templates).toHaveLength(2);
-  expect(beforeSave.items[0]!.engine.defaultTemplateId).toBe("tpl-1");
+  expect(aiEngine(beforeSave.items[0]!).templates).toHaveLength(2);
+  expect(aiEngine(beforeSave.items[0]!).defaultTemplateId).toBe("tpl-1");
 
   // Single remaining default template cannot be removed.
   expect(app.enabled("id:preset-template-remove")).toBe(false);
@@ -675,14 +885,14 @@ test("presets ui: removes only a nondefault prompt", async () => {
     const raw = app.storage()[PRESETS_STORAGE_KEY];
     if (!raw) return false;
     const saved = JSON.parse(raw) as { items: TranslationPreset[] };
-    return saved.items[0]?.engine.templates.length === 1;
+    return aiEngine(saved.items[0]!).templates.length === 1;
   });
 
   const savedData = JSON.parse(app.storage()[PRESETS_STORAGE_KEY]!) as {
     items: TranslationPreset[];
   };
-  expect(savedData.items[0]!.engine.templates[0]!.id).toBe("tpl-2");
-  expect(savedData.items[0]!.engine.defaultTemplateId).toBe("tpl-2");
+  expect(aiEngine(savedData.items[0]!).templates[0]!.id).toBe("tpl-2");
+  expect(aiEngine(savedData.items[0]!).defaultTemplateId).toBe("tpl-2");
 });
 
 test("presets ui: guards dirty navigation", async () => {
@@ -765,6 +975,7 @@ test("presets ui: guards dirty navigation", async () => {
   await app.waitUntil(() => app.value("id:preset-name") === "Preset One");
   await app.type("id:preset-name", " AddDirty");
   await app.press("id:add-preset-button");
+  await choosePresetType(app, "ai");
   await app.waitFor("id:preset-discard-dialog");
   await app.press("id:preset-discard-confirm");
   await app.waitUntil(() => !app.shows("id:preset-discard-dialog"));
@@ -870,6 +1081,7 @@ test("presets ui: confirms delete and selects the next preset", async () => {
   expect(reopened.texts()).toContain("No presets yet");
 
   await reopened.press("id:empty-add-preset-button");
+  await choosePresetType(reopened, "ai");
   await reopened.waitFor("id:preset-name");
   await reopened.keyboard.press("x");
   expect(reopened.value("id:preset-name")).toBe("x");
@@ -912,45 +1124,4 @@ test("presets ui: resizes the presets split divider and persists width independe
   await reopened.waitFor("id:presets-rail");
   expect(reopened.storage()[SPLIT_RAIL_STORAGE_KEYS.presets]).toBe(String(resized));
   expect(reopened.storage()[SPLIT_RAIL_STORAGE_KEYS.models]).toBe("210");
-});
-
-test("automatic target: saves Automatic and restores it after reopening", async () => {
-  const seed = makeSeedStorage({
-    channels: [makeChannel({ id: "ch-openai", displayName: "OpenAI Main", enabled: true })],
-    models: [
-      makeModel({ id: "m-1", providerId: "ch-openai", modelKey: "gpt-4.1-mini", enabled: true }),
-    ],
-  });
-  const app = await open(APP_ENTRY, { ...viewport, storage: seed });
-
-  await app.press("id:nav-presets");
-  await app.waitFor("id:presets-page");
-  await app.press("id:empty-add-preset-button");
-  await app.waitFor("id:preset-name");
-  await app.type("id:preset-name", "Auto Target");
-
-  // A new draft defaults to the automatic target.
-  expect(app.texts()).toContain("Automatic");
-
-  await app.press("id:preset-target-language");
-  await app.waitFor("role:option[Automatic]");
-  await app.press("role:option[Automatic]");
-
-  await app.press("id:preset-primary-model");
-  await app.waitFor("role:option[OpenAI Main · gpt-4.1-mini]");
-  await app.press("role:option[OpenAI Main · gpt-4.1-mini]");
-
-  await app.press("id:preset-save");
-  await app.waitUntil(() => Boolean(app.storage()[PRESETS_STORAGE_KEY]));
-  expect(app.requests()).toHaveLength(0);
-  expect(JSON.parse(app.storage()[PRESETS_STORAGE_KEY]!).items[0].targetLanguage).toBe("auto");
-
-  const reopened = await open(APP_ENTRY, { ...viewport, storage: app.storage() });
-  await reopened.press("id:nav-presets");
-  await reopened.waitFor("id:preset-name");
-  expect(reopened.texts()).toContain("Automatic");
-  await reopened.press("id:preset-target-language");
-  await reopened.waitFor("role:option[Automatic]");
-  await reopened.press("role:option[Automatic]");
-  expect(reopened.requests()).toHaveLength(0);
 });

@@ -3,14 +3,12 @@ import { t } from "nsh/i18n";
 import { ProviderProtocolError } from "../../modules/ai/contracts/errors";
 import { aiRegistry } from "../../modules/ai/runtime/registry";
 import { initializeAiModules } from "../../app/ai-setup";
-import type { LanguageDetectionSettings } from "../language-detection/settings";
 import { makeChannel, makeModel, makeSeedStorage } from "../models/__tests__/fixtures";
 import type { SavedModelRequestResolution } from "../models/store";
 import { PRESETS_STORAGE_KEY } from "../presets/store";
 import { getLanguageLabel } from "../presets/languages";
-import type { TranslationPreset } from "../presets/types";
+import type { AiPresetEngine, TranslationPreset } from "../presets/types";
 import {
-  resolveInitialPresetLanguages,
   resolvePresetTemplate,
   translateWithPreset,
   type TranslateWithPresetOptions,
@@ -23,8 +21,6 @@ function makePreset(overrides: Partial<TranslationPreset> = {}): TranslationPres
     id: "preset-1",
     name: "Default EN to ZH",
     enabled: true,
-    sourceLanguage: "en",
-    targetLanguage: "zh",
     createdAt: "2026-11-19T00:00:00.000Z",
     updatedAt: "2026-11-19T00:00:00.000Z",
     engine: {
@@ -46,6 +42,11 @@ function makePreset(overrides: Partial<TranslationPreset> = {}): TranslationPres
     },
     ...overrides,
   };
+}
+
+function aiEngineOf(preset: TranslationPreset): AiPresetEngine {
+  if (preset.engine.kind !== "ai") throw new Error("expected an AI preset");
+  return preset.engine;
 }
 
 function makeReadyResolution(modelId: string, modelKey: string): SavedModelRequestResolution {
@@ -78,8 +79,6 @@ test("preset translation: saved preset sends exact prompt, leaves braces literal
     enabled: true,
   });
   const preset = makePreset({
-    sourceLanguage: "en",
-    targetLanguage: "zh",
     engine: {
       kind: "ai",
       modelIds: ["uuid-model-1"],
@@ -154,14 +153,9 @@ test("preset translation: saved preset sends exact prompt, leaves braces literal
   ]);
 });
 
-test("preset translation: resolves the saved pair and lets an explicit language override win", async () => {
+test("preset translation: renders the caller's resolved pair and uses its model key", async () => {
   const captured: Array<{ system: string; user: string; modelId: string }> = [];
-  const preset = makePreset({ sourceLanguage: "en", targetLanguage: "zh" });
-
-  expect(resolveInitialPresetLanguages(preset)).toEqual({
-    sourceLanguage: "en",
-    targetLanguage: "zh",
-  });
+  const preset = makePreset();
 
   const result = await translateWithPreset(
     {
@@ -198,7 +192,7 @@ test("preset translation: streams partial text and forwards the preset reasoning
   const partials: string[] = [];
 
   const result = await translateWithPreset(
-    { preset: makePreset(), sourceText: "Hello" },
+    { preset: makePreset(), sourceText: "Hello", sourceLanguage: "en", targetLanguage: "zh" },
     {
       resolveModelRequest: async (id) => makeReadyResolution(id, "gpt-4.1"),
       onText: (text) => partials.push(text),
@@ -221,10 +215,10 @@ test("preset translation: streams partial text and forwards the preset reasoning
   expect(requests).toEqual([{ disableReasoning: true }]);
 
   const keepThinking = makePreset();
-  keepThinking.engine.disableReasoning = false;
+  aiEngineOf(keepThinking).disableReasoning = false;
   requests.length = 0;
   await translateWithPreset(
-    { preset: keepThinking, sourceText: "Hello" },
+    { preset: keepThinking, sourceText: "Hello", sourceLanguage: "en", targetLanguage: "zh" },
     {
       resolveModelRequest: async (id) => makeReadyResolution(id, "gpt-4.1"),
       streamText: async (_conn, req, options) => {
@@ -252,7 +246,7 @@ test("preset translation: rejects blank input, disabled preset, and missing temp
   };
 
   const blankRes = await translateWithPreset(
-    { preset: makePreset(), sourceText: "   \n\t  " },
+    { preset: makePreset(), sourceText: "   \n\t  ", sourceLanguage: "en", targetLanguage: "zh" },
     deps,
   );
   expect(blankRes).toMatchObject({
@@ -262,7 +256,12 @@ test("preset translation: rejects blank input, disabled preset, and missing temp
   });
 
   const disabledRes = await translateWithPreset(
-    { preset: makePreset({ enabled: false }), sourceText: "Hello" },
+    {
+      preset: makePreset({ enabled: false }),
+      sourceText: "Hello",
+      sourceLanguage: "en",
+      targetLanguage: "zh",
+    },
     deps,
   );
   expect(disabledRes).toMatchObject({
@@ -272,9 +271,9 @@ test("preset translation: rejects blank input, disabled preset, and missing temp
   });
 
   const badTemplatePreset = makePreset();
-  badTemplatePreset.engine.defaultTemplateId = "missing-template";
+  aiEngineOf(badTemplatePreset).defaultTemplateId = "missing-template";
   const missingTemplateRes = await translateWithPreset(
-    { preset: badTemplatePreset, sourceText: "Hello" },
+    { preset: badTemplatePreset, sourceText: "Hello", sourceLanguage: "en", targetLanguage: "zh" },
     deps,
   );
   expect(missingTemplateRes).toMatchObject({
@@ -428,7 +427,7 @@ test("preset translation: follows fallback chain unavailable -> 429 -> success a
   });
 
   const chainRes = await translateWithPreset(
-    { preset: presetChain, sourceText: "Hello" },
+    { preset: presetChain, sourceText: "Hello", sourceLanguage: "en", targetLanguage: "zh" },
     {
       resolveModelRequest: async (id) => {
         if (id === "m-unavail") {
@@ -461,7 +460,7 @@ test("preset translation: follows fallback chain unavailable -> 429 -> success a
 
   const authAttempted: string[] = [];
   const authRes = await translateWithPreset(
-    { preset: presetChain, sourceText: "Hello" },
+    { preset: presetChain, sourceText: "Hello", sourceLanguage: "en", targetLanguage: "zh" },
     {
       resolveModelRequest: async (id) => makeReadyResolution(id, `key-${id}`),
       streamText: async (_conn, req) => {
@@ -480,7 +479,7 @@ test("preset translation: follows fallback chain unavailable -> 429 -> success a
   const controller = new AbortController();
   const abortAttempted: string[] = [];
   const abortedRes = await translateWithPreset(
-    { preset: presetChain, sourceText: "Hello" },
+    { preset: presetChain, sourceText: "Hello", sourceLanguage: "en", targetLanguage: "zh" },
     {
       signal: controller.signal,
       resolveModelRequest: async (id) => makeReadyResolution(id, `key-${id}`),
@@ -521,7 +520,7 @@ test("preset translation: returns localized actionable failure when all chain mo
   });
 
   const res = await translateWithPreset(
-    { preset, sourceText: "Hello" },
+    { preset, sourceText: "Hello", sourceLanguage: "en", targetLanguage: "zh" },
     {
       resolveModelRequest: async (id) => makeReadyResolution(id, `key-${id}`),
       streamText: async (_conn, req) => {
@@ -608,197 +607,181 @@ test("template override: executes non-default template verbatim without cross-te
   expect(capturedUser).toBe("FormalText:\nKeep {{target_language}} literal");
 });
 
-function detectionSettings(
-  overrides: Partial<LanguageDetectionSettings> = {},
-): LanguageDetectionSettings {
+function makeDeepLPreset(overrides: Partial<TranslationPreset> = {}): TranslationPreset {
   return {
-    mode: "ai",
-    modelIds: ["detector-1"],
-    nativeLanguage: "zh",
-    preferredTranslationLanguage: "en",
+    id: "preset-deepl",
+    name: "DeepL Preset",
+    enabled: true,
+    createdAt: "2026-11-19T00:00:00.000Z",
+    updatedAt: "2026-11-19T00:00:00.000Z",
+    engine: { kind: "deepl", credentialRef: "deepl-ref-1" },
     ...overrides,
   };
 }
 
-interface DetectionPhaseLog {
-  events: string[];
-  prompts: { system: string; user: string }[];
-}
-
-/** Serves the detector and the preset model from distinct keys and records phase order. */
-function makeLanguageResolutionDeps(answers: string[], log: DetectionPhaseLog) {
-  return {
-    resolveModelRequest: async (id: string) =>
-      id === "detector-1"
-        ? makeReadyResolution("detector-1", "detector-key")
-        : makeReadyResolution(id, "model-uuid-1"),
-    generateText: async (
-      _conn: unknown,
-      _req: { modelId: string; system: string; user: string },
-      _options?: unknown,
-    ) => {
-      log.events.push("detect");
-      return answers.shift() ?? "und";
-    },
-    streamText: async (
-      _conn: unknown,
-      req: { modelId: string; system: string; user: string },
-      options: { onText: (text: string) => void },
-    ) => {
-      log.events.push("translate");
-      log.prompts.push({ system: req.system, user: req.user });
-      options.onText("译文");
-      return "译文";
-    },
-  };
-}
-
-test("language resolution: detects an automatic pair once, then sends concrete languages to the translation model", async () => {
-  const log: DetectionPhaseLog = { events: [], prompts: [] };
-  const preset = makePreset({ sourceLanguage: "auto", targetLanguage: "auto" });
+test("DeepL preset: uses the supplied pair and stored key without AI work or streaming", async () => {
+  const calls: Array<{
+    apiKey: string;
+    text: string;
+    sourceLanguage: string;
+    targetLanguage: string;
+  }> = [];
+  let modelLookups = 0;
+  let streams = 0;
 
   const result = await translateWithPreset(
-    { preset, sourceText: "Bonjour le monde" },
-    { ...makeLanguageResolutionDeps(["fr"], log), languageDetectionSettings: detectionSettings() },
-  );
-
-  expect(result.ok).toBe(true);
-  expect(log.events).toEqual(["detect", "translate"]);
-  expect(log.prompts).toHaveLength(1);
-  expect(log.prompts[0]!.system).toContain(getLanguageLabel("fr"));
-  expect(log.prompts[0]!.system).toContain(getLanguageLabel("zh"));
-  expect(log.prompts[0]!.user).toBe("Text:\nBonjour le monde");
-});
-
-test("language resolution: translates a native-language source into the preferred language", async () => {
-  const log: DetectionPhaseLog = { events: [], prompts: [] };
-  const preset = makePreset({ sourceLanguage: "auto", targetLanguage: "auto" });
-
-  const result = await translateWithPreset(
-    { preset, sourceText: "你好" },
-    { ...makeLanguageResolutionDeps(["zh"], log), languageDetectionSettings: detectionSettings() },
-  );
-
-  expect(result.ok).toBe(true);
-  expect(log.events).toEqual(["detect", "translate"]);
-  expect(log.prompts[0]!.system).toContain(getLanguageLabel("zh"));
-  expect(log.prompts[0]!.system).toContain(getLanguageLabel("en"));
-});
-
-test("language resolution: sends no translation request when detection fails", async () => {
-  const log: DetectionPhaseLog = { events: [], prompts: [] };
-  const preset = makePreset({ sourceLanguage: "auto", targetLanguage: "auto" });
-
-  const result = await translateWithPreset(
-    { preset, sourceText: "???" },
-    { ...makeLanguageResolutionDeps(["und"], log), languageDetectionSettings: detectionSettings() },
-  );
-
-  expect(result.ok).toBe(false);
-  if (result.ok) return;
-  expect(result.cancelled).toBe(false);
-  expect(result.error).toBe(t("languageDetection.failure.unknownLanguage"));
-  expect(log.events).toEqual(["detect"]);
-});
-
-test("language resolution: skips detection for concrete overrides", async () => {
-  const log: DetectionPhaseLog = { events: [], prompts: [] };
-  const preset = makePreset({ sourceLanguage: "auto", targetLanguage: "auto" });
-
-  const result = await translateWithPreset(
-    { preset, sourceText: "Bonjour", sourceLanguage: "ja", targetLanguage: "de" },
-    { ...makeLanguageResolutionDeps([], log), languageDetectionSettings: detectionSettings() },
-  );
-
-  expect(result.ok).toBe(true);
-  expect(log.events).toEqual(["translate"]);
-  expect(log.prompts[0]!.system).toContain(getLanguageLabel("ja"));
-  expect(log.prompts[0]!.system).toContain(getLanguageLabel("de"));
-});
-
-test("language resolution: blocks an automatic target without a native language before any request", async () => {
-  const log: DetectionPhaseLog = { events: [], prompts: [] };
-  const preset = makePreset({ sourceLanguage: "auto", targetLanguage: "auto" });
-
-  const result = await translateWithPreset(
-    { preset, sourceText: "Bonjour" },
     {
-      ...makeLanguageResolutionDeps(["fr"], log),
-      languageDetectionSettings: detectionSettings({ nativeLanguage: null }),
+      preset: makeDeepLPreset(),
+      sourceText: "Good morning\nTeam",
+      sourceLanguage: "en",
+      targetLanguage: "zh",
+      // A stale AI template override is ignored for a DeepL preset.
+      templateId: "tpl-old",
     },
-  );
-
-  expect(result).toEqual({
-    ok: false,
-    cancelled: false,
-    error: t("languageDetection.failure.missingNativeLanguage"),
-  });
-  expect(log.events).toEqual([]);
-});
-
-test("language resolution: blocks a native-language source without a preferred language", async () => {
-  const log: DetectionPhaseLog = { events: [], prompts: [] };
-  const preset = makePreset({ sourceLanguage: "auto", targetLanguage: "auto" });
-
-  const result = await translateWithPreset(
-    { preset, sourceText: "你好" },
     {
-      ...makeLanguageResolutionDeps(["zh"], log),
-      languageDetectionSettings: detectionSettings({ preferredTranslationLanguage: null }),
-    },
-  );
-
-  expect(result).toEqual({
-    ok: false,
-    cancelled: false,
-    error: t("languageDetection.failure.missingPreferredLanguage"),
-  });
-  expect(log.events).toEqual(["detect"]);
-});
-
-test("language resolution: fails an automatic source when detection is off without a translation request", async () => {
-  const log: DetectionPhaseLog = { events: [], prompts: [] };
-  const preset = makePreset({ sourceLanguage: "auto", targetLanguage: "zh" });
-
-  const result = await translateWithPreset(
-    { preset, sourceText: "Bonjour" },
-    {
-      ...makeLanguageResolutionDeps([], log),
-      languageDetectionSettings: detectionSettings({ mode: "off" }),
-    },
-  );
-
-  expect(result).toEqual({
-    ok: false,
-    cancelled: false,
-    error: t("languageDetection.failure.unconfigured"),
-  });
-  expect(log.events).toEqual([]);
-});
-
-test("language resolution: ignores a late detector response after cancellation", async () => {
-  const log: DetectionPhaseLog = { events: [], prompts: [] };
-  const preset = makePreset({ sourceLanguage: "auto", targetLanguage: "auto" });
-  const controller = new AbortController();
-  const deps = makeLanguageResolutionDeps(["fr"], log);
-
-  const result = await translateWithPreset(
-    { preset, sourceText: "Bonjour" },
-    {
-      signal: controller.signal,
-      languageDetectionSettings: detectionSettings(),
-      resolveModelRequest: deps.resolveModelRequest,
-      generateText: async (conn, req, options) => {
-        controller.abort();
-        return deps.generateText(conn, req, options);
+      readDeepLCredential: async (presetId) =>
+        presetId === "preset-deepl" ? "deepl-key:fx" : null,
+      deepLTranslate: async (input) => {
+        calls.push({
+          apiKey: input.apiKey,
+          text: input.text,
+          sourceLanguage: input.sourceLanguage,
+          targetLanguage: input.targetLanguage,
+        });
+        return "早上好\n团队";
+      },
+      resolveModelRequest: async () => {
+        modelLookups += 1;
+        throw new Error("must not resolve an AI model");
+      },
+      streamText: async () => {
+        streams += 1;
+        throw new Error("must not stream");
+      },
+      onText: () => {
+        streams += 1;
       },
     },
   );
 
   expect(result).toEqual({
+    ok: true,
+    text: "早上好\n团队",
+    modelId: null,
+    templateId: null,
+  });
+  expect(calls).toEqual([
+    {
+      apiKey: "deepl-key:fx",
+      text: "Good morning\nTeam",
+      sourceLanguage: "en",
+      targetLanguage: "zh",
+    },
+  ]);
+  expect(modelLookups).toBe(0);
+  expect(streams).toBe(0);
+});
+
+test("DeepL preset: reports a missing or unreadable key without calling DeepL", async () => {
+  let calls = 0;
+  const translate = async () => {
+    calls += 1;
+    return "unexpected";
+  };
+
+  const missing = await translateWithPreset(
+    { preset: makeDeepLPreset(), sourceText: "Hello", sourceLanguage: "en", targetLanguage: "de" },
+    { readDeepLCredential: async () => null, deepLTranslate: translate },
+  );
+  expect(missing).toEqual({
+    ok: false,
+    cancelled: false,
+    error: t("deepl.error.missingKey"),
+  });
+
+  const unreadable = await translateWithPreset(
+    { preset: makeDeepLPreset(), sourceText: "Hello", sourceLanguage: "en", targetLanguage: "de" },
+    {
+      readDeepLCredential: async () => {
+        throw new Error("Preset storage read failed.");
+      },
+      deepLTranslate: translate,
+    },
+  );
+  expect(unreadable).toEqual({
+    ok: false,
+    cancelled: false,
+    error: "Preset storage read failed.",
+  });
+  expect(calls).toBe(0);
+});
+
+test("DeepL preset: keeps localized provider failures and cancellation without retrying", async () => {
+  const rateLimited = await translateWithPreset(
+    { preset: makeDeepLPreset(), sourceText: "Hello", sourceLanguage: "en", targetLanguage: "de" },
+    {
+      readDeepLCredential: async () => "deepl-key",
+      deepLTranslate: async () => {
+        throw new ProviderProtocolError("rate_limited", t("deepl.error.rateLimited"), 429);
+      },
+    },
+  );
+  expect(rateLimited).toEqual({
+    ok: false,
+    cancelled: false,
+    error: t("deepl.error.rateLimited"),
+  });
+
+  const controller = new AbortController();
+  const cancelled = await translateWithPreset(
+    { preset: makeDeepLPreset(), sourceText: "Hello", sourceLanguage: "en", targetLanguage: "de" },
+    {
+      signal: controller.signal,
+      readDeepLCredential: async () => "deepl-key",
+      deepLTranslate: async () => {
+        controller.abort();
+        throw new ProviderProtocolError("cancelled", t("protocol.error.cancelled"));
+      },
+    },
+  );
+  expect(cancelled).toEqual({
     ok: false,
     cancelled: true,
     error: t("protocol.error.cancelled"),
   });
-  expect(log.events).toEqual(["detect"]);
+});
+
+test("DeepL preset: rejects disabled, blank, and aborted actions before reading the key", async () => {
+  let reads = 0;
+  const readDeepLCredential = async () => {
+    reads += 1;
+    return "deepl-key";
+  };
+  const deepLTranslate = async () => "unexpected";
+
+  const disabled = await translateWithPreset(
+    {
+      preset: makeDeepLPreset({ enabled: false }),
+      sourceText: "Hello",
+      sourceLanguage: "en",
+      targetLanguage: "de",
+    },
+    { readDeepLCredential, deepLTranslate },
+  );
+  expect(disabled).toMatchObject({ ok: false, error: t("quickTranslate.error.presetDisabled") });
+
+  const blank = await translateWithPreset(
+    { preset: makeDeepLPreset(), sourceText: "  ", sourceLanguage: "en", targetLanguage: "de" },
+    { readDeepLCredential, deepLTranslate },
+  );
+  expect(blank).toMatchObject({ ok: false, error: t("quickTranslate.error.blankInput") });
+
+  const controller = new AbortController();
+  controller.abort();
+  const aborted = await translateWithPreset(
+    { preset: makeDeepLPreset(), sourceText: "Hello", sourceLanguage: "en", targetLanguage: "de" },
+    { signal: controller.signal, readDeepLCredential, deepLTranslate },
+  );
+  expect(aborted).toMatchObject({ ok: false, cancelled: true });
+  expect(reads).toBe(0);
 });

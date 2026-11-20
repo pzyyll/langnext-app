@@ -288,9 +288,10 @@ presets:
     mutationInProgress: 正在保存另一项预设更改。
     notFound: 翻译预设已不存在。
     nameRequired: 预设名称为必填项。
-    sourceLanguageInvalid: 源语言无效。
-    targetLanguageInvalid: 目标语言无效。
     engineUnsupported: 不支持该预设引擎类型。
+    engineTypeLocked: 已保存的预设不能更换引擎类型。
+    deeplKeyRequired: 请输入 DeepL API 密钥。
+    deeplKeyInvalid: 请输入不含空格的 DeepL API 密钥。
     primaryModelRequired: 请选择主模型。
     modelUnavailable: 所选模型当前不可用。
     modelDuplicate: 主模型与回退模型不能重复。
@@ -334,12 +335,16 @@ presets:
   field:
     name: 名称
     namePlaceholder: 例如：技术文档 英译中
-    sourceLanguage: 源语言
-    targetLanguage: 目标语言
   section:
-    languages: 语言
     models: 模型与参数
     prompts: 提示词模板
+  engine:
+    ai: AI 翻译
+    deepl: DeepL API
+  deepl:
+    keyLabel: API 密钥
+    keyPlaceholder: 粘贴 DeepL API 密钥
+    keyStored: 已保存密钥。输入新密钥可替换。
   language:
     autoTarget: 自动
   languages:
@@ -476,3 +481,14 @@ quickTranslate:
     translationFailed: "翻译失败：%{detail}"
     copyFailed: 无法将译文复制到剪贴板。
     savePreferences: 无法保存快速翻译偏好设置。本次更改将在关闭应用前生效。
+deepl:
+  error:
+    missingKey: 请在预设中填写 DeepL API 密钥。
+    auth: DeepL 拒绝了该 API 密钥。
+    rejected: DeepL 拒绝了该请求。
+    tooLarge: 文本对于 DeepL 来说过长。
+    rateLimited: DeepL 正在限制请求频率，请稍后重试。
+    quota: 该 DeepL API 密钥的额度已用完。
+    server: DeepL 当前不可用。
+    invalidResponse: DeepL 返回了无法解析的响应。
+    unsupportedLanguage: DeepL 不支持该语言。

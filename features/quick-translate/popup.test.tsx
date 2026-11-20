@@ -3,9 +3,9 @@ import { expect, open, test } from "nsh/test";
 import { initializeAiModules } from "../../app/ai-setup";
 import { LANGUAGE_DETECTION_STORAGE_KEY } from "../language-detection/settings";
 import { makeChannel, makeModel, makeSeedStorage } from "../models/__tests__/fixtures";
-import { credentialStorageKey } from "../models/store";
-import { getLanguageLabel } from "../presets/languages";
-import { PRESETS_STORAGE_KEY } from "../presets/store";
+import { credentialStorageKey, MODELS_STORAGE_KEY, PROVIDERS_STORAGE_KEY } from "../models/store";
+import { getLanguageLabel, getTargetLanguageLabel } from "../presets/languages";
+import { deepLCredentialStorageKey, PRESETS_STORAGE_KEY } from "../presets/store";
 import type { TranslationPreset } from "../presets/types";
 import { QUICK_TRANSLATE_PREFERENCES_KEY } from "./preferences";
 
@@ -20,8 +20,6 @@ function makePreset(overrides: Partial<TranslationPreset> = {}): TranslationPres
     id: "preset-1",
     name: "Default EN to FR",
     enabled: true,
-    sourceLanguage: "en",
-    targetLanguage: "fr",
     createdAt: "2026-11-19T00:00:00.000Z",
     updatedAt: "2026-11-19T00:00:00.000Z",
     engine: {
@@ -42,6 +40,18 @@ function makePreset(overrides: Partial<TranslationPreset> = {}): TranslationPres
     },
     ...overrides,
   };
+}
+
+/** Popup selections live in the popup's own preferences, never in preset records. */
+const DEFAULT_POPUP_LANGUAGES = { sourceLanguage: "en", targetLanguage: "fr" } as const;
+
+function aiEngine(preset: TranslationPreset) {
+  if (preset.engine.kind !== "ai") throw new Error("expected an AI preset");
+  return preset.engine;
+}
+
+function aiTemplates(preset: TranslationPreset) {
+  return aiEngine(preset).templates;
 }
 
 function seedWithPresets(
@@ -65,6 +75,13 @@ function seedWithPresets(
     models: [model],
     credentials: { "ch-1": "sk-test" },
     extra: {
+      [QUICK_TRANSLATE_PREFERENCES_KEY]: JSON.stringify({
+        version: 1,
+        doubleCopyEnabled: false,
+        autoTranslate: false,
+        ...DEFAULT_POPUP_LANGUAGES,
+        cards: [],
+      }),
       [PRESETS_STORAGE_KEY]: JSON.stringify({ version: 1, items: presets }),
       ...extra,
     },
@@ -258,8 +275,6 @@ test("quick popup: debounces 500ms opt-in auto-translate, preserves Shift+Enter 
   const secondPreset = makePreset({
     id: "preset-2",
     name: "Preset Two",
-    sourceLanguage: "auto",
-    targetLanguage: "zh",
   });
   const app = await open(POPUP_HARNESS, {
     ...viewport,
@@ -557,8 +572,6 @@ test("preset cards: automatic mode schedules eligible cards on shared input and 
   const multiTemplatePreset = makePreset({
     id: "preset-1",
     name: "Preset Alpha",
-    sourceLanguage: "en",
-    targetLanguage: "fr",
     engine: {
       kind: "ai",
       modelIds: ["m-1"],
@@ -662,8 +675,6 @@ test("preset cards: collapsed cards stay idle in automatic mode and translate wh
       makePreset({
         id: "preset-1",
         name: "Preset Alpha",
-        sourceLanguage: "en",
-        targetLanguage: "fr",
       }),
       twoTemplatePreset,
     ]),
@@ -720,14 +731,10 @@ test("preset cards: manual translation skips collapsed cards and translates them
       makePreset({
         id: "preset-1",
         name: "Preset Alpha",
-        sourceLanguage: "en",
-        targetLanguage: "fr",
       }),
       makePreset({
         id: "preset-2",
         name: "Preset Beta",
-        sourceLanguage: "en",
-        targetLanguage: "fr",
       }),
     ]),
     network: {
@@ -767,8 +774,6 @@ test("quick reopen: restores valid cards, fallback template, languages, and auto
   const presetKeep = makePreset({
     id: "preset-keep",
     name: "Keep Preset",
-    sourceLanguage: "auto",
-    targetLanguage: "fr",
     engine: {
       kind: "ai",
       modelIds: ["m-1"],
@@ -846,8 +851,8 @@ test("quick reopen: restores valid cards, fallback template, languages, and auto
   const modifiedPresetKeep: TranslationPreset = {
     ...presetKeep,
     engine: {
-      ...presetKeep.engine,
-      templates: [presetKeep.engine.templates[0]!],
+      ...aiEngine(presetKeep),
+      templates: [aiTemplates(presetKeep)[0]!],
     },
   };
   const modifiedPresetDrop: TranslationPreset = { ...presetDrop, enabled: false };
@@ -905,6 +910,89 @@ test("quick reopen: restores valid cards, fallback template, languages, and auto
   );
 });
 
+/** The title-bar trigger label proves which pair the popup currently holds. */
+function languageMenuLabel(
+  sourceLanguage: Parameters<typeof getLanguageLabel>[0],
+  targetLanguage: Parameters<typeof getTargetLanguageLabel>[0],
+): string {
+  return t("quickTranslate.languages", {
+    source: getLanguageLabel(sourceLanguage),
+    target: getTargetLanguageLabel(targetLanguage),
+  });
+}
+
+test("quick languages: owns its saved pair regardless of presets or cards", async () => {
+  // A preset's legacy language values never seed the popup selections.
+  const legacyPreset = makePreset({ id: "preset-legacy", name: "Legacy Preset" });
+  const withoutSavedPair = seedWithPresets([legacyPreset]);
+  delete withoutSavedPair[QUICK_TRANSLATE_PREFERENCES_KEY];
+  // Older storage could carry language fields on the preset; the popup must not read them.
+  withoutSavedPair[PRESETS_STORAGE_KEY] = JSON.stringify({
+    version: 1,
+    items: [{ ...legacyPreset, sourceLanguage: "en", targetLanguage: "fr" }],
+  });
+
+  const fresh = await open(POPUP_HARNESS, {
+    ...viewport,
+    storage: withoutSavedPair,
+    network: {
+      "POST https://api.openai.com/v1/chat/completions": {
+        status: 200,
+        body: { choices: [{ message: { content: "Bonjour" } }] },
+      },
+    },
+  });
+
+  await fresh.waitFor("id:quick-translate-card-card-1");
+  expect(fresh.shows(`label:${languageMenuLabel("auto", "auto")}`)).toBe(true);
+  expect(fresh.shows(`label:${languageMenuLabel("en", "fr")}`)).toBe(false);
+
+  // Saved selections come back even when no preset is enabled to supply cards.
+  const savedPairApp = await open(POPUP_HARNESS, {
+    ...viewport,
+    storage: seedWithPresets([makePreset({ id: "preset-off", name: "Off", enabled: false })]),
+  });
+  await savedPairApp.waitFor("id:quick-translate-no-presets");
+  expect(savedPairApp.shows(`label:${languageMenuLabel("en", "fr")}`)).toBe(true);
+
+  // Switching presets keeps the saved pair and the next request uses it.
+  const switchApp = await open(POPUP_HARNESS, {
+    ...viewport,
+    storage: seedWithPresets([
+      makePreset({ id: "preset-alpha", name: "Alpha" }),
+      makePreset({ id: "preset-beta", name: "Beta" }),
+    ]),
+    network: {
+      "POST https://api.openai.com/v1/chat/completions": {
+        status: 200,
+        body: { choices: [{ message: { content: "Bonjour" } }] },
+      },
+    },
+  });
+
+  await switchApp.waitFor("id:quick-translate-card-card-1");
+  await switchApp.type("id:quick-translate-source", "Hello");
+  await switchApp.keyboard.press("enter");
+  await switchApp.waitFor("id:quick-translate-copy");
+  const firstBody = JSON.parse(switchApp.requests()[0]!.body!) as {
+    messages: Array<{ role: string; content: string }>;
+  };
+  expect(firstBody.messages[0]!.content).toContain(getLanguageLabel("en"));
+  expect(firstBody.messages[0]!.content).toContain(getLanguageLabel("fr"));
+
+  await switchApp.press("id:quick-translate-preset");
+  await switchApp.waitFor("role:option[Beta]");
+  await switchApp.press("role:option[Beta]");
+  expect(switchApp.shows(`label:${languageMenuLabel("en", "fr")}`)).toBe(true);
+  await switchApp.submit("id:quick-translate-source");
+  await switchApp.waitUntil(() => switchApp.requests().length === 2);
+  const secondBody = JSON.parse(switchApp.requests()[1]!.body!) as {
+    messages: Array<{ role: string; content: string }>;
+  };
+  expect(secondBody.messages[0]!.content).toContain(getLanguageLabel("en"));
+  expect(secondBody.messages[0]!.content).toContain(getLanguageLabel("fr"));
+});
+
 const DETECT_URL = "POST https://detect.example.com/v1/chat/completions";
 const TRANSLATE_URL = "POST https://translate.example.com/v1/chat/completions";
 
@@ -912,6 +1000,7 @@ interface StubbedRequest {
   method: string;
   url: string;
   body?: string | null;
+  headers?: Record<string, string>;
 }
 
 function requestsTo(app: { requests(): StubbedRequest[] }, url: string): StubbedRequest[] {
@@ -958,8 +1047,6 @@ function seedAutoPair(collapsed: readonly boolean[], mode = "live"): Record<stri
   const pairPreset = makePreset({
     id: "preset-auto",
     name: "Auto pair",
-    sourceLanguage: "auto",
-    targetLanguage: "auto",
     engine: {
       kind: "ai",
       modelIds: ["tr-1"],
@@ -1207,50 +1294,286 @@ test("language resolution: retrying after a failure starts a new detection run",
   );
 });
 
-test("language resolution: source footer detection status clears on edit and stays hidden for explicit source language", async () => {
+const DEEPL_URL = "POST https://api-free.deepl.com/v2/translate";
+const DEEPL_KEY_REF = "deepl-ref-1";
+
+function makeDeepLPreset(overrides: Partial<TranslationPreset> = {}): TranslationPreset {
+  return {
+    id: "preset-deepl",
+    name: "DeepL Card",
+    enabled: true,
+    createdAt: "2026-11-19T00:00:00.000Z",
+    updatedAt: "2026-11-19T00:00:00.000Z",
+    engine: { kind: "deepl", credentialRef: DEEPL_KEY_REF },
+    ...overrides,
+  };
+}
+
+interface DeepLSeedOptions {
+  sourceLanguage?: "auto" | "en";
+  targetLanguage?: "auto" | "ja" | "de" | "zh";
+  detectionMode?: "ai" | "off";
+  cards?: readonly ("ai" | "deepl")[];
+  aiModels?: boolean;
+  /** A stale saved template override that a DeepL card must ignore. */
+  deeplTemplateId?: string | null;
+}
+
+/** Seeds an AI card and/or a DeepL card with one detector and the stored DeepL key. */
+function seedDeepLCards(options: DeepLSeedOptions = {}): Record<string, string> {
+  const detectChannel = makeChannel({
+    id: "ch-detect",
+    presetId: "openai",
+    adapterId: "openai-compatible",
+    baseUrl: "https://detect.example.com/v1",
+    displayName: "Detector",
+    enabled: true,
+    sortOrder: 0,
+  });
+  const translateChannel = makeChannel({
+    id: "ch-translate",
+    presetId: "openai",
+    adapterId: "openai-compatible",
+    baseUrl: "https://translate.example.com/v1",
+    displayName: "Translator",
+    enabled: true,
+    sortOrder: 1,
+  });
+  const detector = makeModel({
+    id: "det-1",
+    providerId: "ch-detect",
+    modelKey: "detect-mini",
+    enabled: true,
+  });
+  const translator = makeModel({
+    id: "tr-1",
+    providerId: "ch-translate",
+    modelKey: "translate-mini",
+    enabled: true,
+  });
+  const aiPreset = makePreset({
+    id: "preset-ai",
+    name: "AI Card",
+    engine: {
+      kind: "ai",
+      modelIds: ["tr-1"],
+      temperature: null,
+      maxOutputTokens: null,
+      disableReasoning: true,
+      templates: [
+        {
+          id: "tpl-1",
+          name: "Default",
+          systemTemplate: "Translate from {{source_language}} to {{target_language}}.",
+          userTemplate: "{{text}}",
+        },
+      ],
+      defaultTemplateId: "tpl-1",
+    },
+  });
+  const cards = (options.cards ?? ["ai", "deepl"]).map((kind, index) => ({
+    id: `card-${index + 1}`,
+    presetId: kind === "ai" ? aiPreset.id : "preset-deepl",
+    templateId: kind === "deepl" ? (options.deeplTemplateId ?? null) : null,
+    collapsed: false,
+  }));
+  const items = options.aiModels === false ? [makeDeepLPreset()] : [aiPreset, makeDeepLPreset()];
+  const storage = makeSeedStorage({
+    ...(options.aiModels === false
+      ? {}
+      : {
+          channels: [detectChannel, translateChannel],
+          models: [detector, translator],
+          credentials: { "ch-detect": "sk-detect", "ch-translate": "sk-translate" },
+        }),
+    extra: {
+      [PRESETS_STORAGE_KEY]: JSON.stringify({ version: 1, items }),
+      [QUICK_TRANSLATE_PREFERENCES_KEY]: JSON.stringify({
+        version: 1,
+        doubleCopyEnabled: false,
+        autoTranslate: false,
+        sourceLanguage: options.sourceLanguage ?? "auto",
+        targetLanguage: options.targetLanguage ?? "ja",
+        cards,
+      }),
+      [deepLCredentialStorageKey(DEEPL_KEY_REF)]: "deepl-key:fx",
+      [LANGUAGE_DETECTION_STORAGE_KEY]: JSON.stringify({
+        version: 1,
+        mode: options.detectionMode ?? "ai",
+        modelIds: ["det-1"],
+        nativeLanguage: "zh",
+        preferredTranslationLanguage: "en",
+      }),
+    },
+  });
+  if (options.aiModels === false) {
+    delete storage[MODELS_STORAGE_KEY];
+    delete storage[PROVIDERS_STORAGE_KEY];
+  }
+  return storage;
+}
+
+function deepLNetwork(detectorAnswer = "fr") {
+  return {
+    [DETECT_URL]: {
+      status: 200,
+      body: { choices: [{ message: { content: detectorAnswer } }] },
+    },
+    [TRANSLATE_URL]: {
+      status: 200,
+      body: { choices: [{ message: { content: "译文" } }] },
+    },
+    [DEEPL_URL]: {
+      status: 200,
+      body: { translations: [{ detected_source_language: "FR", text: "DeepL 译文" }] },
+    },
+  };
+}
+
+test("DeepL card: one detection run serves an AI card and a DeepL card the same pair", async () => {
   const app = await open(POPUP_HARNESS, {
     ...viewport,
-    storage: seedAutoPair([false], "language-resolution"),
-    network: {
-      [TRANSLATE_URL]: { status: 200, body: { choices: [{ message: { content: "你好" } }] } },
-    },
+    storage: seedDeepLCards({ targetLanguage: "ja", deeplTemplateId: "tpl-stale" }),
+    network: deepLNetwork(),
   });
 
-  await app.waitFor("id:quick-translate-source");
-  await app.type("id:quick-translate-source", "Hello");
+  await app.waitFor("id:quick-translate-card-card-2");
+  // The template selector stays an AI-only control.
+  expect(app.shows("id:quick-translate-card-card-1 >> id:quick-translate-template")).toBe(true);
+  expect(app.shows("id:quick-translate-card-card-2 >> id:quick-translate-template")).toBe(false);
+
+  await app.type("id:quick-translate-source", "Bonjour");
   await app.keyboard.press("enter");
-  await app.waitUntil(() => app.texts().some((text) => text.includes("detects=1|")));
-  await app.press("id:harness-resolve-language-fr");
-  await app.waitFor("id:quick-translate-source-detection");
-  expect(
-    app.shows("id:quick-translate-source-toolbar >> id:quick-translate-source-detection"),
-  ).toBe(true);
-  expect(app.shows("id:quick-translate-source-toolbar >> id:quick-translate-clear")).toBe(true);
+  await app.waitUntil(
+    () => requestsTo(app, DEEPL_URL).length === 1 && requestsTo(app, TRANSLATE_URL).length === 1,
+  );
+  await app.waitFor("id:quick-translate-card-card-2 >> id:quick-translate-result-text");
 
-  // Editing source invalidates the prior detected language label immediately.
-  await app.type("id:quick-translate-source", " world");
-  expect(app.shows("id:quick-translate-source-detection")).toBe(false);
+  expect(requestsTo(app, DETECT_URL)).toHaveLength(1);
+  expect(app.texts()).toContain("DeepL 译文");
 
-  // Switching to an explicit source language leaves detection status hidden even when target is auto.
-  const live = await open(POPUP_HARNESS, {
+  const aiBody = JSON.parse(requestsTo(app, TRANSLATE_URL)[0]!.body!) as {
+    messages: Array<{ content: string }>;
+  };
+  expect(aiBody.messages[0]!.content).toContain(getLanguageLabel("fr"));
+  expect(aiBody.messages[0]!.content).toContain(getLanguageLabel("ja"));
+
+  const deeplRequest = requestsTo(app, DEEPL_URL)[0]!;
+  expect(deeplRequest.headers?.authorization).toBe("DeepL-Auth-Key deepl-key:fx");
+  expect(JSON.parse(deeplRequest.body!)).toEqual({
+    text: ["Bonjour"],
+    source_lang: "FR",
+    target_lang: "JA",
+  });
+});
+
+test("DeepL card: an automatic target resolves once for both engines", async () => {
+  const app = await open(POPUP_HARNESS, {
     ...viewport,
-    storage: seedAutoPair([false]),
+    storage: seedDeepLCards({ targetLanguage: "auto" }),
+    network: deepLNetwork(),
+  });
+
+  await app.waitFor("id:quick-translate-card-card-2");
+  await app.type("id:quick-translate-source", "Bonjour");
+  await app.keyboard.press("enter");
+  await app.waitUntil(
+    () => requestsTo(app, DEEPL_URL).length === 1 && requestsTo(app, TRANSLATE_URL).length === 1,
+  );
+
+  expect(requestsTo(app, DETECT_URL)).toHaveLength(1);
+  const deeplBody = JSON.parse(requestsTo(app, DEEPL_URL)[0]!.body!) as {
+    source_lang: string;
+    target_lang: string;
+  };
+  expect(deeplBody.source_lang).toBe("FR");
+  expect(deeplBody.target_lang).toBe("ZH-HANS");
+
+  const aiBody = JSON.parse(requestsTo(app, TRANSLATE_URL)[0]!.body!) as {
+    messages: Array<{ content: string }>;
+  };
+  expect(aiBody.messages[0]!.content).toContain(getLanguageLabel("fr"));
+  expect(aiBody.messages[0]!.content).toContain(getLanguageLabel("zh"));
+});
+
+test("DeepL card: explicit selections need no detector for either engine", async () => {
+  const app = await open(POPUP_HARNESS, {
+    ...viewport,
+    storage: seedDeepLCards({
+      sourceLanguage: "en",
+      targetLanguage: "de",
+      detectionMode: "off",
+    }),
+    network: deepLNetwork(),
+  });
+
+  await app.waitFor("id:quick-translate-card-card-2");
+  await app.type("id:quick-translate-source", "Good morning");
+  await app.keyboard.press("enter");
+  await app.waitUntil(
+    () => requestsTo(app, DEEPL_URL).length === 1 && requestsTo(app, TRANSLATE_URL).length === 1,
+  );
+
+  expect(requestsTo(app, DETECT_URL)).toHaveLength(0);
+  expect(JSON.parse(requestsTo(app, DEEPL_URL)[0]!.body!)).toMatchObject({
+    source_lang: "EN",
+    target_lang: "DE",
+  });
+});
+
+test("DeepL card: detection off or failed blocks both engines without a fallback detector", async () => {
+  const off = await open(POPUP_HARNESS, {
+    ...viewport,
+    storage: seedDeepLCards({ targetLanguage: "ja", detectionMode: "off" }),
+    network: deepLNetwork(),
+  });
+  await off.waitFor("id:quick-translate-card-card-2");
+  await off.type("id:quick-translate-source", "Bonjour");
+  await off.keyboard.press("enter");
+  const unconfigured = t("languageDetection.failure.unconfigured");
+  await off.waitUntil(() => off.texts().filter((text) => text === unconfigured).length === 2);
+  expect(requestsTo(off, TRANSLATE_URL)).toHaveLength(0);
+  expect(requestsTo(off, DEEPL_URL)).toHaveLength(0);
+
+  const failed = await open(POPUP_HARNESS, {
+    ...viewport,
+    storage: seedDeepLCards({ targetLanguage: "ja" }),
+    network: deepLNetwork("und"),
+  });
+  await failed.waitFor("id:quick-translate-card-card-2");
+  await failed.type("id:quick-translate-source", "??");
+  await failed.keyboard.press("enter");
+  const unknown = t("languageDetection.failure.unknownLanguage");
+  await failed.waitUntil(() => failed.texts().filter((text) => text === unknown).length === 2);
+  expect(requestsTo(failed, TRANSLATE_URL)).toHaveLength(0);
+  expect(requestsTo(failed, DEEPL_URL)).toHaveLength(0);
+});
+
+test("DeepL card: a DeepL-only action translates without AI models", async () => {
+  const app = await open(POPUP_HARNESS, {
+    ...viewport,
+    storage: seedDeepLCards({
+      cards: ["deepl"],
+      sourceLanguage: "en",
+      targetLanguage: "zh",
+      detectionMode: "off",
+      aiModels: false,
+    }),
     network: {
-      [TRANSLATE_URL]: { status: 200, body: { choices: [{ message: { content: "你好" } }] } },
+      [DEEPL_URL]: {
+        status: 200,
+        body: { translations: [{ detected_source_language: "EN", text: "你好，团队" }] },
+      },
     },
   });
-  await live.waitFor("id:quick-translate-source");
-  await live.press("id:quick-translate-language-menu");
-  await live.waitFor("id:quick-translate-source-language");
-  await live.hover("id:quick-translate-source-language");
-  await live.waitFor("id:quick-translate-source-language-en");
-  await live.press("id:quick-translate-source-language-en");
-  while (live.shows("id:quick-translate-source-language")) {
-    await live.keyboard.press("escape");
-  }
-  await live.type("id:quick-translate-source", "Hello");
-  await live.keyboard.press("enter");
-  await live.waitFor("id:quick-translate-result-text");
-  expect(requestsTo(live, DETECT_URL)).toHaveLength(0);
-  expect(live.shows("id:quick-translate-source-detection")).toBe(false);
+
+  await app.waitFor("id:quick-translate-card-card-1");
+  await app.type("id:quick-translate-source", "Hello team");
+  await app.keyboard.press("enter");
+  await app.waitFor("id:quick-translate-card-card-1 >> id:quick-translate-result-text");
+
+  expect(app.texts()).toContain("你好，团队");
+  expect(requestsTo(app, DEEPL_URL)).toHaveLength(1);
+  expect(requestsTo(app, TRANSLATE_URL)).toHaveLength(0);
+  expect(requestsTo(app, DETECT_URL)).toHaveLength(0);
 });

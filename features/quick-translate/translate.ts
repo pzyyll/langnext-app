@@ -6,19 +6,10 @@ import {
   type AiClientInput,
   type AiClientStreamOptions,
 } from "../../modules/ai/runtime/client";
-import { languageResolutionErrorMessage } from "../language-detection/messages";
-import { resolveTranslationLanguages } from "../language-detection/resolve";
-import {
-  languageDetectionStore,
-  type LanguageDetectionSettings,
-} from "../language-detection/settings";
 import { resolveSavedModelRequest, type SavedModelRequestResolution } from "../models/store";
-import {
-  getLanguageLabel,
-  type LanguageId,
-  type SourceLanguageId,
-  type TargetLanguageId,
-} from "../presets/languages";
+import { createDeepLClient, type DeepLTranslateInput } from "../../modules/deepl/client";
+import { getLanguageLabel, type LanguageId } from "../presets/languages";
+import { presetsStore } from "../presets/store";
 import type { PromptTemplate, TranslationPreset } from "../presets/types";
 
 const TEMPLATE_TOKEN_PATTERN = /\{\{\s*(source_language|target_language|text)\s*\}\}/g;
@@ -27,23 +18,16 @@ const RETRYABLE_ERROR_KINDS = new Set(["timeout", "network", "rate_limited", "se
 export interface TranslateWithPresetInput {
   preset: TranslationPreset;
   sourceText: string;
-  sourceLanguage?: SourceLanguageId;
-  targetLanguage?: TargetLanguageId;
+  /** Concrete languages resolved by the caller; a preset never stores or detects them. */
+  sourceLanguage: LanguageId;
+  targetLanguage: LanguageId;
   templateId?: string;
 }
 
 export interface TranslateWithPresetOptions {
   signal?: AbortSignal;
   timeoutMs?: number;
-  /** One saved Language Detection snapshot for this action; read from the store when omitted. */
-  languageDetectionSettings?: LanguageDetectionSettings;
   resolveModelRequest?: (modelId: string) => Promise<SavedModelRequestResolution>;
-  /** Language-detection seam; translation runs through `streamText`. */
-  generateText?: (
-    connection: AiClientInput,
-    request: TextGenerationRequest,
-    options?: { signal?: AbortSignal; timeoutMs?: number },
-  ) => Promise<string>;
   /** Translation seam: one streamed generation. */
   streamText?: (
     connection: AiClientInput,
@@ -52,14 +36,25 @@ export interface TranslateWithPresetOptions {
   ) => Promise<string>;
   /** Receives the complete translated text after each streamed delta. */
   onText?: (text: string) => void;
+  /** Reads a DeepL preset's stored key; defaults to the shared Presets Store. */
+  readDeepLCredential?: (presetId: string) => Promise<string | null>;
+  /** DeepL transport seam for isolated tests; the production adapter is built on demand. */
+  deepLTranslate?: (input: DeepLTranslateInput, options?: DeepLTranslateOptions) => Promise<string>;
+}
+
+export interface DeepLTranslateOptions {
+  signal?: AbortSignal;
+  timeoutMs?: number;
 }
 
 export type TranslateWithPresetResult =
   | {
       ok: true;
       text: string;
-      modelId: string;
-      templateId: string;
+      /** The AI model that produced the text; null for DeepL. */
+      modelId: string | null;
+      /** The prompt template used; null when no prompt was rendered. */
+      templateId: string | null;
     }
   | {
       ok: false;
@@ -72,30 +67,24 @@ export function resolvePresetTemplate(
   preset: Pick<TranslationPreset, "engine">,
   templateId?: string | null,
 ): { template: PromptTemplate; fellBackToDefault: boolean } | null {
-  const templates = preset.engine.templates;
+  const engine = preset.engine;
+  if (engine.kind !== "ai") {
+    return null;
+  }
+  const templates = engine.templates;
   if (templateId) {
     const exact = templates.find((item) => item.id === templateId);
     if (exact) {
       return { template: exact, fellBackToDefault: false };
     }
   }
-  const fallback = templates.find((item) => item.id === preset.engine.defaultTemplateId);
+  const fallback = templates.find((item) => item.id === engine.defaultTemplateId);
   if (!fallback) {
     return null;
   }
   return {
     template: fallback,
     fellBackToDefault: Boolean(templateId && templateId !== fallback.id),
-  };
-}
-
-/** Returns the saved preset languages unchanged; resolution happens before rendering. */
-export function resolveInitialPresetLanguages(
-  preset: Pick<TranslationPreset, "sourceLanguage" | "targetLanguage">,
-): { sourceLanguage: SourceLanguageId; targetLanguage: TargetLanguageId } {
-  return {
-    sourceLanguage: preset.sourceLanguage,
-    targetLanguage: preset.targetLanguage,
   };
 }
 
@@ -144,6 +133,58 @@ function failureResult(error: string): TranslateWithPresetResult {
 }
 
 /**
+ * Sends the caller's resolved pair and stored key to DeepL.
+ * The result arrives whole: no model lookup, prompt rendering, or streaming.
+ */
+async function translateWithDeepL(
+  preset: TranslationPreset,
+  input: TranslateWithPresetInput,
+  options: TranslateWithPresetOptions,
+): Promise<TranslateWithPresetResult> {
+  const readCredential = options.readDeepLCredential ?? presetsStore.readDeepLCredential;
+  let apiKey: string | null;
+  try {
+    apiKey = await readCredential(preset.id);
+  } catch (error) {
+    return failureResult(error instanceof Error ? error.message : t("deepl.error.missingKey"));
+  }
+  if (options.signal?.aborted) {
+    return cancelledResult();
+  }
+  if (!apiKey) {
+    return failureResult(t("deepl.error.missingKey"));
+  }
+
+  const runDeepL = options.deepLTranslate ?? createDeepLClient().translate;
+  try {
+    const text = await runDeepL(
+      {
+        apiKey,
+        text: input.sourceText,
+        sourceLanguage: input.sourceLanguage,
+        targetLanguage: input.targetLanguage,
+      },
+      { signal: options.signal, timeoutMs: options.timeoutMs },
+    );
+    if (options.signal?.aborted) {
+      return cancelledResult();
+    }
+    return { ok: true, text, modelId: null, templateId: null };
+  } catch (error) {
+    if (
+      options.signal?.aborted ||
+      (error instanceof ProviderProtocolError && error.kind === "cancelled")
+    ) {
+      return cancelledResult();
+    }
+    if (error instanceof ProviderProtocolError) {
+      return failureResult(error.message);
+    }
+    return failureResult(t("protocol.error.networkDefault"));
+  }
+}
+
+/**
  * Executes a saved preset's model chain in order with single-pass prompt rendering.
  */
 export async function translateWithPreset(
@@ -162,6 +203,10 @@ export async function translateWithPreset(
     return failureResult(t("quickTranslate.error.blankInput"));
   }
 
+  if (preset.engine.kind === "deepl") {
+    return translateWithDeepL(preset, input, options);
+  }
+
   const effectiveTemplateId = input.templateId ?? preset.engine.defaultTemplateId;
   const template = preset.engine.templates.find((item) => item.id === effectiveTemplateId);
   if (!template) {
@@ -172,31 +217,9 @@ export async function translateWithPreset(
     return failureResult(t("quickTranslate.error.noModels"));
   }
 
-  const initialLanguages = resolveInitialPresetLanguages(preset);
-  const pair = await resolveTranslationLanguages(
-    {
-      sourceText,
-      sourceLanguage: input.sourceLanguage ?? initialLanguages.sourceLanguage,
-      targetLanguage: input.targetLanguage ?? initialLanguages.targetLanguage,
-      settings: options.languageDetectionSettings ?? languageDetectionStore.settings(),
-    },
-    {
-      signal: options.signal,
-      timeoutMs: options.timeoutMs,
-      resolveSavedModelRequest: options.resolveModelRequest,
-      generateText: options.generateText,
-    },
-  );
-  if (!pair.ok) {
-    if (pair.code === "cancelled") {
-      return cancelledResult();
-    }
-    return failureResult(languageResolutionErrorMessage(pair.code));
-  }
-
   const { system, user } = renderPromptTemplate(template, {
-    sourceLanguage: pair.sourceLanguage,
-    targetLanguage: pair.targetLanguage,
+    sourceLanguage: input.sourceLanguage,
+    targetLanguage: input.targetLanguage,
     text: sourceText,
   });
 

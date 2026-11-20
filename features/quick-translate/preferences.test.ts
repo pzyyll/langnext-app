@@ -11,8 +11,6 @@ function makePreset(overrides: Partial<TranslationPreset> = {}): TranslationPres
     id: "preset-1",
     name: "Default Preset",
     enabled: true,
-    sourceLanguage: "en",
-    targetLanguage: "zh",
     createdAt: "2026-11-19T00:00:00.000Z",
     updatedAt: "2026-11-19T00:00:00.000Z",
     engine: {
@@ -112,14 +110,9 @@ test("quick preferences: persists only allowed fields, recovers from corrupt sto
   expect(preReady).toBeNull();
 
   // Once ready, drop missing/disabled presets and clear missing template overrides to default (null).
-  const activePreset = makePreset({
-    id: "preset-1",
-    enabled: true,
-    engine: {
-      ...makePreset().engine,
-      templates: [makePreset().engine.templates[0]!], // tpl-formal removed
-    },
-  });
+  const activePreset = makePreset({ id: "preset-1", enabled: true });
+  if (activePreset.engine.kind !== "ai") throw new Error("expected an AI preset");
+  activePreset.engine.templates = [activePreset.engine.templates[0]!]; // tpl-formal removed
   const disabledPreset = makePreset({ id: "preset-disabled", enabled: false });
   const filtered = resolveQuickTranslateCards(
     [

@@ -121,6 +121,7 @@ function PopupHarnessApp(props: {
       return Storage.getItem(key);
     },
     setItem: (key: string, value: string) => Storage.setItem(key, value),
+    removeItem: (key: string) => Storage.removeItem(key),
   };
 
   const store = createPresetsStore(customStorage, () => []);
@@ -182,7 +183,10 @@ function PopupHarnessApp(props: {
       return firstDeferred.promise;
     }
 
-    return translateWithPreset(input, options);
+    return translateWithPreset(input, {
+      ...options,
+      readDeepLCredential: (presetId) => store.readDeepLCredential(presetId),
+    });
   };
 
   const clipboardStub: Pick<ClipboardModule, "writeText"> | undefined =

@@ -1,36 +1,32 @@
 import { computed, signal, Storage } from "nsh";
 import { t } from "nsh/i18n";
-import { isSourceLanguageId, isTargetLanguageId } from "./languages";
 import { readAvailableModelChoices } from "./model-choices";
 import { isTemperature } from "./temperature";
 import {
   PresetsStoreError,
+  type SavePresetInput,
   type ModelChoiceId,
   type PresetsStorage,
   type PresetsStore,
   type PresetsStoreStatus,
-  type SavePresetInput,
   type TranslationPreset,
 } from "./types";
-import { validatePresetForSave } from "./validation";
+import { validatePresetForSave, type ValidatedPresetPayload } from "./validation";
 
 export const PRESETS_STORAGE_KEY = "presets.v1.items";
+export const DEEPL_CREDENTIAL_KEY_PREFIX = "presets.v1.deeplKeys.";
+
+/** Storage key for one DeepL preset's key, addressed by its non-secret reference. */
+export function deepLCredentialStorageKey(ref: string): string {
+  return `${DEEPL_CREDENTIAL_KEY_PREFIX}${ref}`;
+}
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
-function isValidStoredPreset(value: unknown): value is TranslationPreset {
-  if (!isPlainObject(value)) return false;
-  if (typeof value.id !== "string" || value.id.trim().length === 0) return false;
-  if (typeof value.name !== "string" || value.name.trim().length === 0) return false;
-  if (typeof value.enabled !== "boolean") return false;
-  if (!isSourceLanguageId(value.sourceLanguage)) return false;
-  if (!isTargetLanguageId(value.targetLanguage)) return false;
-  if (typeof value.createdAt !== "string" || typeof value.updatedAt !== "string") return false;
-
-  if (!isPlainObject(value.engine) || value.engine.kind !== "ai") return false;
-  const engine = value.engine;
+function isValidAiEngine(engine: Record<string, unknown>): boolean {
+  if (engine.kind !== "ai") return false;
   if (!Array.isArray(engine.modelIds) || engine.modelIds.length === 0) return false;
   if (engine.modelIds.some((id) => typeof id !== "string" || id.trim().length === 0)) return false;
 
@@ -68,6 +64,23 @@ function isValidStoredPreset(value: unknown): value is TranslationPreset {
   return true;
 }
 
+function isValidDeepLEngine(engine: Record<string, unknown>): boolean {
+  if (engine.kind !== "deepl") return false;
+  return typeof engine.credentialRef === "string" && engine.credentialRef.trim().length > 0;
+}
+
+function isValidStoredPreset(value: unknown): value is TranslationPreset {
+  if (!isPlainObject(value)) return false;
+  if (typeof value.id !== "string" || value.id.trim().length === 0) return false;
+  if (typeof value.name !== "string" || value.name.trim().length === 0) return false;
+  if (typeof value.enabled !== "boolean") return false;
+  if (typeof value.createdAt !== "string" || typeof value.updatedAt !== "string") return false;
+  if (!isPlainObject(value.engine)) return false;
+  if (value.engine.kind === "ai") return isValidAiEngine(value.engine);
+  if (value.engine.kind === "deepl") return isValidDeepLEngine(value.engine);
+  return false;
+}
+
 function parseStoredPresets(raw: string): unknown[] {
   let parsed: unknown;
   try {
@@ -95,16 +108,29 @@ function parseStoredPresets(raw: string): unknown[] {
   return parsed.items;
 }
 
+function writeFailure(error: unknown): PresetsStoreError {
+  const detail = error instanceof Error ? error.message : String(error);
+  return new PresetsStoreError(
+    "storage_write_failed",
+    t("presets.error.storageWriteFailed", { detail }),
+    { cause: error },
+  );
+}
+
 async function writePresets(storage: PresetsStorage, items: unknown[]): Promise<void> {
   try {
     await storage.setItem(PRESETS_STORAGE_KEY, JSON.stringify({ version: 1, items }));
   } catch (error) {
-    const detail = error instanceof Error ? error.message : String(error);
-    throw new PresetsStoreError(
-      "storage_write_failed",
-      t("presets.error.storageWriteFailed", { detail }),
-      { cause: error },
-    );
+    throw writeFailure(error);
+  }
+}
+
+/** Removes an orphaned key without undoing a committed record or leaking the secret. */
+async function removeSecretQuietly(storage: PresetsStorage, ref: string): Promise<void> {
+  try {
+    await storage.removeItem(deepLCredentialStorageKey(ref));
+  } catch {
+    console.warn("Could not remove an unused DeepL API key.");
   }
 }
 
@@ -127,6 +153,63 @@ export function createPresetsStore(
       throw new PresetsStoreError("mutation_in_progress", t("presets.error.mutationInProgress"));
     }
   }
+
+  const replaceItems = (existing: TranslationPreset | null, record: TranslationPreset) => {
+    const items = itemsSignal();
+    return existing ? items.map((item) => (item === existing ? record : item)) : [...items, record];
+  };
+
+  // The new key is written before its record, so an interrupted replacement never breaks a preset.
+  const saveDeepL = async (
+    existing: TranslationPreset | null,
+    meta: Pick<ValidatedPresetPayload, "name" | "enabled">,
+    engine: { kind: "deepl"; apiKey: string | null },
+    now: string,
+  ): Promise<TranslationPreset> => {
+    const previousRef =
+      existing !== null && existing.engine.kind === "deepl" ? existing.engine.credentialRef : null;
+    let nextRef = previousRef;
+    let wroteSecret = false;
+
+    if (engine.apiKey !== null) {
+      nextRef = crypto.randomUUID();
+      try {
+        await storage.setItem(deepLCredentialStorageKey(nextRef), engine.apiKey);
+      } catch (error) {
+        throw writeFailure(error);
+      }
+      wroteSecret = true;
+    }
+    if (nextRef === null) {
+      throw new PresetsStoreError("deepl_key_required", t("presets.error.deeplKeyRequired"), {
+        field: "deeplKey",
+      });
+    }
+
+    const record: TranslationPreset = {
+      id: existing?.id ?? crypto.randomUUID(),
+      name: meta.name,
+      enabled: meta.enabled,
+      createdAt: existing?.createdAt ?? now,
+      updatedAt: now,
+      engine: { kind: "deepl", credentialRef: nextRef },
+    };
+    const next = replaceItems(existing, record);
+
+    try {
+      await writePresets(storage, next);
+    } catch (error) {
+      if (wroteSecret) await removeSecretQuietly(storage, nextRef);
+      throw error;
+    }
+    itemsSignal.set(next);
+
+    // The record now points at the new key; the replaced one is removable.
+    if (wroteSecret && previousRef !== null) {
+      await removeSecretQuietly(storage, previousRef);
+    }
+    return record;
+  };
 
   return {
     load: async () => {
@@ -173,29 +256,29 @@ export function createPresetsStore(
         throw new PresetsStoreError("not_found", t("presets.error.notFound"));
       }
 
-      const availableIds = new Set(readModelChoices().map((choice) => choice.id));
+      // DeepL presets never consult the Models snapshot.
+      const availableIds =
+        input.engine?.kind === "ai"
+          ? new Set(readModelChoices().map((choice) => choice.id))
+          : new Set<string>();
       const validated = validatePresetForSave(input, availableIds, existing);
       const now = new Date().toISOString();
-      const record: TranslationPreset = existing
-        ? {
-            ...existing,
-            ...validated,
-            updatedAt: now,
-          }
-        : {
-            id: crypto.randomUUID(),
-            ...validated,
-            createdAt: now,
-            updatedAt: now,
-          };
-
-      const items = itemsSignal();
-      const next = existing
-        ? items.map((item) => (item === existing ? record : item))
-        : [...items, record];
 
       mutatingSignal.set(true);
       try {
+        if (validated.engine.kind === "deepl") {
+          return await saveDeepL(existing, validated, validated.engine, now);
+        }
+
+        const record: TranslationPreset = {
+          id: existing?.id ?? crypto.randomUUID(),
+          name: validated.name,
+          enabled: validated.enabled,
+          createdAt: existing?.createdAt ?? now,
+          updatedAt: now,
+          engine: validated.engine.engine,
+        };
+        const next = replaceItems(existing, record);
         await writePresets(storage, next);
         itemsSignal.set(next);
         return record;
@@ -216,9 +299,29 @@ export function createPresetsStore(
       try {
         await writePresets(storage, next);
         itemsSignal.set(next);
+        if (existing.engine.kind === "deepl") {
+          await removeSecretQuietly(storage, existing.engine.credentialRef);
+        }
       } finally {
         mutatingSignal.set(false);
       }
+    },
+    readDeepLCredential: async (presetId: string) => {
+      const record = records().find((item) => item.id === presetId);
+      if (!record || record.engine.kind !== "deepl") return null;
+      let raw: string | null;
+      try {
+        raw = await storage.getItem(deepLCredentialStorageKey(record.engine.credentialRef));
+      } catch (error) {
+        const detail = error instanceof Error ? error.message : String(error);
+        throw new PresetsStoreError(
+          "storage_read_failed",
+          t("presets.error.storageReadFailed", { detail }),
+          { cause: error },
+        );
+      }
+      const trimmed = raw?.trim();
+      return trimmed ? trimmed : null;
     },
   };
 }

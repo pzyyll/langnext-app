@@ -1,5 +1,4 @@
 import { t } from "nsh/i18n";
-import { isSourceLanguageId, isTargetLanguageId } from "./languages";
 import { isTemperature, isTemperatureText } from "./temperature";
 import {
   PresetsStoreError,
@@ -105,15 +104,36 @@ function validatePromptBody(
   }
 }
 
+/** A validated engine plus the plaintext key the store persists outside the preset record. */
+export type ValidatedPresetEngine =
+  | { kind: "ai"; engine: AiPresetEngine }
+  | { kind: "deepl"; apiKey: string | null };
+
 export interface ValidatedPresetPayload {
   name: string;
   enabled: boolean;
-  sourceLanguage: SavePresetInput["sourceLanguage"];
-  targetLanguage: SavePresetInput["targetLanguage"];
-  engine: AiPresetEngine;
+  engine: ValidatedPresetEngine;
 }
 
-/** Validates a preset save payload against language, model-availability, numeric, and template rules. */
+/** Reads an optional DeepL key for save: blank keeps the stored key, embedded whitespace is invalid. */
+function parseDeepLApiKey(raw: unknown): string | null {
+  if (raw === null || raw === undefined) return null;
+  if (typeof raw !== "string") {
+    throw new PresetsStoreError("deepl_key_invalid", t("presets.error.deeplKeyInvalid"), {
+      field: "deeplKey",
+    });
+  }
+  const trimmed = raw.trim();
+  if (trimmed.length === 0) return null;
+  if (/\s/.test(trimmed)) {
+    throw new PresetsStoreError("deepl_key_invalid", t("presets.error.deeplKeyInvalid"), {
+      field: "deeplKey",
+    });
+  }
+  return trimmed;
+}
+
+/** Validates a preset save payload against engine, model-availability, numeric, and template rules. */
 export function validatePresetForSave(
   input: SavePresetInput,
   availableModelIds: ReadonlySet<string>,
@@ -126,24 +146,30 @@ export function validatePresetForSave(
     });
   }
 
-  if (!isSourceLanguageId(input.sourceLanguage)) {
-    throw new PresetsStoreError(
-      "source_language_invalid",
-      t("presets.error.sourceLanguageInvalid"),
-      { field: "sourceLanguage" },
-    );
-  }
-
-  if (!isTargetLanguageId(input.targetLanguage)) {
-    throw new PresetsStoreError(
-      "target_language_invalid",
-      t("presets.error.targetLanguageInvalid"),
-      { field: "targetLanguage" },
-    );
-  }
-
-  if (!input.engine || input.engine.kind !== "ai") {
+  if (!input.engine || (input.engine.kind !== "ai" && input.engine.kind !== "deepl")) {
     throw new PresetsStoreError("engine_unsupported", t("presets.error.engineUnsupported"));
+  }
+
+  if (existing !== null && input.engine.kind !== existing.engine.kind) {
+    throw new PresetsStoreError("engine_type_locked", t("presets.error.engineTypeLocked"));
+  }
+
+  if (input.engine.kind === "deepl") {
+    const apiKey = parseDeepLApiKey(input.engine.apiKey);
+    const hasStoredKey =
+      existing !== null &&
+      existing.engine.kind === "deepl" &&
+      existing.engine.credentialRef.length > 0;
+    if (!hasStoredKey && apiKey === null) {
+      throw new PresetsStoreError("deepl_key_required", t("presets.error.deeplKeyRequired"), {
+        field: "deeplKey",
+      });
+    }
+    return {
+      name,
+      enabled: Boolean(input.enabled),
+      engine: { kind: "deepl", apiKey },
+    };
   }
 
   const rawModelIds = input.engine.modelIds;
@@ -153,8 +179,9 @@ export function validatePresetForSave(
     });
   }
 
-  const existingPrimaryId = existing?.engine.modelIds[0] ?? null;
-  const existingFallbackIds = new Set(existing?.engine.modelIds.slice(1) ?? []);
+  const existingAi = existing !== null && existing.engine.kind === "ai" ? existing.engine : null;
+  const existingPrimaryId = existingAi?.modelIds[0] ?? null;
+  const existingFallbackIds = new Set(existingAi?.modelIds.slice(1) ?? []);
 
   const primaryId = rawModelIds[0];
   if (typeof primaryId !== "string" || primaryId.trim().length === 0) {
@@ -272,17 +299,18 @@ export function validatePresetForSave(
   return {
     name,
     enabled: Boolean(input.enabled),
-    sourceLanguage: input.sourceLanguage,
-    targetLanguage: input.targetLanguage,
     engine: {
       kind: "ai",
-      modelIds,
-      temperature,
-      maxOutputTokens,
-      // Turning thinking off is the default; only an explicit false keeps it on.
-      disableReasoning: input.engine.disableReasoning !== false,
-      templates,
-      defaultTemplateId,
+      engine: {
+        kind: "ai",
+        modelIds,
+        temperature,
+        maxOutputTokens,
+        // Turning thinking off is the default; only an explicit false keeps it on.
+        disableReasoning: input.engine.disableReasoning !== false,
+        templates,
+        defaultTemplateId,
+      },
     },
   };
 }

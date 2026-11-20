@@ -20,6 +20,7 @@ import { ConfirmDialog } from "../../components/ui/dialog";
 import { Icon } from "../../components/ui/icon";
 import { toast } from "../../components/ui/toast";
 import { modelsStore } from "../models/store";
+import { AddPresetDialog } from "./add-preset-dialog";
 import {
   cloneDraft,
   createDraftFromPreset,
@@ -29,11 +30,16 @@ import {
   type PresetDraft,
 } from "./draft";
 import { PresetEditor, type FocusableEditorField } from "./editor";
-import { readAvailableModelChoices, summarizePresetModels } from "./model-choices";
+import { readAvailableModelChoices, summarizePreset, summarizePresetModels } from "./model-choices";
 import type { TemplateEditableField } from "./prompt-templates";
 import { dismissSkippedNotice, skippedNoticeDismissed } from "./skipped-notice";
 import { presetsStore } from "./store";
-import { PresetsStoreError, type PresetValidationField, type TranslationPreset } from "./types";
+import {
+  PresetsStoreError,
+  type PresetEngine,
+  type PresetValidationField,
+  type TranslationPreset,
+} from "./types";
 
 interface PresetsPageProps {
   onRegisterLeaveGuard?: (guard: NavigationLeaveGuard) => () => void;
@@ -52,7 +58,7 @@ export function PresetsPage(props: PresetsPageProps) {
 
   const selectedIdSignal = signal<string | null>(initialFirst?.id ?? null);
   const selectedTemplateIdSignal = signal<string | null>(
-    initialFirst?.engine.templates[0]?.id ?? null,
+    initialFirst?.engine.kind === "ai" ? (initialFirst.engine.templates[0]?.id ?? null) : null,
   );
   const draftSignal = signal<PresetDraft | null>(initialDraft);
   const baselineSignal = signal<PresetDraft | null>(initialDraft ? cloneDraft(initialDraft) : null);
@@ -62,10 +68,12 @@ export function PresetsPage(props: PresetsPageProps) {
   const errorFallbackIndexSignal = signal<number | null>(null);
   const errorTemplateIdSignal = signal<string | null>(null);
   const discardOpenSignal = signal<boolean>(false);
+  const addDialogOpenSignal = signal<boolean>(false);
   const deleteTargetSignal = signal<{ id: string; name: string } | null>(null);
   const deleteErrorSignal = signal<string | null>(null);
 
   let nameInputRef: InputRef | null = null;
+  let deeplKeyInputRef: InputRef | null = null;
   let primaryModelRef: ViewRef | null = null;
   const fallbackRefs = new Map<number, ViewRef>();
   let temperatureInputRef: InputRef | null = null;
@@ -73,6 +81,9 @@ export function PresetsPage(props: PresetsPageProps) {
   let deleteButtonRef: ViewRef | null = null;
   let railAddButtonRef: ViewRef | null = null;
   let emptyAddButtonRef: ViewRef | null = null;
+  let addDialogTriggerRef: ViewRef | null = null;
+
+  let restoreAddDialogFocus = false;
   let discardKeepEditingRef: ViewRef | null = null;
   let deleteCancelRef: ViewRef | null = null;
   const presetRowRefs = new Map<string, ViewRef>();
@@ -113,6 +124,9 @@ export function PresetsPage(props: PresetsPageProps) {
         case "maxOutputTokens":
           focusNode(maxTokensInputRef);
           break;
+        case "deeplKey":
+          focusNode(deeplKeyInputRef);
+          break;
         case "template":
           focusNode(templateFieldRefs.get(target.templateId)?.[target.field]);
           break;
@@ -145,7 +159,9 @@ export function PresetsPage(props: PresetsPageProps) {
     const nextDraft = createDraftFromPreset(first);
     batch(() => {
       selectedIdSignal.set(first.id);
-      selectedTemplateIdSignal.set(first.engine.templates[0]?.id ?? null);
+      selectedTemplateIdSignal.set(
+        first.engine.kind === "ai" ? (first.engine.templates[0]?.id ?? null) : null,
+      );
       baselineSignal.set(cloneDraft(nextDraft));
       draftSignal.set(nextDraft);
     });
@@ -202,6 +218,10 @@ export function PresetsPage(props: PresetsPageProps) {
       queueMicrotask(() => maxTokensInputRef?.focus());
       return;
     }
+    if (field === "deeplKey") {
+      queueMicrotask(() => deeplKeyInputRef?.focus());
+      return;
+    }
     if (
       (field === "templateName" || field === "systemTemplate" || field === "userTemplate") &&
       templateId
@@ -232,13 +252,12 @@ export function PresetsPage(props: PresetsPageProps) {
       lastFocusedField = { kind: "name" };
     }
     const currentTpl = selectedTemplateIdSignal();
+    const nextTemplates = record.engine.kind === "ai" ? record.engine.templates : [];
     const keepTpl =
-      samePreset &&
-      currentTpl !== null &&
-      record.engine.templates.some((tpl) => tpl.id === currentTpl);
+      samePreset && currentTpl !== null && nextTemplates.some((tpl) => tpl.id === currentTpl);
     batch(() => {
       selectedIdSignal.set(record.id);
-      selectedTemplateIdSignal.set(keepTpl ? currentTpl : (record.engine.templates[0]?.id ?? null));
+      selectedTemplateIdSignal.set(keepTpl ? currentTpl : (nextTemplates[0]?.id ?? null));
       baselineSignal.set(cloneDraft(nextDraft));
       draftSignal.set(nextDraft);
       autoFocusNameSignal.set(false);
@@ -272,12 +291,12 @@ export function PresetsPage(props: PresetsPageProps) {
     discardOpenSignal.set(true);
   };
 
-  const openFreshDraft = () => {
-    const empty = createEmptyDraft();
+  const openFreshDraft = (engineKind: PresetEngine["kind"]) => {
+    const empty = createEmptyDraft(engineKind);
     lastFocusedField = { kind: "name" };
     batch(() => {
       selectedIdSignal.set(null);
-      selectedTemplateIdSignal.set(empty.templates[0]?.id ?? null);
+      selectedTemplateIdSignal.set(engineKind === "ai" ? (empty.templates[0]?.id ?? null) : null);
       baselineSignal.set(cloneDraft(empty));
       draftSignal.set(empty);
       autoFocusNameSignal.set(true);
@@ -286,9 +305,25 @@ export function PresetsPage(props: PresetsPageProps) {
     queueMicrotask(() => nameInputRef?.focus());
   };
 
-  const startNewDraft = () => {
+  // The picker opens before a draft exists, so the editor behind it stays untouched.
+  const openAddDialog = (trigger: ViewRef | null) => {
     if (!isReady() || presetsStore.mutating()) return;
-    guardNavigation(() => openFreshDraft());
+    addDialogTriggerRef = trigger;
+    restoreAddDialogFocus = true;
+    addDialogOpenSignal.set(true);
+  };
+
+  const closeAddDialog = () => {
+    if (restoreAddDialogFocus) {
+      restoreAddDialogFocus = false;
+      focusNode(addDialogTriggerRef);
+    }
+  };
+
+  const selectPresetType = (engineKind: PresetEngine["kind"]) => {
+    restoreAddDialogFocus = false;
+    addDialogOpenSignal.set(false);
+    guardNavigation(() => openFreshDraft(engineKind));
   };
 
   const selectSavedPreset = (id: string) => {
@@ -455,7 +490,7 @@ export function PresetsPage(props: PresetsPageProps) {
                 disabled={!isReady() || presetsStore.mutating()}
                 tooltip={t("presets.action.add")}
                 accessibilityLabel={t("presets.action.add")}
-                onPress={() => startNewDraft()}
+                onPress={() => openAddDialog(railAddButtonRef)}
               >
                 <Icon name="plus" tone="foreground" class="size-4" />
               </Button>
@@ -513,11 +548,13 @@ export function PresetsPage(props: PresetsPageProps) {
                                   <Badge tone="warning" label={t("presets.editor.unsaved")} />
                                 </View>
                                 <Text class="truncate text-xs text-muted-foreground">
-                                  {summarizePresetModels(
-                                    draftSignal()?.primaryModelId
-                                      ? [draftSignal()!.primaryModelId!]
-                                      : [],
-                                  )}
+                                  {draftSignal()?.engineKind === "deepl"
+                                    ? t("presets.engine.deepl")
+                                    : summarizePresetModels(
+                                        draftSignal()?.primaryModelId
+                                          ? [draftSignal()!.primaryModelId!]
+                                          : [],
+                                      )}
                                 </Text>
                               </View>
                             </View>
@@ -589,7 +626,7 @@ export function PresetsPage(props: PresetsPageProps) {
                                         />
                                       </View>
                                       <Text class="truncate text-xs text-muted-foreground">
-                                        {summarizePresetModels(preset().engine.modelIds)}
+                                        {summarizePreset(preset())}
                                       </Text>
                                     </View>
                                   </Button>
@@ -641,7 +678,7 @@ export function PresetsPage(props: PresetsPageProps) {
                     variant="primary"
                     size="md"
                     accessibilityLabel={t("presets.action.add")}
-                    onPress={() => startNewDraft()}
+                    onPress={() => openAddDialog(emptyAddButtonRef)}
                   >
                     <Icon name="plus" tone="primary-foreground" class="size-4" />
                     <Text class="text-sm font-medium text-primary-foreground">
@@ -677,6 +714,9 @@ export function PresetsPage(props: PresetsPageProps) {
                   onManageModels={() => handleManageModels()}
                   onNameRef={(node) => {
                     nameInputRef = node;
+                  }}
+                  onDeepLKeyRef={(node) => {
+                    deeplKeyInputRef = node;
                   }}
                   onPrimaryModelRef={(node) => {
                     primaryModelRef = node;
@@ -721,6 +761,15 @@ export function PresetsPage(props: PresetsPageProps) {
             </Each>
           </If>
         }
+      />
+
+      <AddPresetDialog
+        open={addDialogOpenSignal()}
+        onOpenChange={(open) => {
+          if (!open) addDialogOpenSignal.set(false);
+        }}
+        onSelect={(engineKind) => selectPresetType(engineKind)}
+        onClose={() => closeAddDialog()}
       />
 
       <ConfirmDialog

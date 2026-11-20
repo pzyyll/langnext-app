@@ -288,9 +288,10 @@ presets:
     mutationInProgress: Another preset update is already in progress.
     notFound: Translation preset no longer exists.
     nameRequired: Preset name is required.
-    sourceLanguageInvalid: Source language is invalid.
-    targetLanguageInvalid: Target language is invalid.
     engineUnsupported: Preset engine type is unsupported.
+    engineTypeLocked: A saved preset keeps its engine type.
+    deeplKeyRequired: Enter a DeepL API key.
+    deeplKeyInvalid: Enter a DeepL API key without spaces.
     primaryModelRequired: Select a primary model.
     modelUnavailable: Selected model is not available.
     modelDuplicate: Models in the primary and fallback chain must be unique.
@@ -334,12 +335,16 @@ presets:
   field:
     name: Name
     namePlaceholder: e.g. Technical EN to ZH
-    sourceLanguage: Source language
-    targetLanguage: Target language
   section:
-    languages: Languages
     models: Models and parameters
     prompts: Prompt templates
+  engine:
+    ai: AI Translation
+    deepl: DeepL API
+  deepl:
+    keyLabel: API key
+    keyPlaceholder: Paste your DeepL API key
+    keyStored: A key is stored. Enter a new key to replace it.
   language:
     autoTarget: Automatic
   languages:
@@ -476,3 +481,14 @@ quickTranslate:
     translationFailed: "Translation failed: %{detail}"
     copyFailed: Could not copy translation to the clipboard.
     savePreferences: Could not save Quick Translate preferences. Your changes apply until you close the app.
+deepl:
+  error:
+    missingKey: Add a DeepL API key in Presets.
+    auth: DeepL rejected the API key.
+    rejected: DeepL rejected the request.
+    tooLarge: This text is too long for DeepL.
+    rateLimited: DeepL is rate limiting requests. Try again shortly.
+    quota: This DeepL API key has used its quota.
+    server: DeepL is unavailable right now.
+    invalidResponse: DeepL returned an unreadable response.
+    unsupportedLanguage: DeepL does not support this language.
