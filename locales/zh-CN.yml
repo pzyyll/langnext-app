@@ -79,8 +79,6 @@ settings:
     preferredTranslation: 母语译为
     preferenceUnset: 未设置
     help: 目标语言设为自动时，非母语译为母语，母语译为上方指定的语言。
-    disclosure: 自动检测源语言会把一段文本样本发送到所选模型，必要时也会发送到所选备用模型。
-    googleDisclosure: 自动检测源语言会把一段文本样本发送给 Google 翻译。
     error:
       storageReadFailed: 无法读取已保存的语言检测设置。
       storageMalformed: 已保存的语言检测设置无法解析。

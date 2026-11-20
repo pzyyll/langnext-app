@@ -218,11 +218,6 @@ export function LanguageDetectionSection(props: LanguageDetectionSectionProps) {
             }}
           />
         </FormField>
-        <If when={draft().mode === "google"}>
-          <Text testID="settings-detection-google-disclosure" class="text-xs text-muted-foreground">
-            {t("settings.languageDetection.googleDisclosure")}
-          </Text>
-        </If>
       </View>
 
       <If when={draft().mode === "ai"}>
@@ -369,10 +364,6 @@ export function LanguageDetectionSection(props: LanguageDetectionSectionProps) {
               </View>
             </If>
           </View>
-
-          <Text testID="settings-detection-disclosure" class="text-xs text-muted-foreground">
-            {t("settings.languageDetection.disclosure")}
-          </Text>
         </View>
       </If>
 

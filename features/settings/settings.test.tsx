@@ -204,7 +204,7 @@ test("language detection: saves and restores the ordered detector chain and lang
   expect(app.texts()).toContain("Off");
   expect(app.shows("id:settings-detection-primary")).toBe(false);
   expect(app.shows("id:settings-detection-add-backup")).toBe(false);
-  expect(app.shows("id:settings-detection-disclosure")).toBe(false);
+  expect(app.texts().some((line) => line.includes("text sample"))).toBe(false);
   expect(app.storage()[LANGUAGE_DETECTION_STORAGE_KEY]).toBeUndefined();
 
   await app.press("id:settings-detection-mode");
@@ -288,12 +288,9 @@ test("language detection: saves Google detection without model configuration", a
   await app.press("id:settings-detection-mode");
   await app.waitFor("role:option[Google]");
   await app.press("role:option[Google]");
-  await app.waitFor("id:settings-detection-google-disclosure");
+  await app.waitUntil(() => app.texts().includes("Google"));
   expect(app.shows("id:settings-detection-primary")).toBe(false);
   expect(app.shows("id:settings-detection-add-backup")).toBe(false);
-  expect(app.texts()).toContain(
-    "Automatic source detection sends a text sample to Google Translate.",
-  );
 
   await app.press("id:settings-detection-native-language");
   await app.waitFor("role:option[Chinese]");
@@ -308,7 +305,8 @@ test("language detection: saves Google detection without model configuration", a
   const reopened = await open(APP_ENTRY, { ...viewport, storage: app.storage() });
   await reopened.press("id:nav-settings");
   await reopened.press("id:settings-nav-language-detection");
-  await reopened.waitFor("id:settings-detection-google-disclosure");
+  await reopened.waitFor("id:settings-detection-mode");
+  await reopened.waitUntil(() => reopened.texts().includes("Google"));
   expect(reopened.shows("id:settings-detection-primary")).toBe(false);
   expect(reopened.requests()).toHaveLength(0);
 });
