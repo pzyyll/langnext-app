@@ -342,7 +342,7 @@ presets:
     ai: AI 翻译
     deepl: DeepL API
   deepl:
-    keyLabel: DeepL API 密钥
+    keyLabel: API 密钥
     keyPlaceholder: 粘贴 DeepL API 密钥
     keyStored: 已保存密钥。输入新密钥可替换。
   language:

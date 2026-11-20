@@ -259,6 +259,7 @@ test("presets ui: DeepL editor", async () => {
   expect(app.shows("id:preset-template-name")).toBe(false);
   expect(app.shows("id:preset-manage-models")).toBe(false);
   expect(app.value("id:preset-deepl-api-key")).toBe("");
+  expect(app.texts()).toContain(t("presets.deepl.keyLabel"));
 
   await app.type("id:preset-name", "DeepL Free");
 
@@ -315,6 +316,7 @@ test("presets ui: picker and DeepL editor fit compact dark zh-CN with reduced mo
   await app.waitFor("id:preset-deepl-api-key");
   expect(app.value("id:preset-name")).toBe("");
   expect(app.enabled("id:preset-save")).toBe(true);
+  expect(app.texts()).toContain("API 密钥");
   expect(app.shows("id:preset-source-language")).toBe(false);
   expect(app.shows("id:preset-primary-model")).toBe(false);
   expect(app.shows("id:preset-template-name")).toBe(false);
