@@ -7,7 +7,9 @@ import {
   type AiClientStreamOptions,
 } from "../../modules/ai/runtime/client";
 import { resolveSavedModelRequest, type SavedModelRequestResolution } from "../models/store";
+import { createDeepLClient, type DeepLTranslateInput } from "../../modules/deepl/client";
 import { getLanguageLabel, type LanguageId } from "../presets/languages";
+import { presetsStore } from "../presets/store";
 import type { PromptTemplate, TranslationPreset } from "../presets/types";
 
 const TEMPLATE_TOKEN_PATTERN = /\{\{\s*(source_language|target_language|text)\s*\}\}/g;
@@ -34,14 +36,28 @@ export interface TranslateWithPresetOptions {
   ) => Promise<string>;
   /** Receives the complete translated text after each streamed delta. */
   onText?: (text: string) => void;
+  /** Reads a DeepL preset's stored key; defaults to the shared Presets Store. */
+  readDeepLCredential?: (presetId: string) => Promise<string | null>;
+  /** DeepL transport seam for isolated tests; the production adapter is built on demand. */
+  deepLTranslate?: (
+    input: DeepLTranslateInput,
+    options?: DeepLTranslateOptions,
+  ) => Promise<string>;
+}
+
+export interface DeepLTranslateOptions {
+  signal?: AbortSignal;
+  timeoutMs?: number;
 }
 
 export type TranslateWithPresetResult =
   | {
       ok: true;
       text: string;
-      modelId: string;
-      templateId: string;
+      /** The AI model that produced the text; null for DeepL. */
+      modelId: string | null;
+      /** The prompt template used; null when no prompt was rendered. */
+      templateId: string | null;
     }
   | {
       ok: false;
@@ -120,6 +136,58 @@ function failureResult(error: string): TranslateWithPresetResult {
 }
 
 /**
+ * Sends the caller's resolved pair and stored key to DeepL.
+ * The result arrives whole: no model lookup, prompt rendering, or streaming.
+ */
+async function translateWithDeepL(
+  preset: TranslationPreset,
+  input: TranslateWithPresetInput,
+  options: TranslateWithPresetOptions,
+): Promise<TranslateWithPresetResult> {
+  const readCredential = options.readDeepLCredential ?? presetsStore.readDeepLCredential;
+  let apiKey: string | null;
+  try {
+    apiKey = await readCredential(preset.id);
+  } catch (error) {
+    return failureResult(error instanceof Error ? error.message : t("deepl.error.missingKey"));
+  }
+  if (options.signal?.aborted) {
+    return cancelledResult();
+  }
+  if (!apiKey) {
+    return failureResult(t("deepl.error.missingKey"));
+  }
+
+  const runDeepL = options.deepLTranslate ?? createDeepLClient().translate;
+  try {
+    const text = await runDeepL(
+      {
+        apiKey,
+        text: input.sourceText,
+        sourceLanguage: input.sourceLanguage,
+        targetLanguage: input.targetLanguage,
+      },
+      { signal: options.signal, timeoutMs: options.timeoutMs },
+    );
+    if (options.signal?.aborted) {
+      return cancelledResult();
+    }
+    return { ok: true, text, modelId: null, templateId: null };
+  } catch (error) {
+    if (
+      options.signal?.aborted ||
+      (error instanceof ProviderProtocolError && error.kind === "cancelled")
+    ) {
+      return cancelledResult();
+    }
+    if (error instanceof ProviderProtocolError) {
+      return failureResult(error.message);
+    }
+    return failureResult(t("protocol.error.networkDefault"));
+  }
+}
+
+/**
  * Executes a saved preset's model chain in order with single-pass prompt rendering.
  */
 export async function translateWithPreset(
@@ -138,8 +206,8 @@ export async function translateWithPreset(
     return failureResult(t("quickTranslate.error.blankInput"));
   }
 
-  if (preset.engine.kind !== "ai") {
-    return failureResult(t("presets.error.engineUnsupported"));
+  if (preset.engine.kind === "deepl") {
+    return translateWithDeepL(preset, input, options);
   }
 
   const effectiveTemplateId = input.templateId ?? preset.engine.defaultTemplateId;

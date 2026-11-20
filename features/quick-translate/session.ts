@@ -48,7 +48,7 @@ export type CardResultState =
   | { status: "idle" }
   | { status: "loading" }
   | { status: "streaming"; text: string }
-  | { status: "success"; text: string; modelId: string }
+  | { status: "success"; text: string; modelId: string | null }
   | { status: "error"; message: string; text?: string };
 
 export interface CardViewItem {

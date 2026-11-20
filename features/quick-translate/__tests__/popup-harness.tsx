@@ -183,7 +183,10 @@ function PopupHarnessApp(props: {
       return firstDeferred.promise;
     }
 
-    return translateWithPreset(input, options);
+    return translateWithPreset(input, {
+      ...options,
+      readDeepLCredential: (presetId) => store.readDeepLCredential(presetId),
+    });
   };
 
   const clipboardStub: Pick<ClipboardModule, "writeText"> | undefined =

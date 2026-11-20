@@ -606,3 +606,182 @@ test("template override: executes non-default template verbatim without cross-te
   expect(capturedSystem).toBe(`Formal ${getLanguageLabel("en")} to ${getLanguageLabel("ja")}`);
   expect(capturedUser).toBe("FormalText:\nKeep {{target_language}} literal");
 });
+
+function makeDeepLPreset(overrides: Partial<TranslationPreset> = {}): TranslationPreset {
+  return {
+    id: "preset-deepl",
+    name: "DeepL Preset",
+    enabled: true,
+    createdAt: "2026-11-19T00:00:00.000Z",
+    updatedAt: "2026-11-19T00:00:00.000Z",
+    engine: { kind: "deepl", credentialRef: "deepl-ref-1" },
+    ...overrides,
+  };
+}
+
+test("DeepL preset: uses the supplied pair and stored key without AI work or streaming", async () => {
+  const calls: Array<{
+    apiKey: string;
+    text: string;
+    sourceLanguage: string;
+    targetLanguage: string;
+  }> = [];
+  let modelLookups = 0;
+  let streams = 0;
+
+  const result = await translateWithPreset(
+    {
+      preset: makeDeepLPreset(),
+      sourceText: "Good morning\nTeam",
+      sourceLanguage: "en",
+      targetLanguage: "zh",
+      // A stale AI template override is ignored for a DeepL preset.
+      templateId: "tpl-old",
+    },
+    {
+      readDeepLCredential: async (presetId) =>
+        presetId === "preset-deepl" ? "deepl-key:fx" : null,
+      deepLTranslate: async (input) => {
+        calls.push({
+          apiKey: input.apiKey,
+          text: input.text,
+          sourceLanguage: input.sourceLanguage,
+          targetLanguage: input.targetLanguage,
+        });
+        return "早上好\n团队";
+      },
+      resolveModelRequest: async () => {
+        modelLookups += 1;
+        throw new Error("must not resolve an AI model");
+      },
+      streamText: async () => {
+        streams += 1;
+        throw new Error("must not stream");
+      },
+      onText: () => {
+        streams += 1;
+      },
+    },
+  );
+
+  expect(result).toEqual({
+    ok: true,
+    text: "早上好\n团队",
+    modelId: null,
+    templateId: null,
+  });
+  expect(calls).toEqual([
+    {
+      apiKey: "deepl-key:fx",
+      text: "Good morning\nTeam",
+      sourceLanguage: "en",
+      targetLanguage: "zh",
+    },
+  ]);
+  expect(modelLookups).toBe(0);
+  expect(streams).toBe(0);
+});
+
+test("DeepL preset: reports a missing or unreadable key without calling DeepL", async () => {
+  let calls = 0;
+  const translate = async () => {
+    calls += 1;
+    return "unexpected";
+  };
+
+  const missing = await translateWithPreset(
+    { preset: makeDeepLPreset(), sourceText: "Hello", sourceLanguage: "en", targetLanguage: "de" },
+    { readDeepLCredential: async () => null, deepLTranslate: translate },
+  );
+  expect(missing).toEqual({
+    ok: false,
+    cancelled: false,
+    error: t("deepl.error.missingKey"),
+  });
+
+  const unreadable = await translateWithPreset(
+    { preset: makeDeepLPreset(), sourceText: "Hello", sourceLanguage: "en", targetLanguage: "de" },
+    {
+      readDeepLCredential: async () => {
+        throw new Error("Preset storage read failed.");
+      },
+      deepLTranslate: translate,
+    },
+  );
+  expect(unreadable).toEqual({
+    ok: false,
+    cancelled: false,
+    error: "Preset storage read failed.",
+  });
+  expect(calls).toBe(0);
+});
+
+test("DeepL preset: keeps localized provider failures and cancellation without retrying", async () => {
+  const rateLimited = await translateWithPreset(
+    { preset: makeDeepLPreset(), sourceText: "Hello", sourceLanguage: "en", targetLanguage: "de" },
+    {
+      readDeepLCredential: async () => "deepl-key",
+      deepLTranslate: async () => {
+        throw new ProviderProtocolError("rate_limited", t("deepl.error.rateLimited"), 429);
+      },
+    },
+  );
+  expect(rateLimited).toEqual({
+    ok: false,
+    cancelled: false,
+    error: t("deepl.error.rateLimited"),
+  });
+
+  const controller = new AbortController();
+  const cancelled = await translateWithPreset(
+    { preset: makeDeepLPreset(), sourceText: "Hello", sourceLanguage: "en", targetLanguage: "de" },
+    {
+      signal: controller.signal,
+      readDeepLCredential: async () => "deepl-key",
+      deepLTranslate: async () => {
+        controller.abort();
+        throw new ProviderProtocolError("cancelled", t("protocol.error.cancelled"));
+      },
+    },
+  );
+  expect(cancelled).toEqual({
+    ok: false,
+    cancelled: true,
+    error: t("protocol.error.cancelled"),
+  });
+});
+
+test("DeepL preset: rejects disabled, blank, and aborted actions before reading the key", async () => {
+  let reads = 0;
+  const readDeepLCredential = async () => {
+    reads += 1;
+    return "deepl-key";
+  };
+  const deepLTranslate = async () => "unexpected";
+
+  const disabled = await translateWithPreset(
+    {
+      preset: makeDeepLPreset({ enabled: false }),
+      sourceText: "Hello",
+      sourceLanguage: "en",
+      targetLanguage: "de",
+    },
+    { readDeepLCredential, deepLTranslate },
+  );
+  expect(disabled).toMatchObject({ ok: false, error: t("quickTranslate.error.presetDisabled") });
+
+  const blank = await translateWithPreset(
+    { preset: makeDeepLPreset(), sourceText: "  ", sourceLanguage: "en", targetLanguage: "de" },
+    { readDeepLCredential, deepLTranslate },
+  );
+  expect(blank).toMatchObject({ ok: false, error: t("quickTranslate.error.blankInput") });
+
+  const controller = new AbortController();
+  controller.abort();
+  const aborted = await translateWithPreset(
+    { preset: makeDeepLPreset(), sourceText: "Hello", sourceLanguage: "en", targetLanguage: "de" },
+    { signal: controller.signal, readDeepLCredential, deepLTranslate },
+  );
+  expect(aborted).toMatchObject({ ok: false, cancelled: true });
+  expect(reads).toBe(0);
+});
