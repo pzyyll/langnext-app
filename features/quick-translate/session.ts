@@ -27,7 +27,6 @@ import {
   type SavedQuickTranslateCard,
 } from "./preferences";
 import {
-  resolveInitialPresetLanguages,
   resolvePresetTemplate,
   translateWithPreset,
   type TranslateWithPresetInput,
@@ -252,6 +251,7 @@ export function createQuickTranslateSession(
 
   let disposed = false;
   let hasSeededInitialCard = false;
+  let hasRestoredLanguages = false;
   let nextCardOrdinal = 1;
   let debounceTimer: ReturnType<typeof setTimeout> | null = null;
   let lastHandledDeliverySeq = 0;
@@ -357,11 +357,19 @@ export function createQuickTranslateSession(
     if (status.kind !== "ready") {
       return;
     }
+    const saved = prefsStore.preferences();
+    // The popup owns its language pair: presets never supply or change it.
+    if (!hasRestoredLanguages) {
+      hasRestoredLanguages = true;
+      batch(() => {
+        sourceLanguage.set(saved.sourceLanguage ?? AUTO_LANGUAGE);
+        targetLanguage.set(saved.targetLanguage ?? AUTO_LANGUAGE);
+      });
+    }
     if (hasSeededInitialCard) {
       return;
     }
     const available = enabledPresets();
-    const saved = prefsStore.preferences();
     const restored = resolveQuickTranslateCards(saved.cards, status, store.records());
     if (restored === null) {
       return;
@@ -372,9 +380,6 @@ export function createQuickTranslateSession(
 
     hasSeededInitialCard = true;
     const firstAvailable = available[0];
-    const seedPreset =
-      (restored[0] ? available.find((item) => item.id === restored[0]!.presetId) : undefined) ??
-      firstAvailable;
 
     let nextCards: CardViewItem[];
     if (restored.length > 0) {
@@ -414,15 +419,7 @@ export function createQuickTranslateSession(
       nextCards = [];
     }
 
-    const fallbackLanguages = seedPreset
-      ? resolveInitialPresetLanguages(seedPreset)
-      : { sourceLanguage: AUTO_LANGUAGE, targetLanguage: AUTO_LANGUAGE };
-
-    batch(() => {
-      sourceLanguage.set(saved.sourceLanguage ?? fallbackLanguages.sourceLanguage);
-      targetLanguage.set(saved.targetLanguage ?? fallbackLanguages.targetLanguage);
-      cards.set(nextCards);
-    });
+    cards.set(nextCards);
   });
 
   effect(() => {

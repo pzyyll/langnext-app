@@ -3,7 +3,7 @@ import { initializeAiModules } from "../../../app/ai-setup";
 import { loadModelsState } from "../../models/store";
 import { PRESETS_STORAGE_KEY, presetsStore } from "../../presets/store";
 import { loadLanguage } from "../../settings/language";
-import { resolveInitialPresetLanguages, translateWithPreset } from "../translate";
+import { translateWithPreset } from "../translate";
 
 initializeAiModules();
 
@@ -24,12 +24,12 @@ function TranslateHarnessApp() {
         return;
       }
 
-      const initial = resolveInitialPresetLanguages(preset);
+      // The caller supplies the resolved pair; presets never store languages.
       const outcome = await translateWithPreset({
         preset,
         sourceText: "Hello {{target_language}}",
-        sourceLanguage: initial.sourceLanguage,
-        targetLanguage: initial.targetLanguage,
+        sourceLanguage: "en",
+        targetLanguage: "zh",
       });
 
       resultJson.set(JSON.stringify(outcome));

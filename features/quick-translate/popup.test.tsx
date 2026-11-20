@@ -4,7 +4,7 @@ import { initializeAiModules } from "../../app/ai-setup";
 import { LANGUAGE_DETECTION_STORAGE_KEY } from "../language-detection/settings";
 import { makeChannel, makeModel, makeSeedStorage } from "../models/__tests__/fixtures";
 import { credentialStorageKey } from "../models/store";
-import { getLanguageLabel } from "../presets/languages";
+import { getLanguageLabel, getTargetLanguageLabel } from "../presets/languages";
 import { PRESETS_STORAGE_KEY } from "../presets/store";
 import type { TranslationPreset } from "../presets/types";
 import { QUICK_TRANSLATE_PREFERENCES_KEY } from "./preferences";
@@ -44,6 +44,9 @@ function makePreset(overrides: Partial<TranslationPreset> = {}): TranslationPres
   };
 }
 
+/** Popup selections live in the popup's own preferences, never in preset records. */
+const DEFAULT_POPUP_LANGUAGES = { sourceLanguage: "en", targetLanguage: "fr" } as const;
+
 function seedWithPresets(
   presets: TranslationPreset[],
   extra: Record<string, string> = {},
@@ -65,6 +68,13 @@ function seedWithPresets(
     models: [model],
     credentials: { "ch-1": "sk-test" },
     extra: {
+      [QUICK_TRANSLATE_PREFERENCES_KEY]: JSON.stringify({
+        version: 1,
+        doubleCopyEnabled: false,
+        autoTranslate: false,
+        ...DEFAULT_POPUP_LANGUAGES,
+        cards: [],
+      }),
       [PRESETS_STORAGE_KEY]: JSON.stringify({ version: 1, items: presets }),
       ...extra,
     },
@@ -903,6 +913,89 @@ test("quick reopen: restores valid cards, fallback template, languages, and auto
   await corrupt.waitUntil(() =>
     Boolean(corrupt.storage()["quickTranslate.preferences.v1"]?.includes('"autoTranslate":true')),
   );
+});
+
+/** The title-bar trigger label proves which pair the popup currently holds. */
+function languageMenuLabel(
+  sourceLanguage: Parameters<typeof getLanguageLabel>[0],
+  targetLanguage: Parameters<typeof getTargetLanguageLabel>[0],
+): string {
+  return t("quickTranslate.languages", {
+    source: getLanguageLabel(sourceLanguage),
+    target: getTargetLanguageLabel(targetLanguage),
+  });
+}
+
+test("quick languages: owns its saved pair regardless of presets or cards", async () => {
+  // A preset's legacy language values never seed the popup selections.
+  const legacyPreset = makePreset({
+    id: "preset-legacy",
+    name: "Legacy Preset",
+    sourceLanguage: "en",
+    targetLanguage: "fr",
+  });
+  const withoutSavedPair = seedWithPresets([legacyPreset]);
+  delete withoutSavedPair[QUICK_TRANSLATE_PREFERENCES_KEY];
+
+  const fresh = await open(POPUP_HARNESS, {
+    ...viewport,
+    storage: withoutSavedPair,
+    network: {
+      "POST https://api.openai.com/v1/chat/completions": {
+        status: 200,
+        body: { choices: [{ message: { content: "Bonjour" } }] },
+      },
+    },
+  });
+
+  await fresh.waitFor("id:quick-translate-card-card-1");
+  expect(fresh.shows(`label:${languageMenuLabel("auto", "auto")}`)).toBe(true);
+  expect(fresh.shows(`label:${languageMenuLabel("en", "fr")}`)).toBe(false);
+
+  // Saved selections come back even when no preset is enabled to supply cards.
+  const savedPairApp = await open(POPUP_HARNESS, {
+    ...viewport,
+    storage: seedWithPresets([makePreset({ id: "preset-off", name: "Off", enabled: false })]),
+  });
+  await savedPairApp.waitFor("id:quick-translate-no-presets");
+  expect(savedPairApp.shows(`label:${languageMenuLabel("en", "fr")}`)).toBe(true);
+
+  // Switching presets keeps the saved pair and the next request uses it.
+  const switchApp = await open(POPUP_HARNESS, {
+    ...viewport,
+    storage: seedWithPresets([
+      makePreset({ id: "preset-alpha", name: "Alpha", sourceLanguage: "ja", targetLanguage: "de" }),
+      makePreset({ id: "preset-beta", name: "Beta", sourceLanguage: "zh", targetLanguage: "en" }),
+    ]),
+    network: {
+      "POST https://api.openai.com/v1/chat/completions": {
+        status: 200,
+        body: { choices: [{ message: { content: "Bonjour" } }] },
+      },
+    },
+  });
+
+  await switchApp.waitFor("id:quick-translate-card-card-1");
+  await switchApp.type("id:quick-translate-source", "Hello");
+  await switchApp.keyboard.press("enter");
+  await switchApp.waitFor("id:quick-translate-copy");
+  const firstBody = JSON.parse(switchApp.requests()[0]!.body!) as {
+    messages: Array<{ role: string; content: string }>;
+  };
+  expect(firstBody.messages[0]!.content).toContain(getLanguageLabel("en"));
+  expect(firstBody.messages[0]!.content).toContain(getLanguageLabel("fr"));
+
+  await switchApp.press("id:quick-translate-preset");
+  await switchApp.waitFor("role:option[Beta]");
+  await switchApp.press("role:option[Beta]");
+  expect(switchApp.shows(`label:${languageMenuLabel("en", "fr")}`)).toBe(true);
+  await switchApp.submit("id:quick-translate-source");
+  await switchApp.waitUntil(() => switchApp.requests().length === 2);
+  const secondBody = JSON.parse(switchApp.requests()[1]!.body!) as {
+    messages: Array<{ role: string; content: string }>;
+  };
+  expect(secondBody.messages[0]!.content).toContain(getLanguageLabel("en"));
+  expect(secondBody.messages[0]!.content).toContain(getLanguageLabel("fr"));
 });
 
 const DETECT_URL = "POST https://detect.example.com/v1/chat/completions";
