@@ -406,12 +406,6 @@ export function QuickTranslatePopup(props: QuickTranslatePopupProps) {
         ref={(node) => props.onAttachSourceInput?.(node)}
       />
 
-      <If when={props.session.cards().length > 0 || props.session.prefsSaveError() !== null}>
-        <View testID="quick-translate-divider" class="px-3">
-          <View class="h-px bg-border" />
-        </View>
-      </If>
-
       <If when={props.session.prefsSaveError() !== null}>
         <Text
           testID="quick-translate-preferences-error"

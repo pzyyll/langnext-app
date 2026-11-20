@@ -4,7 +4,7 @@ import { expect, open, test } from "nsh/test";
 import { makeChannel, makeModel, makeSeedStorage } from "../features/models/__tests__/fixtures";
 import { PRESETS_STORAGE_KEY } from "../features/presets/store";
 import type { TranslationPreset } from "../features/presets/types";
-import { createQuickTranslateController, POPUP_DEFAULT_SIZE } from "./quick-translate-controller";
+import { createQuickTranslateController, POPUP_MIN_SIZE } from "./quick-translate-controller";
 
 const HARNESS_ENTRY = "./__tests__/quick-translate-harness.tsx";
 const HARNESS_SHORTCUT_MODE_KEY = "__test.qt.shortcutMode";
@@ -96,8 +96,7 @@ test("quick window fits cards and translation content within the display work ar
   await app.press("id:harness-tray-quick-translate");
   await app.waitFor(firstCard);
   expect(app.shows("id:quick-translate-header >> id:quick-translate-add-preset")).toBe(true);
-  expect(app.shows("id:quick-translate-divider")).toBe(true);
-  await app.waitUntil(() => height() > 0 && height() < POPUP_DEFAULT_SIZE.height - 1);
+  await app.waitUntil(() => height() > 0 && height() < 220);
   const compactHeight = height();
   const width = state().contentBounds.size.width;
 
@@ -123,6 +122,10 @@ test("quick window fits cards and translation content within the display work ar
   await app.press(`${firstCard} >> id:quick-translate-collapse`);
   await app.waitUntil(() => Math.abs(state().bounds.size.height - workHeight!) < 1);
   expect(state().contentBounds.size.width).toBe(width);
+
+  await app.press(`${firstCard} >> id:quick-translate-remove`);
+  await app.waitUntil(() => height() < compactHeight - 20);
+  expect(height()).toBeGreaterThanOrEqual(POPUP_MIN_SIZE.height);
 });
 
 test("quick window: closes on unpinned blur, survives blur when pinned, resets pin on close, and closes via button/escape/OS close without quitting app", async () => {
