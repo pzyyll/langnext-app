@@ -951,6 +951,30 @@ test("quick ocr: no eligible card replaces the text without a translation", asyn
   );
 });
 
+test("quick ocr: an unsaved service shows recovery and never captures", async () => {
+  const seed: Record<string, string> = { ...ocrSeed() };
+  delete seed[OCR_STORAGE_KEY];
+  const app = await open(HARNESS_ENTRY, {
+    ...viewport,
+    storage: seed,
+    network: ocrRoutes(JSON.stringify({ text: OCR_TEXT })),
+  });
+
+  await app.press("id:harness-tray-quick-translate");
+  await app.waitFor("id:quick-translate-source");
+  await app.type("id:quick-translate-source", "kept draft");
+
+  await app.press(OCR_BUTTON);
+  await app.waitFor("id:quick-translate-ocr-status");
+
+  expect(app.texts()).toContain(
+    "Configure OCR in Settings, or choose another way to get the text.",
+  );
+  expect(app.texts().some((line) => line.includes("ocrCap=0"))).toBe(true);
+  expect(app.value("id:quick-translate-source")).toBe("kept draft");
+  expect(app.requests()).toHaveLength(0);
+});
+
 test("quick ocr: no OCR action outside Windows", async () => {
   const app = await open(HARNESS_ENTRY, {
     ...viewport,
