@@ -4,6 +4,7 @@ import { AppShell } from "./app/shell";
 import { loadSplitRailWidths } from "./components/layout/split-rail";
 import { languageDetectionStore } from "./features/language-detection/settings";
 import { loadModelsState } from "./features/models/store";
+import { ocrSettingsStore } from "./features/ocr/settings";
 import { loadSkippedNoticeDismissal } from "./features/presets/skipped-notice";
 import { presetsStore } from "./features/presets/store";
 import { loadQuickTranslatePreferences } from "./features/quick-translate/preferences";
@@ -22,6 +23,7 @@ async function startApp() {
     presetsStore.load(),
     loadSkippedNoticeDismissal(),
     languageDetectionStore.load(),
+    ocrSettingsStore.load(),
     loadSplitRailWidths(),
   ]);
   mount(AppShell);

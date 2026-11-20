@@ -40,6 +40,7 @@ settings:
     general: General
     appearance: Appearance
     languageDetection: Language Detection
+    ocr: OCR
   theme:
     title: Theme
   appearance:
@@ -64,6 +65,11 @@ settings:
     saveError: Could not save the double-copy setting. Check storage and try again.
   ocr:
     title: OCR
+    service: OCR service
+    ai: AI OCR
+    model: Model
+    privacy: The selected area is sent to this model.
+    windowsOnly: Screen capture works on Windows only.
     error:
       storageReadFailed: Could not read the saved OCR settings.
       storageMalformed: The saved OCR settings are unreadable.
@@ -414,6 +420,7 @@ presets:
     primary: Primary model
     selectPlaceholder: Select a model…
     noEligible: No enabled text-capable models available.
+    noEligibleImageModel: No enabled image-capable models available.
     catalogLoadError: Models could not be loaded. Existing bindings are preserved.
     fallbacks: Fallback models
     addFallback: Add fallback

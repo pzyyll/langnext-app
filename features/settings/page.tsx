@@ -15,20 +15,23 @@ import {
 import { appearance, appearanceError, selectAppearance, type Appearance } from "./appearance";
 import { language, languageError, selectLanguage, type LanguagePreference } from "./language";
 import { LanguageDetectionSection } from "./language-detection-section";
+import { OcrSection } from "./ocr-section";
 import { selectTransparency, transparency, transparencyError } from "./transparency";
 
-export type SettingsSection = "general" | "appearance" | "language-detection";
+export type SettingsSection = "general" | "appearance" | "language-detection" | "ocr";
 
 const SETTINGS_SECTIONS: readonly { id: SettingsSection; labelKey: string }[] = [
   { id: "general", labelKey: "settings.sections.general" },
   { id: "appearance", labelKey: "settings.sections.appearance" },
   { id: "language-detection", labelKey: "settings.sections.languageDetection" },
+  { id: "ocr", labelKey: "settings.sections.ocr" },
 ];
 
 const SECTION_LABEL_KEYS: Record<SettingsSection, string> = {
   general: "settings.sections.general",
   appearance: "settings.sections.appearance",
   "language-detection": "settings.sections.languageDetection",
+  ocr: "settings.sections.ocr",
 };
 
 const selectedSection = signal<SettingsSection>("general");
@@ -237,6 +240,13 @@ export function SettingsPage(props: { platformOs?: string; onNavigateToModels?: 
               <If when={selectedSection() === "language-detection"}>
                 <LanguageDetectionSection
                   compact={compact()}
+                  onManageModels={props.onNavigateToModels}
+                />
+              </If>
+              <If when={selectedSection() === "ocr"}>
+                <OcrSection
+                  compact={compact()}
+                  platformOs={currentOs()}
                   onManageModels={props.onNavigateToModels}
                 />
               </If>

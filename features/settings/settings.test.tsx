@@ -2,6 +2,7 @@ import { expect, open, test } from "nsh/test";
 import { SPLIT_RAIL_STORAGE_KEYS } from "../../components/layout/split-rail";
 import { LANGUAGE_DETECTION_STORAGE_KEY } from "../language-detection/settings";
 import { makeChannel, makeModel, makeSeedStorage } from "../models/__tests__/fixtures";
+import { OCR_STORAGE_KEY } from "../ocr/settings";
 
 const APP_ENTRY = "../../App.tsx";
 const viewport = { width: 1040, height: 720, platform: "windows" as const };
@@ -419,4 +420,213 @@ test("language detection: localizes labels and help text in both languages", asy
   expect(app.texts()).toContain("母语");
   expect(app.texts()).toContain("母语译为");
   expect(app.texts()).toContain("目标语言设为自动时，非母语译为母语，母语译为上方指定的语言。");
+});
+
+test("ocr settings: saves and restores the image-capable model", async () => {
+  const seed = makeSeedStorage({
+    channels: [makeChannel({ id: "ch-openai", displayName: "OpenAI Main", enabled: true })],
+    models: [
+      makeModel({
+        id: "m-vision",
+        providerId: "ch-openai",
+        modelKey: "gpt-4.1",
+        enabled: true,
+        capabilities: { text: true, image: true, pdf: false, video: false },
+      }),
+      makeModel({
+        id: "m-text",
+        providerId: "ch-openai",
+        modelKey: "gpt-4.1-mini",
+        enabled: true,
+        capabilities: { text: true, image: false, pdf: false, video: false },
+      }),
+    ],
+  });
+  const app = await open(APP_ENTRY, { ...viewport, storage: seed });
+
+  await app.press("id:nav-settings");
+  await app.waitFor("id:settings-nav-ocr");
+  await app.press("id:settings-nav-ocr");
+  await app.waitFor("id:settings-ocr-card");
+
+  expect(app.shows("id:settings-ocr-service")).toBe(true);
+  expect(app.texts()).toContain("AI OCR");
+  expect(app.enabled("id:settings-ocr-save")).toBe(false);
+  expect(app.storage()[OCR_STORAGE_KEY]).toBeUndefined();
+
+  await app.press("id:settings-ocr-model");
+  await app.waitFor("role:option[OpenAI Main · gpt-4.1]");
+  expect(app.texts()).not.toContain("OpenAI Main · gpt-4.1-mini");
+  await app.press("role:option[OpenAI Main · gpt-4.1]");
+  await app.waitFor("id:settings-ocr-save");
+  expect(app.enabled("id:settings-ocr-save")).toBe(true);
+
+  await app.press("id:settings-ocr-save");
+  await app.waitUntil(() => Boolean(app.storage()[OCR_STORAGE_KEY]));
+  expect(JSON.parse(app.storage()[OCR_STORAGE_KEY]!)).toEqual({
+    version: 1,
+    kind: "ai",
+    modelId: "m-vision",
+  });
+  expect(app.requests()).toHaveLength(0);
+
+  // Leaving the category and returning keeps the saved choice.
+  await app.press("id:settings-nav-general");
+  await app.waitFor("id:settings-general-card");
+  expect(app.shows("id:settings-ocr-card")).toBe(false);
+  await app.press("id:settings-nav-ocr");
+  await app.waitFor("id:settings-ocr-card");
+  expect(app.texts()).toContain("OpenAI Main · gpt-4.1");
+
+  const reopened = await open(APP_ENTRY, { ...viewport, storage: app.storage() });
+  await reopened.press("id:nav-settings");
+  await reopened.press("id:settings-nav-ocr");
+  await reopened.waitFor("id:settings-ocr-card");
+  expect(reopened.texts()).toContain("OpenAI Main · gpt-4.1");
+  expect(reopened.shows("id:settings-ocr-model-unavailable")).toBe(false);
+  expect(reopened.requests()).toHaveLength(0);
+
+  // The capture notice is Windows-only; the section itself stays readable elsewhere.
+  expect(reopened.shows("id:settings-ocr-windows-only")).toBe(false);
+  const macApp = await open(APP_ENTRY, { ...viewport, platform: "macos", storage: seed });
+  await macApp.press("id:nav-settings");
+  await macApp.press("id:settings-nav-ocr");
+  await macApp.waitFor("id:settings-ocr-windows-only");
+
+  // Both locales carry the service, model, and privacy copy.
+  await reopened.press("id:settings-nav-general");
+  await reopened.press("id:language-zh-CN");
+  await reopened.press("id:settings-nav-ocr");
+  await reopened.waitFor("id:settings-ocr-card");
+  expect(reopened.texts()).toContain("OCR 服务");
+  expect(reopened.texts()).toContain("模型");
+  expect(reopened.texts()).toContain("所选区域会发送给该模型。");
+});
+
+test("ocr settings: keeps an unavailable saved model and offers Models recovery", async () => {
+  const seed = makeSeedStorage({
+    channels: [makeChannel({ id: "ch-openai", displayName: "OpenAI Main", enabled: true })],
+    models: [
+      makeModel({
+        id: "m-vision",
+        providerId: "ch-openai",
+        modelKey: "gpt-4.1",
+        enabled: true,
+        capabilities: { text: true, image: true, pdf: false, video: false },
+      }),
+    ],
+    extra: {
+      [OCR_STORAGE_KEY]: JSON.stringify({ version: 1, kind: "ai", modelId: "m-removed" }),
+    },
+  });
+  const app = await open(APP_ENTRY, { ...viewport, storage: seed });
+
+  await app.press("id:nav-settings");
+  await app.press("id:settings-nav-ocr");
+  await app.waitFor("id:settings-ocr-model-unavailable");
+  expect(app.texts()).toContain("Model no longer exists in Models.");
+  expect(app.shows("id:settings-ocr-manage-models")).toBe(true);
+  expect(app.texts()).not.toContain("Deleted model");
+
+  await app.press("id:settings-ocr-manage-models");
+  await app.waitFor("id:models-page");
+
+  // An image-incapable saved model is reported the same way, without an invalid option.
+  const lostImage = await open(APP_ENTRY, {
+    ...viewport,
+    storage: makeSeedStorage({
+      channels: [makeChannel({ id: "ch-openai", displayName: "OpenAI Main", enabled: true })],
+      models: [
+        makeModel({
+          id: "m-vision",
+          providerId: "ch-openai",
+          modelKey: "gpt-4.1",
+          enabled: true,
+          capabilities: { text: true, image: true, pdf: false, video: false },
+          capabilitiesOverride: { image: false },
+        }),
+      ],
+      extra: {
+        [OCR_STORAGE_KEY]: JSON.stringify({ version: 1, kind: "ai", modelId: "m-vision" }),
+      },
+    }),
+  });
+  await lostImage.press("id:nav-settings");
+  await lostImage.press("id:settings-nav-ocr");
+  await lostImage.waitFor("id:settings-ocr-model-unavailable");
+  expect(lostImage.texts()).toContain("Model does not support images.");
+});
+
+test("ocr settings: an empty catalog or a failed write keeps the active binding", async () => {
+  const seed = makeSeedStorage({
+    channels: [makeChannel({ id: "ch-openai", displayName: "OpenAI Main", enabled: true })],
+    models: [
+      makeModel({
+        id: "m-text",
+        providerId: "ch-openai",
+        modelKey: "gpt-4.1-mini",
+        enabled: true,
+        capabilities: { text: true, image: false, pdf: false, video: false },
+      }),
+    ],
+    extra: {
+      [OCR_STORAGE_KEY]: JSON.stringify({ version: 1, kind: "ai", modelId: "m-vision" }),
+    },
+  });
+  const app = await open(APP_ENTRY, { ...viewport, storage: seed });
+
+  await app.press("id:nav-settings");
+  await app.press("id:settings-nav-ocr");
+  await app.waitFor("id:settings-ocr-models-recovery");
+  expect(app.shows("id:settings-ocr-model")).toBe(true);
+  expect(app.enabled("id:settings-ocr-model")).toBe(false);
+  expect(app.enabled("id:settings-ocr-save")).toBe(false);
+  await app.press("id:settings-ocr-manage-models");
+  await app.waitFor("id:models-page");
+
+  const failingWrite = await open(APP_ENTRY, {
+    ...viewport,
+    storage: makeSeedStorage({
+      channels: [makeChannel({ id: "ch-openai", displayName: "OpenAI Main", enabled: true })],
+      models: [
+        makeModel({
+          id: "m-vision",
+          providerId: "ch-openai",
+          modelKey: "gpt-4.1",
+          enabled: true,
+          capabilities: { text: true, image: true, pdf: false, video: false },
+        }),
+        makeModel({
+          id: "m-vision-2",
+          providerId: "ch-openai",
+          modelKey: "gpt-4o",
+          enabled: true,
+          capabilities: { text: true, image: true, pdf: false, video: false },
+        }),
+      ],
+      extra: {
+        [OCR_STORAGE_KEY]: JSON.stringify({ version: 1, kind: "ai", modelId: "m-vision" }),
+      },
+    }),
+    modules: {
+      nsh: {
+        "Storage.setItem": async (key: string) => {
+          if (key === OCR_STORAGE_KEY) throw new Error("Simulated write failure");
+        },
+      },
+    },
+  });
+  await failingWrite.press("id:nav-settings");
+  await failingWrite.press("id:settings-nav-ocr");
+  await failingWrite.waitFor("id:settings-ocr-card");
+  await failingWrite.press("id:settings-ocr-model");
+  await failingWrite.waitFor("role:option[OpenAI Main · gpt-4o]");
+  await failingWrite.press("role:option[OpenAI Main · gpt-4o]");
+  await failingWrite.press("id:settings-ocr-save");
+  await failingWrite.waitFor("id:settings-ocr-error");
+  expect(failingWrite.texts()).toContain(
+    "Could not save the OCR settings. Check storage and try again.",
+  );
+  expect(failingWrite.texts()).toContain("OpenAI Main · gpt-4o");
+  expect(JSON.parse(failingWrite.storage()[OCR_STORAGE_KEY]!).modelId).toBe("m-vision");
 });

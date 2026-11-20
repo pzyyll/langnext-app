@@ -40,6 +40,7 @@ settings:
     general: 通用
     appearance: 外观
     languageDetection: 语言检测
+    ocr: OCR
   theme:
     title: 主题
   appearance:
@@ -64,6 +65,11 @@ settings:
     saveError: 无法保存双击复制设置，请重试。
   ocr:
     title: OCR
+    service: OCR 服务
+    ai: AI OCR
+    model: 模型
+    privacy: 所选区域会发送给该模型。
+    windowsOnly: 屏幕截取仅支持 Windows。
     error:
       storageReadFailed: 无法读取已保存的 OCR 设置。
       storageMalformed: 已保存的 OCR 设置无法解析。
@@ -414,6 +420,7 @@ presets:
     primary: 主模型
     selectPlaceholder: 选择模型…
     noEligible: 暂无可用的已启用文本模型。
+    noEligibleImageModel: 暂无可用的已启用图片模型。
     catalogLoadError: 无法加载模型列表，已保留现有模型绑定。
     fallbacks: 回退模型
     addFallback: 添加回退
