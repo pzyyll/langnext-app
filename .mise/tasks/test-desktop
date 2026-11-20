@@ -15,6 +15,6 @@ if [[ "$target" == windows ]]; then
 fi
 
 shopt -s globstar nullglob
-for file in *.test.tsx features/**/*.test.tsx; do
+for file in *.test.tsx components/**/*.test.tsx features/**/*.test.tsx; do
   nsh test "$file" --target "$target" "$@"
 done

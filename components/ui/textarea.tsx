@@ -46,7 +46,8 @@ export function Textarea(props: TextareaProps) {
     <View
       class={`${SURFACE_CLASSES[variant()]} focus-within:border-ring focus-within:ring-2 focus-within:ring-ring ${containerPadding()} ${props.disabled || props.readonly ? "opacity-60" : ""} ${motion.navigationFeedback} ${props.class ?? ""}`}
     >
-      <View class={props.footer === undefined ? "w-full" : "px-3 pt-2"}>
+      {/* Keep NSH's measured text overflow out of any enclosing Scroll. */}
+      <View class={`overflow-hidden ${props.footer === undefined ? "w-full" : "px-3 pt-2"}`}>
         <BaseInput
           testID={props.testID}
           ref={(node) => props.ref?.(node)}
