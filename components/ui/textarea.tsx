@@ -2,9 +2,12 @@ import { View, type InputRef, type JSX, type SubmitBehavior } from "nsh";
 import { Input as BaseInput } from "nsh/base";
 import { motion } from "../motion";
 
+export type TextareaVariant = "default" | "card";
+
 interface TextareaProps {
   testID?: string;
   ref?: (node: InputRef) => void;
+  variant?: TextareaVariant;
   value?: string;
   placeholder?: string;
   accessibilityLabel?: string;
@@ -21,13 +24,27 @@ interface TextareaProps {
   onCompositionChange?: (event: { composing: boolean; text: string }) => void;
 }
 
+const SURFACE_CLASSES: Record<TextareaVariant, string> = {
+  default: "rounded-lg border border-input bg-background",
+  card: "rounded-xl border border-border bg-card",
+};
+
+const TEXT_CLASSES: Record<TextareaVariant, string> = {
+  default: "text-foreground",
+  card: "text-card-foreground",
+};
+
 /** Multi-line text field supporting an optional embedded footer toolbar row. */
 export function Textarea(props: TextareaProps) {
+  const variant = () => props.variant ?? "default";
+  const containerPadding = () => {
+    if (props.footer !== undefined) return "";
+    return variant() === "card" ? "p-3" : "px-3 py-2";
+  };
+
   return (
     <View
-      class={`rounded-lg border border-input bg-background focus-within:border-ring focus-within:ring-2 focus-within:ring-ring ${
-        props.footer === undefined ? "px-3 py-2" : ""
-      } ${props.disabled || props.readonly ? "opacity-60" : ""} ${motion.navigationFeedback} ${props.class ?? ""}`}
+      class={`${SURFACE_CLASSES[variant()]} focus-within:border-ring focus-within:ring-2 focus-within:ring-ring ${containerPadding()} ${props.disabled || props.readonly ? "opacity-60" : ""} ${motion.navigationFeedback} ${props.class ?? ""}`}
     >
       <View class={props.footer === undefined ? "w-full" : "px-3 pt-2"}>
         <BaseInput
@@ -45,11 +62,11 @@ export function Textarea(props: TextareaProps) {
           onFocus={() => props.onFocus?.()}
           onSubmit={({ text }) => props.onSubmit?.(text)}
           onCompositionChange={(event) => props.onCompositionChange?.(event)}
-          class={`min-h-24 w-full bg-transparent text-sm text-foreground placeholder:text-muted-foreground ${props.inputClass ?? ""}`}
+          class={`min-h-24 w-full bg-transparent text-sm placeholder:text-muted-foreground ${TEXT_CLASSES[variant()]} ${props.inputClass ?? ""}`}
         />
       </View>
       <If when={props.footer !== undefined}>
-        <View class="-mt-1 pb-1.5 pl-3 pr-1.5">{props.footer}</View>
+        <View class="px-1.5 pb-1.5">{props.footer}</View>
       </If>
     </View>
   );

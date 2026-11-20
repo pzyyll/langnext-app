@@ -161,11 +161,11 @@ function QuickTranslateWindowBody(props: { controller: QuickTranslateController 
         onLayout={({ bounds }) => headerHeight.set(bounds.size.height)}
         desktop={{ windowDrag: true }}
         class="shrink-0 flex-row items-center justify-between gap-2 border-b border-border"
-        // Runtime titleBar() insets clear native caption buttons. The extra 8 pt is the control inset.
+        // Runtime platform titleBar() insets clear native caption buttons; 12 pt matches the p-3 body inset.
         style={{
-          height: Math.max(38, titleBar().height),
-          paddingLeft: titleBar().left + 8,
-          paddingRight: titleBar().right + 8,
+          height: Math.max(40, titleBar().height),
+          paddingLeft: titleBar().left + 12,
+          paddingRight: titleBar().right + 12,
         }}
       >
         <View desktop={{ windowDrag: false }} class="flex-row items-center gap-1">

@@ -134,9 +134,13 @@ function PresetCardRow(props: PresetCardRowProps) {
     return resolution ? resolution.template.id : null;
   };
 
+  const hasBody = () => !props.card().collapsed && props.card().result.status !== "idle";
+
   return (
-    <Card testID={`quick-translate-card-${props.card().id}`} class="gap-2 p-2.5">
-      <View class="flex-row items-center gap-1.5">
+    <Card testID={`quick-translate-card-${props.card().id}`} class="gap-0 p-0">
+      <View
+        class={`flex-row items-center gap-1.5 pl-3 pr-1.5 pt-2.5 ${hasBody() ? "pb-2" : "pb-2.5"}`}
+      >
         <Select
           testID="quick-translate-preset"
           size="sm"
@@ -163,69 +167,73 @@ function PresetCardRow(props: PresetCardRowProps) {
           }
           onChange={(value) => props.onSelectTemplate(props.card().id, value)}
         />
-        <Button
-          testID="quick-translate-collapse"
-          variant="ghost"
-          size="icon-sm"
-          tooltip={
-            props.card().collapsed
-              ? t("quickTranslate.expandCard")
-              : t("quickTranslate.collapseCard")
-          }
-          accessibilityLabel={
-            props.card().collapsed
-              ? t("quickTranslate.expandCard")
-              : t("quickTranslate.collapseCard")
-          }
-          onPress={() => props.onToggleCollapse(props.card().id)}
-        >
-          <Icon
-            name={props.card().collapsed ? "chevron-down" : "chevron-up"}
-            tone="muted-foreground"
-            class="size-3.5"
-          />
-        </Button>
-        <Button
-          testID="quick-translate-remove"
-          variant="ghost"
-          size="icon-sm"
-          tooltip={t("quickTranslate.removeCard")}
-          accessibilityLabel={t("quickTranslate.removeCard")}
-          onPress={() => props.onRemove(props.card().id)}
-        >
-          <Icon name="close" tone="muted-foreground" class="size-3.5" />
-        </Button>
+        <View class="flex-row items-center gap-1">
+          <Button
+            testID="quick-translate-collapse"
+            variant="ghost"
+            size="icon-sm"
+            tooltip={
+              props.card().collapsed
+                ? t("quickTranslate.expandCard")
+                : t("quickTranslate.collapseCard")
+            }
+            accessibilityLabel={
+              props.card().collapsed
+                ? t("quickTranslate.expandCard")
+                : t("quickTranslate.collapseCard")
+            }
+            onPress={() => props.onToggleCollapse(props.card().id)}
+          >
+            <Icon
+              name={props.card().collapsed ? "chevron-down" : "chevron-up"}
+              tone="muted-foreground"
+              class="size-3.5"
+            />
+          </Button>
+          <Button
+            testID="quick-translate-remove"
+            variant="ghost"
+            size="icon-sm"
+            tooltip={t("quickTranslate.removeCard")}
+            accessibilityLabel={t("quickTranslate.removeCard")}
+            onPress={() => props.onRemove(props.card().id)}
+          >
+            <Icon name="close" tone="muted-foreground" class="size-3.5" />
+          </Button>
+        </View>
       </View>
 
-      <If when={!props.card().collapsed && props.card().result.status !== "idle"}>
-        <View class="gap-2 pt-0.5">
-          <If when={props.card().result.status === "loading"}>
+      <If when={hasBody()}>
+        <If when={props.card().result.status === "loading"}>
+          <View class="px-3 pb-3">
             <Text testID="quick-translate-status" class="text-xs text-muted-foreground">
               {t("quickTranslate.translating")}
             </Text>
-          </If>
+          </View>
+        </If>
 
-          <If when={props.card().result.status === "streaming"}>
-            <View class="gap-2">
-              <Text testID="quick-translate-status" class="text-xs text-muted-foreground">
-                {t("quickTranslate.translating")}
+        <If when={props.card().result.status === "streaming"}>
+          <View class="gap-1.5 px-3 pb-3">
+            <Text testID="quick-translate-status" class="text-xs text-muted-foreground">
+              {t("quickTranslate.translating")}
+            </Text>
+            <View selectable>
+              <Text
+                testID="quick-translate-result-text"
+                class="text-sm leading-relaxed text-card-foreground"
+              >
+                {(() => {
+                  const res = props.card().result;
+                  return res.status === "streaming" ? res.text : "";
+                })()}
               </Text>
-              <View selectable>
-                <Text
-                  testID="quick-translate-result-text"
-                  class="text-sm leading-relaxed text-foreground"
-                >
-                  {(() => {
-                    const res = props.card().result;
-                    return res.status === "streaming" ? res.text : "";
-                  })()}
-                </Text>
-              </View>
             </View>
-          </If>
+          </View>
+        </If>
 
-          <If when={props.card().result.status === "error"}>
-            <View class="gap-2">
+        <If when={props.card().result.status === "error"}>
+          <View>
+            <View class="gap-1.5 px-3">
               <If
                 when={(() => {
                   const res = props.card().result;
@@ -235,7 +243,7 @@ function PresetCardRow(props: PresetCardRowProps) {
                 <View selectable>
                   <Text
                     testID="quick-translate-partial-text"
-                    class="text-sm leading-relaxed text-foreground"
+                    class="text-sm leading-relaxed text-card-foreground"
                   >
                     {(() => {
                       const res = props.card().result;
@@ -250,53 +258,55 @@ function PresetCardRow(props: PresetCardRowProps) {
                   return res.status === "error" ? res.message : "";
                 })()}
               </Text>
-              <View class="flex-row justify-end">
-                <RetryIconButton
-                  testID="quick-translate-retry"
-                  onPress={() => props.onRetry(props.card().id)}
-                />
-              </View>
             </View>
-          </If>
+            <View class="flex-row items-center justify-end px-1.5 pb-1.5 pt-0.5">
+              <RetryIconButton
+                testID="quick-translate-retry"
+                onPress={() => props.onRetry(props.card().id)}
+              />
+            </View>
+          </View>
+        </If>
 
-          <If when={props.card().result.status === "success"}>
-            <View class="gap-2">
-              <View selectable>
-                <Text
-                  testID="quick-translate-result-text"
-                  class="text-sm leading-relaxed text-foreground"
-                >
-                  {(() => {
-                    const res = props.card().result;
-                    return res.status === "success" ? res.text : "";
-                  })()}
-                </Text>
-              </View>
-              <View class="flex-row items-center justify-between gap-2">
-                <Button
-                  testID="quick-translate-copy"
-                  size="icon-sm"
-                  variant="ghost"
-                  tooltip={
-                    props.card().copied ? t("quickTranslate.copied") : t("quickTranslate.copy")
-                  }
-                  accessibilityLabel={
-                    props.card().copied ? t("quickTranslate.copied") : t("quickTranslate.copy")
-                  }
-                  onPress={() => props.onCopy(props.card().id)}
-                >
-                  <Icon
-                    name={props.card().copied ? "check" : "copy"}
-                    tone={props.card().copied ? "success" : "muted-foreground"}
-                    class="size-3.5"
-                  />
-                </Button>
-                <RetryIconButton
-                  testID="quick-translate-retry"
-                  onPress={() => props.onRetry(props.card().id)}
+        <If when={props.card().result.status === "success"}>
+          <View>
+            <View selectable class="px-3">
+              <Text
+                testID="quick-translate-result-text"
+                class="text-sm leading-relaxed text-card-foreground"
+              >
+                {(() => {
+                  const res = props.card().result;
+                  return res.status === "success" ? res.text : "";
+                })()}
+              </Text>
+            </View>
+            <View class="flex-row items-center justify-between gap-2 px-1.5 pb-1.5 pt-0.5">
+              <Button
+                testID="quick-translate-copy"
+                size="icon-sm"
+                variant="ghost"
+                tooltip={
+                  props.card().copied ? t("quickTranslate.copied") : t("quickTranslate.copy")
+                }
+                accessibilityLabel={
+                  props.card().copied ? t("quickTranslate.copied") : t("quickTranslate.copy")
+                }
+                onPress={() => props.onCopy(props.card().id)}
+              >
+                <Icon
+                  name={props.card().copied ? "check" : "copy"}
+                  tone={props.card().copied ? "success" : "muted-foreground"}
+                  class="size-3.5"
                 />
-              </View>
-              <If when={props.card().copyError !== null}>
+              </Button>
+              <RetryIconButton
+                testID="quick-translate-retry"
+                onPress={() => props.onRetry(props.card().id)}
+              />
+            </View>
+            <If when={props.card().copyError !== null}>
+              <View class="px-3 pb-3">
                 <Text
                   testID="quick-translate-copy-error"
                   role="alert"
@@ -304,10 +314,10 @@ function PresetCardRow(props: PresetCardRowProps) {
                 >
                   {props.card().copyError ?? ""}
                 </Text>
-              </If>
-            </View>
-          </If>
-        </View>
+              </View>
+            </If>
+          </View>
+        </If>
       </If>
     </Card>
   );
@@ -319,7 +329,7 @@ export function QuickTranslatePopup(props: QuickTranslatePopupProps) {
   const detectionLabel = () => resolveSourceDetectionLabel(props.session.sourceDetection());
 
   return (
-    <View class="gap-2 p-2.5">
+    <View class="gap-2 p-3">
       <If
         when={
           props.session.presetsStatus().kind === "idle" ||
@@ -334,7 +344,7 @@ export function QuickTranslatePopup(props: QuickTranslatePopupProps) {
       <If when={props.session.presetsStatus().kind === "error"}>
         <Card
           testID="quick-translate-presets-error"
-          class="flex-row items-center justify-between gap-2 border-destructive/40 p-3"
+          class="flex-row items-center justify-between gap-2 border-destructive/40 py-2 pl-3 pr-1.5"
         >
           <Text role="alert" class="min-w-0 flex-1 text-xs text-destructive">
             {(() => {
@@ -362,6 +372,7 @@ export function QuickTranslatePopup(props: QuickTranslatePopupProps) {
 
       <Textarea
         testID="quick-translate-source"
+        variant="card"
         autoFocus
         submitBehavior="submit"
         value={props.session.sourceText()}
@@ -371,9 +382,9 @@ export function QuickTranslatePopup(props: QuickTranslatePopupProps) {
         footer={
           <View
             testID="quick-translate-source-toolbar"
-            class="min-h-5 flex-row items-center justify-between gap-2"
+            class="min-h-7 flex-row items-center justify-between gap-2"
           >
-            <View class="min-w-0 flex-1">
+            <View class="min-w-0 flex-1 pl-1.5">
               <If when={detectionLabel() !== null}>
                 <Text
                   testID="quick-translate-source-detection"
@@ -386,7 +397,7 @@ export function QuickTranslatePopup(props: QuickTranslatePopupProps) {
             <If when={props.session.sourceText().length > 0}>
               <Button
                 testID="quick-translate-clear"
-                size="icon-xs"
+                size="icon-sm"
                 variant="ghost"
                 tooltip={t("common.clearInput")}
                 accessibilityLabel={t("common.clearInput")}
