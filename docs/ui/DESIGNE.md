@@ -591,6 +591,18 @@ Quick Translate runs inside a separate floating NSH window (`id="quick-translate
 - **Shared language resolution**: Each translation action captures one immutable text, selection, and Language Detection settings snapshot. When either selection is automatic, that action creates one lazy resolution run, and every eligible expanded card joins it after its own guards, so the detector is asked once per action; a standalone retry or expand starts a run of its own. The run has its own `AbortController` and aborts when its last consumer leaves (collapse, Clear, language or text change, or window close), and no successful or failed resolution is retained across actions. Cards keep the user's selections: detected or calculated languages reach only the outgoing prompt. Blocked detection shows the same localized recovery text on every affected card and sends no translation request. While `sourceLanguage` is `auto`, the `<Textarea>` footer surfaces live run status (`Detecting language…` / `正在检测语言…` while in flight, `Detected: <language>` / `自动检测：<language>` upon resolution) guarded by a monotonic run sequence so edits, clears, language changes, aborts, or failures clear the footer back to idle immediately.
 - **Streamed results**: A card shows the `text-muted-foreground` translating status, then replaces it with the growing translation as chunks arrive. The partial text is selectable and shows no per-token animation; Copy and Retry appear only after the stream ends. A stream that stops early keeps the partial text above the `text-destructive` error and its Retry action, and no partial text is ever copyable. Language detection stays a buffered, single-response request so a card never waits on a streamed detector.
 
+### Temporary Windows line-height workaround
+
+[NSH #2655](https://github.com/longbridge/nsh/issues/2655) makes the gap below the last line grow with every line in a
+Windows multiline input. On NSH 0.6.1, [the Quick Translate source input](../../features/quick-translate/popup.tsx)
+uses `leading-[0]` on Windows so the layout uses the font's natural line height. Font size, scroll ownership, and
+motion stay the same. Other textareas and platforms keep their current styles.
+
+**Remove after the upstream fix:** When upgrading NSH, test with the override disabled. Run the issue's minimal
+reproduction, then check Quick Translate with explicit line breaks and wrapped text on Windows at 150% scale. If
+the gap no longer grows and the last line stays visible, restore `inputClass="min-h-10"` on all platforms and remove
+the TODO and this note. Keep the shared textarea's `overflow-hidden`; it fixes a separate scroll-range bug.
+
 ### Motion inventory
 
 | Change | Tool and tokens | Reduced motion |

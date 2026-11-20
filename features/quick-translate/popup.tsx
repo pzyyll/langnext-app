@@ -1,4 +1,4 @@
-import { signal, Text, View, type Accessor, type Align, type InputRef } from "nsh";
+import { platform, signal, Text, View, type Accessor, type Align, type InputRef } from "nsh";
 import { t } from "nsh/i18n";
 import { Button } from "../../components/ui/button";
 import { Card } from "../../components/ui/card";
@@ -327,6 +327,10 @@ function PresetCardRow(props: PresetCardRowProps) {
 export function QuickTranslatePopup(props: QuickTranslatePopupProps) {
   const isComposing = signal(false);
   const detectionLabel = () => resolveSourceDetectionLabel(props.session.sourceDetection());
+  // TODO(https://github.com/longbridge/nsh/issues/2655): Restore "min-h-10" on all platforms
+  // once the pinned NSH release aligns Windows input measurement with drawing.
+  // Zero uses the font's natural line height in NSH 0.6.1.
+  const sourceInputClass = platform.os === "windows" ? "min-h-10 leading-[0]" : "min-h-10";
 
   return (
     <View class="gap-2 p-3">
@@ -378,7 +382,7 @@ export function QuickTranslatePopup(props: QuickTranslatePopupProps) {
         value={props.session.sourceText()}
         placeholder={t("quickTranslate.sourcePlaceholder")}
         accessibilityLabel={t("quickTranslate.sourceLabel")}
-        inputClass="min-h-10"
+        inputClass={sourceInputClass}
         footer={
           <View
             testID="quick-translate-source-toolbar"
