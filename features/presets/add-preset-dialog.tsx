@@ -32,6 +32,7 @@ export function AddPresetDialog(props: AddPresetDialogProps) {
       size="md"
       footer={
         <Button
+          testID="preset-type-cancel"
           variant="outline"
           size="sm"
           label={t("common.cancel")}

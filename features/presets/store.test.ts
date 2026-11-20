@@ -599,7 +599,9 @@ test("presets store: validates DeepL keys and locked engine types", async () => 
     key: "deepl_key_required",
     field: "deeplKey",
   });
-  await expect(store.save(makeDeepLInput({ engine: { kind: "deepl", apiKey: "   " } }))).rejects.toMatchObject({
+  await expect(
+    store.save(makeDeepLInput({ engine: { kind: "deepl", apiKey: "   " } })),
+  ).rejects.toMatchObject({
     key: "deepl_key_required",
     field: "deeplKey",
   });
@@ -630,7 +632,9 @@ test("presets store: keeps, replaces, and removes DeepL keys with the record", a
   const store = createPresetsStore(mem.storage, () => []);
   await store.load();
 
-  const saved = await store.save(makeDeepLInput({ engine: { kind: "deepl", apiKey: "first-key:fx" } }));
+  const saved = await store.save(
+    makeDeepLInput({ engine: { kind: "deepl", apiKey: "first-key:fx" } }),
+  );
   const firstRef = deeplRef(saved);
   const firstKey = deepLCredentialStorageKey(firstRef);
 
@@ -651,9 +655,13 @@ test("presets store: keeps, replaces, and removes DeepL keys with the record", a
   expect(mem.backing[firstKey]).toBeUndefined();
 
   // A failed key write leaves the existing record and key untouched.
-  mem.setSetError(new Error("ERR_NSH_QUOTA_EXCEEDED"), (key) => key.startsWith(DEEPL_CREDENTIAL_KEY_PREFIX));
+  mem.setSetError(new Error("ERR_NSH_QUOTA_EXCEEDED"), (key) =>
+    key.startsWith(DEEPL_CREDENTIAL_KEY_PREFIX),
+  );
   await expect(
-    store.save(makeDeepLInput({ id: replaced.id, engine: { kind: "deepl", apiKey: "third-key:fx" } })),
+    store.save(
+      makeDeepLInput({ id: replaced.id, engine: { kind: "deepl", apiKey: "third-key:fx" } }),
+    ),
   ).rejects.toMatchObject({ key: "storage_write_failed" });
   expect(store.records()).toEqual([replaced]);
   expect(await store.readDeepLCredential(replaced.id)).toBe("second-key:fx");
@@ -661,7 +669,9 @@ test("presets store: keeps, replaces, and removes DeepL keys with the record", a
   // A failed record write removes the unused new key and keeps the old record usable.
   mem.setSetError(new Error("ERR_DISK_LOCKED"), (key) => key === PRESETS_STORAGE_KEY);
   await expect(
-    store.save(makeDeepLInput({ id: replaced.id, engine: { kind: "deepl", apiKey: "fourth-key:fx" } })),
+    store.save(
+      makeDeepLInput({ id: replaced.id, engine: { kind: "deepl", apiKey: "fourth-key:fx" } }),
+    ),
   ).rejects.toMatchObject({ key: "storage_write_failed" });
   expect(store.records()).toEqual([replaced]);
   expect(await store.readDeepLCredential(replaced.id)).toBe("second-key:fx");

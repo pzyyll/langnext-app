@@ -59,8 +59,7 @@ export function createDraftFromPreset(preset: TranslationPreset): PresetDraft {
     primaryModelId: ai?.modelIds[0] ?? null,
     fallbackModelIds: ai ? ai.modelIds.slice(1) : [],
     temperatureText: ai ? formatTemperature(ai.temperature) : "",
-    maxOutputTokensText:
-      ai && ai.maxOutputTokens !== null ? String(ai.maxOutputTokens) : "",
+    maxOutputTokensText: ai && ai.maxOutputTokens !== null ? String(ai.maxOutputTokens) : "",
     disableReasoning: ai ? ai.disableReasoning : true,
     templates: ai ? ai.templates.map((tpl) => ({ ...tpl })) : [],
     defaultTemplateId: ai?.defaultTemplateId ?? "",

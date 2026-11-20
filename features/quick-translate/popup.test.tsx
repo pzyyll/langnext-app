@@ -3,11 +3,7 @@ import { expect, open, test } from "nsh/test";
 import { initializeAiModules } from "../../app/ai-setup";
 import { LANGUAGE_DETECTION_STORAGE_KEY } from "../language-detection/settings";
 import { makeChannel, makeModel, makeSeedStorage } from "../models/__tests__/fixtures";
-import {
-  credentialStorageKey,
-  MODELS_STORAGE_KEY,
-  PROVIDERS_STORAGE_KEY,
-} from "../models/store";
+import { credentialStorageKey, MODELS_STORAGE_KEY, PROVIDERS_STORAGE_KEY } from "../models/store";
 import { getLanguageLabel, getTargetLanguageLabel } from "../presets/languages";
 import { deepLCredentialStorageKey, PRESETS_STORAGE_KEY } from "../presets/store";
 import type { TranslationPreset } from "../presets/types";
@@ -1298,7 +1294,6 @@ test("language resolution: retrying after a failure starts a new detection run",
   );
 });
 
-
 const DEEPL_URL = "POST https://api-free.deepl.com/v2/translate";
 const DEEPL_KEY_REF = "deepl-ref-1";
 
@@ -1450,8 +1445,7 @@ test("DeepL card: one detection run serves an AI card and a DeepL card the same 
   await app.type("id:quick-translate-source", "Bonjour");
   await app.keyboard.press("enter");
   await app.waitUntil(
-    () =>
-      requestsTo(app, DEEPL_URL).length === 1 && requestsTo(app, TRANSLATE_URL).length === 1,
+    () => requestsTo(app, DEEPL_URL).length === 1 && requestsTo(app, TRANSLATE_URL).length === 1,
   );
   await app.waitFor("id:quick-translate-card-card-2 >> id:quick-translate-result-text");
 
@@ -1484,8 +1478,7 @@ test("DeepL card: an automatic target resolves once for both engines", async () 
   await app.type("id:quick-translate-source", "Bonjour");
   await app.keyboard.press("enter");
   await app.waitUntil(
-    () =>
-      requestsTo(app, DEEPL_URL).length === 1 && requestsTo(app, TRANSLATE_URL).length === 1,
+    () => requestsTo(app, DEEPL_URL).length === 1 && requestsTo(app, TRANSLATE_URL).length === 1,
   );
 
   expect(requestsTo(app, DETECT_URL)).toHaveLength(1);
@@ -1518,8 +1511,7 @@ test("DeepL card: explicit selections need no detector for either engine", async
   await app.type("id:quick-translate-source", "Good morning");
   await app.keyboard.press("enter");
   await app.waitUntil(
-    () =>
-      requestsTo(app, DEEPL_URL).length === 1 && requestsTo(app, TRANSLATE_URL).length === 1,
+    () => requestsTo(app, DEEPL_URL).length === 1 && requestsTo(app, TRANSLATE_URL).length === 1,
   );
 
   expect(requestsTo(app, DETECT_URL)).toHaveLength(0);

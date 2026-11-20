@@ -30,11 +30,7 @@ import {
   type PresetDraft,
 } from "./draft";
 import { PresetEditor, type FocusableEditorField } from "./editor";
-import {
-  readAvailableModelChoices,
-  summarizePreset,
-  summarizePresetModels,
-} from "./model-choices";
+import { readAvailableModelChoices, summarizePreset, summarizePresetModels } from "./model-choices";
 import type { TemplateEditableField } from "./prompt-templates";
 import { dismissSkippedNotice, skippedNoticeDismissed } from "./skipped-notice";
 import { presetsStore } from "./store";
@@ -300,9 +296,7 @@ export function PresetsPage(props: PresetsPageProps) {
     lastFocusedField = { kind: "name" };
     batch(() => {
       selectedIdSignal.set(null);
-      selectedTemplateIdSignal.set(
-        engineKind === "ai" ? (empty.templates[0]?.id ?? null) : null,
-      );
+      selectedTemplateIdSignal.set(engineKind === "ai" ? (empty.templates[0]?.id ?? null) : null);
       baselineSignal.set(cloneDraft(empty));
       draftSignal.set(empty);
       autoFocusNameSignal.set(true);

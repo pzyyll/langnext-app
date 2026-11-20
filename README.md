@@ -67,7 +67,7 @@ Quick Translate runs in a compact floating panel (`420 × 360` points, available
 - **Activation paths**: Open or focus via the system tray menu (**Quick Translate**) on any desktop, via the fixed global shortcut `Ctrl+Shift+T` on Windows, or via the optional Windows-only **Double-copy Quick Translate (`Ctrl+C × 2`)** toggle in **Settings → General**.
 - **Shortcut conflict recovery**: If `Ctrl+Shift+T` is already claimed by another application at launch, startup continues cleanly, displays a localized warning toast, and leaves **Quick Translate** accessible from the tray menu.
 - **Windows support & opt-in defaults**: Global shortcut registration, mixed-DPI physical cursor anchor placement, and Raw Input (`RIDEV_INPUTSINK` keyboard-only) double-copy monitoring target Windows. Both double-copy activation and popup **Auto-translate** (`500 ms` debounce) default to **off**. Copied text translates as soon as the window shows it, whatever **Auto-translate** says; source and target languages are configured from the title-bar language menu, and typing, paste, and language changes translate on **Enter** (`Shift+Enter` for newlines) or that toggle.
-- **Data destinations & privacy**: Quick Translate preferences persist exclusively in NSH `Storage` under `quickTranslate.preferences.v1` (`doubleCopyEnabled`, `autoTranslate`, `sourceLanguage`, `targetLanguage`, and ordered `{ id, presetId, templateId, collapsed }` cards). Pin state, source drafts, translated outputs, error text, keystroke history, and API keys are never persisted or logged. Provider secrets stay in OS secure credential storage, and text is sent only to enabled models configured on active preset cards.
+- **Data destinations & privacy**: Quick Translate preferences persist exclusively in NSH `Storage` under `quickTranslate.preferences.v1` (`doubleCopyEnabled`, `autoTranslate`, `sourceLanguage`, `targetLanguage`, and ordered `{ id, presetId, templateId, collapsed }` cards). Pin state, source drafts, translated outputs, error text, keystroke history, and API keys are never persisted there or logged. Provider keys stay in NSH `Storage`, and a DeepL preset's key is stored separately from its preset record under a non-secret reference. Text is sent only to the enabled preset cards the user added: their AI models or DeepL.
 
 See [system architecture](docs/specs/system-architecture.md) and
 [design system](docs/ui/DESIGNE.md) for the selected scope.
@@ -90,10 +90,10 @@ falls back to the other; there is no local detector.
   language. Text in your native language is translated into the preferred
   translation language. A concrete source and target pair never starts a
   detection request.
-- **Upstream choices**: Presets and the Quick Translate language menu offer
-  **Automatic** for both selections. With detection off, an **Automatic** source
-  needs a manual source selection, and an **Automatic** target needs a native
-  language.
+- **Upstream choices**: Presets store engine configuration only; the Quick
+  Translate language menu offers **Automatic** for both selections. With
+  detection off, an **Automatic** source needs a manual source selection, and an
+  **Automatic** target needs a native language.
 - **Fallback behavior**: A blocked or failed detection never guesses. The card
   shows a localized message that asks you to choose the source manually.
   Cancellation stays silent.

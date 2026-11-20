@@ -39,10 +39,7 @@ export interface TranslateWithPresetOptions {
   /** Reads a DeepL preset's stored key; defaults to the shared Presets Store. */
   readDeepLCredential?: (presetId: string) => Promise<string | null>;
   /** DeepL transport seam for isolated tests; the production adapter is built on demand. */
-  deepLTranslate?: (
-    input: DeepLTranslateInput,
-    options?: DeepLTranslateOptions,
-  ) => Promise<string>;
+  deepLTranslate?: (input: DeepLTranslateInput, options?: DeepLTranslateOptions) => Promise<string>;
 }
 
 export interface DeepLTranslateOptions {

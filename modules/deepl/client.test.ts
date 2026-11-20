@@ -130,7 +130,9 @@ test("deepl client: maps 403/413/429/456/5xx to localized errors without retryin
   ];
 
   for (const entry of cases) {
-    const harness = createHarness(() => jsonResponse({ message: "raw provider detail" }, entry.status));
+    const harness = createHarness(() =>
+      jsonResponse({ message: "raw provider detail" }, entry.status),
+    );
     const error = await catchProtocolError(() => harness.client.translate(baseInput));
     expect(error.kind).toBe(entry.kind);
     expect(error.message).toBe(entry.message);
@@ -160,6 +162,16 @@ test("deepl client: passes cancellation through without a request", async () => 
   );
   expect(error.kind).toBe("cancelled");
   expect(harness.requests).toHaveLength(0);
+});
+
+test("deepl client: keeps the key out of network error details", async () => {
+  const harness = createHarness(() => {
+    throw new Error("socket failed while sending DeepL-Auth-Key secret-key:fx");
+  });
+  const error = await catchProtocolError(() => harness.client.translate(baseInput));
+  expect(error.kind).toBe("network");
+  expect(error.message).not.toContain("secret-key:fx");
+  expect(harness.requests).toHaveLength(1);
 });
 
 test("deepl client: accepts an injected JSON transport", async () => {

@@ -198,7 +198,7 @@ test("presets ui: preset type", async () => {
   await app.type("id:preset-name", " Edited");
   await app.press("id:add-preset-button");
   await app.waitFor("id:add-preset-dialog");
-  await app.keyboard.press("escape");
+  await app.press("id:preset-type-cancel");
   await app.waitUntil(() => !app.shows("id:add-preset-dialog"));
   expect(app.value("id:preset-name")).toBe("Type Preset Edited");
   expect(app.shows("id:preset-discard-dialog")).toBe(false);
@@ -1096,5 +1096,3 @@ test("presets ui: resizes the presets split divider and persists width independe
   expect(reopened.storage()[SPLIT_RAIL_STORAGE_KEYS.presets]).toBe(String(resized));
   expect(reopened.storage()[SPLIT_RAIL_STORAGE_KEYS.models]).toBe("210");
 });
-
-
