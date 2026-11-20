@@ -334,10 +334,7 @@ presets:
   field:
     name: 名称
     namePlaceholder: 例如：技术文档 英译中
-    sourceLanguage: 源语言
-    targetLanguage: 目标语言
   section:
-    languages: 语言
     models: 模型与参数
     prompts: 提示词模板
   language:

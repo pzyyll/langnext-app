@@ -334,10 +334,7 @@ presets:
   field:
     name: Name
     namePlaceholder: e.g. Technical EN to ZH
-    sourceLanguage: Source language
-    targetLanguage: Target language
   section:
-    languages: Languages
     models: Models and parameters
     prompts: Prompt templates
   language:

@@ -2,20 +2,11 @@ import { Scroll, Text, View, windowSize, type InputRef, type ViewRef } from "nsh
 import { t } from "nsh/i18n";
 import { Badge } from "../../components/ui/badge";
 import { Button } from "../../components/ui/button";
-import { Card, SectionHeading } from "../../components/ui/card";
+import { Card } from "../../components/ui/card";
 import { Input } from "../../components/ui/input";
-import { Select, type SelectItem } from "../../components/ui/select";
 import { Switch } from "../../components/ui/switch";
 import { FormField } from "../../modules/ai/ui/form-field";
 import type { PresetDraft } from "./draft";
-import {
-  AUTO_LANGUAGE,
-  getLanguageLabel,
-  getTargetLanguageLabel,
-  LANGUAGE_IDS,
-  type SourceLanguageId,
-  type TargetLanguageId,
-} from "./languages";
 import { ModelsSection } from "./models-section";
 import { PromptTemplates, type TemplateEditableField } from "./prompt-templates";
 import type { ModelChoice, PresetValidationField, PromptTemplate } from "./types";
@@ -53,27 +44,11 @@ interface PresetEditorProps {
   onFieldFocus: (target: FocusableEditorField) => void;
 }
 
-function buildSourceLanguageItems(): SelectItem[] {
-  return [AUTO_LANGUAGE, ...LANGUAGE_IDS].map((id) => ({
-    value: id,
-    title: getLanguageLabel(id),
-  }));
-}
-
-function buildTargetLanguageItems(): SelectItem[] {
-  return [AUTO_LANGUAGE, ...LANGUAGE_IDS].map((id) => ({
-    value: id,
-    title: getTargetLanguageLabel(id),
-  }));
-}
-
 /** Detail-pane editor for creating or editing a translation preset. */
 export function PresetEditor(props: PresetEditorProps) {
   const compact = () => windowSize().width < 860;
   const bodyPaddingClass = () => (compact() ? "px-4 pb-4 pt-1" : "px-6 pb-6 pt-2");
   const cardClass = () => (compact() ? "gap-4 p-4" : "gap-5 p-5");
-  const sourceLanguageItems = () => buildSourceLanguageItems();
-  const targetLanguageItems = () => buildTargetLanguageItems();
 
   const fieldError = (field: PresetValidationField): string | null =>
     props.errorField === field ? props.errorMessage : null;
@@ -231,49 +206,6 @@ export function PresetEditor(props: PresetEditorProps) {
                 onChange={(name) => props.onChange({ name })}
               />
             </FormField>
-          </Card>
-
-          <Card class={cardClass()}>
-            <SectionHeading title={t("presets.section.languages")} />
-            <View class={compact() ? "gap-4" : "flex-row gap-4"}>
-              <FormField
-                class={compact() ? "" : "min-w-0 flex-1"}
-                label={t("presets.field.sourceLanguage")}
-                error={fieldError("sourceLanguage")}
-              >
-                <Select
-                  testID="preset-source-language"
-                  items={sourceLanguageItems()}
-                  value={props.draft.sourceLanguage}
-                  disabled={props.saving}
-                  accessibilityLabel={t("presets.field.sourceLanguage")}
-                  onChange={(value) => {
-                    if (value) {
-                      props.onChange({ sourceLanguage: value as SourceLanguageId });
-                    }
-                  }}
-                />
-              </FormField>
-
-              <FormField
-                class={compact() ? "" : "min-w-0 flex-1"}
-                label={t("presets.field.targetLanguage")}
-                error={fieldError("targetLanguage")}
-              >
-                <Select
-                  testID="preset-target-language"
-                  items={targetLanguageItems()}
-                  value={props.draft.targetLanguage}
-                  disabled={props.saving}
-                  accessibilityLabel={t("presets.field.targetLanguage")}
-                  onChange={(value) => {
-                    if (value) {
-                      props.onChange({ targetLanguage: value as TargetLanguageId });
-                    }
-                  }}
-                />
-              </FormField>
-            </View>
           </Card>
 
           <ModelsSection
