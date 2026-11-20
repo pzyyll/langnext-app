@@ -2,7 +2,7 @@
 
 My Translator is a desktop application built with:
 
-- UI Framework `NSH`: For more information, see `@docs/llms.txt`
+- UI Framework `NSH`: Native Shell is a Rust-first native UI framework: build one app for iOS, Android, macOS, Windows, Linux and the web, with each platform’s own UI and interaction.
 - mise toolchain
 
 ## Harness
@@ -59,3 +59,4 @@ All project commands are in `.mise/tasks/`.
 ## Referencs
 
 - `langnext-app`: `F:\workspace\my\langnext-app`
+- `NSH` Docs: `https://nsh.dev/llms.txt`
