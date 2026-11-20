@@ -25,7 +25,7 @@ import type {
 } from "../translate";
 import { translateWithPreset } from "../translate";
 import { QuickTranslateLanguageMenu } from "../language-menu";
-import { QuickTranslatePopup } from "../popup";
+import { QuickTranslateAddPresetMenu, QuickTranslatePopup } from "../popup";
 import { createQuickTranslateSession, type QuickTranslateSessionOptions } from "../session";
 
 export type HarnessMode =
@@ -61,13 +61,17 @@ function PopupSessionView(props: QuickTranslateSessionOptions) {
     <Card class="min-h-0 flex-1 overflow-hidden p-0">
       <View class="shrink-0 flex-row items-center justify-between border-b border-border px-3 py-1.5">
         <Text class="text-xs font-medium text-foreground">{t("quickTranslate.title")}</Text>
-        <QuickTranslateLanguageMenu
-          sourceLanguage={session.sourceLanguage()}
-          targetLanguage={session.targetLanguage()}
-          onSelectSourceLanguage={(language) => session.handleSourceLanguageChange(language)}
-          onSelectTargetLanguage={(language) => session.handleTargetLanguageChange(language)}
-          onOpenChange={(open) => session.notifyOverlayOpenChange("language-menu", open)}
-        />
+        <View class="flex-row items-center gap-1">
+          <QuickTranslateAddPresetMenu session={session} align="end" />
+          <QuickTranslateLanguageMenu
+            align="end"
+            sourceLanguage={session.sourceLanguage()}
+            targetLanguage={session.targetLanguage()}
+            onSelectSourceLanguage={(language) => session.handleSourceLanguageChange(language)}
+            onSelectTargetLanguage={(language) => session.handleTargetLanguageChange(language)}
+            onOpenChange={(open) => session.notifyOverlayOpenChange("language-menu", open)}
+          />
+        </View>
       </View>
       <Scroll class="min-h-0 flex-1">
         <QuickTranslatePopup session={session} />

@@ -1,4 +1,4 @@
-import { signal, Text, View, type Accessor, type InputRef } from "nsh";
+import { signal, Text, View, type Accessor, type Align, type InputRef } from "nsh";
 import { t } from "nsh/i18n";
 import { Button } from "../../components/ui/button";
 import { Card } from "../../components/ui/card";
@@ -50,6 +50,11 @@ function RetryIconButton(props: { testID: string; onPress: () => void }) {
   );
 }
 
+export interface QuickTranslateAddPresetMenuProps {
+  session: QuickTranslateSession;
+  align?: Align;
+}
+
 /** Renders the icon-only add-preset button so Menu triggers receive the Button element directly. */
 function renderAddPresetButton(options: { disabled?: boolean; selected?: boolean }) {
   return (
@@ -68,6 +73,38 @@ function renderAddPresetButton(options: { disabled?: boolean; selected?: boolean
         class="size-3.5"
       />
     </Button>
+  );
+}
+
+/** Header-ready trigger menu for appending an enabled preset card to the Quick Translate popup. */
+export function QuickTranslateAddPresetMenu(props: QuickTranslateAddPresetMenuProps) {
+  const addMenuOpen = signal(false);
+
+  return (
+    <If when={props.session.canAddPreset()} else={renderAddPresetButton({ disabled: true })}>
+      <Menu
+        open={addMenuOpen()}
+        onOpenChange={(open) => {
+          addMenuOpen.set(open);
+          props.session.notifyOverlayOpenChange("add-preset", open);
+        }}
+        placement="bottom"
+        align={props.align ?? "start"}
+        popupClass="min-w-44 max-h-60"
+        trigger={renderAddPresetButton({ selected: addMenuOpen() })}
+      >
+        <Each of={props.session.enabledPresets()} key={(item) => item.id}>
+          {(preset) => (
+            <MenuItem
+              testID={`quick-translate-add-preset-option-${preset().id}`}
+              accessibilityLabel={preset().name}
+              label={preset().name}
+              onSelect={() => props.session.handleAddPresetCard(preset().id)}
+            />
+          )}
+        </Each>
+      </Menu>
+    </If>
   );
 }
 
@@ -279,7 +316,6 @@ function PresetCardRow(props: PresetCardRowProps) {
 /** Compact Quick Translate popup body composed inside the floating window or standalone harness. */
 export function QuickTranslatePopup(props: QuickTranslatePopupProps) {
   const isComposing = signal(false);
-  const addMenuOpen = signal(false);
   const detectionLabel = () => resolveSourceDetectionLabel(props.session.sourceDetection());
 
   return (
@@ -370,32 +406,11 @@ export function QuickTranslatePopup(props: QuickTranslatePopupProps) {
         ref={(node) => props.onAttachSourceInput?.(node)}
       />
 
-      <View class="flex-row items-center justify-end gap-2">
-        <If when={props.session.canAddPreset()} else={renderAddPresetButton({ disabled: true })}>
-          <Menu
-            open={addMenuOpen()}
-            onOpenChange={(open) => {
-              addMenuOpen.set(open);
-              props.session.notifyOverlayOpenChange("add-preset", open);
-            }}
-            placement="bottom"
-            align="end"
-            popupClass="min-w-44 max-h-60"
-            trigger={renderAddPresetButton({ selected: addMenuOpen() })}
-          >
-            <Each of={props.session.enabledPresets()} key={(item) => item.id}>
-              {(preset) => (
-                <MenuItem
-                  testID={`quick-translate-add-preset-option-${preset().id}`}
-                  accessibilityLabel={preset().name}
-                  label={preset().name}
-                  onSelect={() => props.session.handleAddPresetCard(preset().id)}
-                />
-              )}
-            </Each>
-          </Menu>
-        </If>
-      </View>
+      <If when={props.session.cards().length > 0 || props.session.prefsSaveError() !== null}>
+        <View testID="quick-translate-divider" class="px-3">
+          <View class="h-px bg-border" />
+        </View>
+      </If>
 
       <If when={props.session.prefsSaveError() !== null}>
         <Text
@@ -407,30 +422,32 @@ export function QuickTranslatePopup(props: QuickTranslatePopupProps) {
         </Text>
       </If>
 
-      <View class="gap-2">
-        <Each of={props.session.cards()} key={(card) => card.id}>
-          {(card) => (
-            <PresetCardRow
-              card={card}
-              presets={props.session.enabledPresets}
-              presetItems={props.session.presetItems}
-              onOverlayOpenChange={(menuId, open) =>
-                props.session.notifyOverlayOpenChange(menuId, open)
-              }
-              onSelectPreset={(cardId, presetId) =>
-                props.session.handleSelectCardPreset(cardId, presetId)
-              }
-              onSelectTemplate={(cardId, templateId) =>
-                props.session.handleSelectCardTemplate(cardId, templateId)
-              }
-              onToggleCollapse={(cardId) => props.session.handleToggleCollapse(cardId)}
-              onRemove={(cardId) => props.session.handleRemoveCard(cardId)}
-              onRetry={(id) => props.session.handleRetryCard(id)}
-              onCopy={(id) => props.session.handleCopyCard(id)}
-            />
-          )}
-        </Each>
-      </View>
+      <If when={props.session.cards().length > 0}>
+        <View class="gap-2">
+          <Each of={props.session.cards()} key={(card) => card.id}>
+            {(card) => (
+              <PresetCardRow
+                card={card}
+                presets={props.session.enabledPresets}
+                presetItems={props.session.presetItems}
+                onOverlayOpenChange={(menuId, open) =>
+                  props.session.notifyOverlayOpenChange(menuId, open)
+                }
+                onSelectPreset={(cardId, presetId) =>
+                  props.session.handleSelectCardPreset(cardId, presetId)
+                }
+                onSelectTemplate={(cardId, templateId) =>
+                  props.session.handleSelectCardTemplate(cardId, templateId)
+                }
+                onToggleCollapse={(cardId) => props.session.handleToggleCollapse(cardId)}
+                onRemove={(cardId) => props.session.handleRemoveCard(cardId)}
+                onRetry={(id) => props.session.handleRetryCard(id)}
+                onCopy={(id) => props.session.handleCopyCard(id)}
+              />
+            )}
+          </Each>
+        </View>
+      </If>
     </View>
   );
 }

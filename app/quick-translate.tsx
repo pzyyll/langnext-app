@@ -5,7 +5,10 @@ import { Button } from "../components/ui/button";
 import { Icon } from "../components/ui/icon";
 import { toast } from "../components/ui/toast";
 import { QuickTranslateLanguageMenu } from "../features/quick-translate/language-menu";
-import { QuickTranslatePopup } from "../features/quick-translate/popup";
+import {
+  QuickTranslateAddPresetMenu,
+  QuickTranslatePopup,
+} from "../features/quick-translate/popup";
 import {
   autoTranslatePreference,
   doubleCopyEnabled,
@@ -196,6 +199,7 @@ function QuickTranslateWindowBody(props: { controller: QuickTranslateController 
               class="size-3.5"
             />
           </Button>
+          <QuickTranslateAddPresetMenu session={session} />
         </View>
         <View desktop={{ windowDrag: false }} class="flex-row items-center gap-1">
           <Button

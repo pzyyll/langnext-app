@@ -95,11 +95,13 @@ test("quick window fits cards and translation content within the display work ar
 
   await app.press("id:harness-tray-quick-translate");
   await app.waitFor(firstCard);
+  expect(app.shows("id:quick-translate-header >> id:quick-translate-add-preset")).toBe(true);
+  expect(app.shows("id:quick-translate-divider")).toBe(true);
   await app.waitUntil(() => height() > 0 && height() < POPUP_DEFAULT_SIZE.height - 1);
   const compactHeight = height();
   const width = state().contentBounds.size.width;
 
-  await app.press("id:quick-translate-add-preset");
+  await app.press("id:quick-translate-header >> id:quick-translate-add-preset");
   await app.press("id:quick-translate-add-preset-option-preset-1");
   await app.waitFor(secondCard);
   await app.waitUntil(() => height() > compactHeight);
@@ -257,6 +259,14 @@ test("desktop: quick window Language menu overlay does not trigger blur dismissa
   await app.keyboard.press("enter");
   await app.waitFor("id:quick-translate-card-card-1 >> id:quick-translate-result-text");
   expect(app.texts()).toContain("こんにちは");
+
+  // Reopen Add preset menu in the title bar and confirm Escape closes it without blur dismissal.
+  await app.press("id:quick-translate-header >> id:quick-translate-add-preset");
+  await app.waitFor("id:quick-translate-add-preset-option-preset-1");
+  expect(app.window("quick-translate").state()?.visible).toBe(true);
+  await app.keyboard.press("escape");
+  await app.waitUntil(() => !app.shows("id:quick-translate-add-preset-option-preset-1"));
+  expect(app.window("quick-translate").state()?.visible).toBe(true);
 
   // Reopen menu without submenu and confirm Escape dismisses menu, then Escape closes window.
   await app.press("id:quick-translate-language-menu");
