@@ -182,6 +182,8 @@ export interface QuickTranslateSessionOptions {
 
 export interface QuickTranslateSession {
   sourceText: Accessor<string>;
+  /** Bumps when a double-copy delivery replaces the draft (`0` when none arrived). */
+  sourceDeliverySeq: Accessor<number>;
   sourceLanguage: Accessor<SourceLanguageId>;
   targetLanguage: Accessor<TargetLanguageId>;
   sourceDetection: Accessor<SourceDetectionState>;
@@ -871,6 +873,7 @@ export function createQuickTranslateSession(
 
   return {
     sourceText: options.sourceText,
+    sourceDeliverySeq: options.sourceDeliverySeq ?? (() => 0),
     sourceLanguage: () => sourceLanguage(),
     targetLanguage: () => targetLanguage(),
     sourceDetection: () => sourceDetection(),

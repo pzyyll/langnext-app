@@ -401,7 +401,7 @@ test("quick placement: window controller corrects shifted initial bounds once an
 
   controller.open();
   expect(controller.openingDisplay()).toBe("disp-1");
-  expect(controller.openingPosition()).toEqual({ x: 390, y: 376 });
+  expect(controller.openingPosition()).toEqual({ x: 610, y: 400 });
   expect(controller.openingSize()).toEqual({ width: 420, height: 360 });
   controller.attachWindow(fakeWindow as WindowRef);
 
@@ -417,10 +417,10 @@ test("quick placement: window controller corrects shifted initial bounds once an
     scaleFactor: 1,
   };
   controller.verifyInitialBounds(shiftedState);
-  expect(setBoundsCalls).toEqual([{ origin: { x: 390, y: 376 } }]);
+  expect(setBoundsCalls).toEqual([{ origin: { x: 610, y: 400 } }]);
 
   // Echo from our own setBounds clears expectation, and a subsequent user move disables repositioning.
-  controller.handleBoundsChange({ origin: { x: 390, y: 376 }, size: { width: 420, height: 360 } });
+  controller.handleBoundsChange({ origin: { x: 610, y: 400 }, size: { width: 420, height: 360 } });
   controller.handleBoundsChange({ origin: { x: 510, y: 220 }, size: { width: 420, height: 360 } });
   controller.open();
   controller.verifyInitialBounds(shiftedState);
@@ -526,8 +526,10 @@ test("double copy: shell seam delivers copied text to a newly mounted popup, tra
   });
 
   await app.press("id:harness-trigger-double-copy-valid");
-  await app.waitFor("id:quick-translate-source");
-  expect(app.value("id:quick-translate-source")).toBe("Clipboard manual text");
+  // A copied draft arrives collapsed: the popup shows the source and results without taking edits.
+  await app.waitFor("id:quick-translate-source-preview");
+  expect(app.shows("id:quick-translate-source")).toBe(false);
+  expect(app.texts()).toContain("Clipboard manual text");
   // Double Ctrl+C is an explicit translation request, even with Auto-translate off.
   await app.waitFor("id:quick-translate-result-text");
   expect(app.texts()).toContain("Translated ok");
@@ -539,13 +541,17 @@ test("double copy: shell seam delivers copied text to a newly mounted popup, tra
   // Empty clipboard leaves the sent draft and its result untouched, with no request.
   await app.press("id:harness-set-clipboard-empty");
   await app.press("id:harness-trigger-double-copy-valid");
-  expect(app.value("id:quick-translate-source")).toBe("Clipboard manual text");
+  expect(app.shows("id:quick-translate-source-preview")).toBe(true);
+  expect(app.texts()).toContain("Clipboard manual text");
   expect(app.texts()).toContain("Translated ok");
   expect(app.requests()).toHaveLength(1);
 
   // Typing still follows the Auto-translate toggle and its 500 ms debounce. A due translate runs
   // with the next step, the clock's frames included, which is where the window starts.
   await app.press("id:quick-translate-auto-toggle");
+  await app.press("id:quick-translate-collapse-source");
+  await app.waitFor("id:quick-translate-source");
+  expect(app.value("id:quick-translate-source")).toBe("Clipboard manual text");
   await app.type("id:quick-translate-source", "!");
   expect(app.value("id:quick-translate-source")).toBe("Clipboard manual text!");
   await app.clock!.runFor(AUTO_TRANSLATE_DEBOUNCE_MS);
@@ -555,7 +561,13 @@ test("double copy: shell seam delivers copied text to a newly mounted popup, tra
   // A second copied text translates at once and replaces the result instead of clearing it.
   await app.press("id:harness-set-clipboard-second");
   await app.press("id:harness-trigger-double-copy-valid");
-  await app.waitUntil(() => app.value("id:quick-translate-source") === "Second copied phrase");
+  // A new delivery collapses the preview again, replacing the edited draft.
+  await app.waitUntil(() => app.texts().includes("Second copied phrase"));
+  await app.waitFor("id:quick-translate-source-preview");
+  expect(app.shows("id:quick-translate-source")).toBe(false);
+  await app.press("id:quick-translate-collapse-source");
+  await app.waitFor("id:quick-translate-source");
+  expect(app.value("id:quick-translate-source")).toBe("Second copied phrase");
   await app.waitFor("id:quick-translate-result-text");
   expect(app.texts()).toContain("Translated ok");
   expect(app.requests()).toHaveLength(3);

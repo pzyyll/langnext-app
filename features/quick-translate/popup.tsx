@@ -347,15 +347,24 @@ export function QuickTranslatePopup(props: QuickTranslatePopupProps) {
   const sourceText = () => props.session.sourceText();
   const hasSourceText = () => sourceText().length > 0;
   // Collapse is a view-only mode: an empty field always shows the editor for the next input.
-  const sourceCollapsed = signal(false);
+  // A clipboard delivery arrives collapsed: the user asked to translate, not to edit.
+  const sourceCollapsed = signal(props.session.sourceDeliverySeq() > 0 && hasSourceText());
   const isSourceCollapsed = () => sourceCollapsed() && hasSourceText();
   const sourceFirstLine = () => sourceText().split(/\r?\n/, 1)[0] ?? "";
   const sourceHasMultipleLines = () => /\r?\n/.test(sourceText());
   const sourceInputRef = signal<InputRef | null>(null);
   const focusSourceAfterExpand = signal(false);
+  let lastSourceDeliverySeq = props.session.sourceDeliverySeq();
 
   effect(() => {
     if (!hasSourceText()) sourceCollapsed.set(false);
+  });
+
+  effect(() => {
+    const seq = props.session.sourceDeliverySeq();
+    if (seq === lastSourceDeliverySeq) return;
+    lastSourceDeliverySeq = seq;
+    if (hasSourceText()) sourceCollapsed.set(true);
   });
 
   const expandSource = () => {
