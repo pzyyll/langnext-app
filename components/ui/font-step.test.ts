@@ -6,9 +6,11 @@ import {
   FONT_FIT_SLACK_POINTS,
   FONT_SIZE_STEPS,
   fontFitBudget,
+  fieldShouldStepDown,
   fontFitSlack,
   fontMeasureClass,
   LARGEST_FONT_STEP,
+  measurementLooksCollapsed,
   pickFontStep,
   SMALLEST_FONT_STEP,
   usesNaturalLineHeight,
@@ -36,8 +38,16 @@ test("font step: indexes clamp, and only leading utilities are copied onto the m
   expect(clampFontStep(-3)).toBe(SMALLEST_FONT_STEP);
   expect(clampFontStep(99)).toBe(LARGEST_FONT_STEP);
   expect(clampFontStep(1.6)).toBe(2);
-  expect(fontMeasureClass("min-h-10 leading-[0]")).toBe("leading-[0]");
+  expect(fontMeasureClass("min-h-10 leading-[0]")).toBe("");
+  expect(fontMeasureClass("min-h-10 leading-relaxed")).toBe("leading-relaxed");
   expect(fontMeasureClass("min-h-10")).toBe("");
+  expect(measurementLooksCollapsed("\u7a7a".repeat(72), 370, 32, LARGEST_FONT_STEP)).toBe(true);
+  expect(measurementLooksCollapsed("\u7a7a".repeat(72), 370, 160, LARGEST_FONT_STEP)).toBe(false);
+  expect(measurementLooksCollapsed("Hi", 370, 32, LARGEST_FONT_STEP)).toBe(false);
+  const limit = fontFitBudget(1) + fontFitSlack(1);
+  expect(fieldShouldStepDown(160, 32, limit, LARGEST_FONT_STEP, 24)).toBe(true);
+  expect(fieldShouldStepDown(87, 87, limit, LARGEST_FONT_STEP, 24)).toBe(false);
+  expect(fieldShouldStepDown(84, 84, limit, 1, 16)).toBe(false);
   expect(usesNaturalLineHeight("min-h-10 leading-[0]")).toBe(true);
   expect(usesNaturalLineHeight("min-h-10")).toBe(false);
   expect(FONT_SIZE_STEPS).toEqual(["text-sm", "text-base", "text-xl", "text-2xl"]);

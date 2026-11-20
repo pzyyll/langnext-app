@@ -13,10 +13,14 @@ import { motion } from "../motion";
 import {
   clampFontStep,
   FONT_SIZE_STEPS,
+  comparableMeasureText,
+  fieldShouldStepDown,
+  FONT_STEP_POINTS,
   fontFitBudget,
   fontFitSlack,
   fontMeasureClass,
   LARGEST_FONT_STEP,
+  measurementLooksCollapsed,
   pickFontStep,
   SMALLEST_FONT_STEP,
   usesNaturalLineHeight,
@@ -68,21 +72,26 @@ function FontProbe(props: {
   width: number;
   stepClass: string;
   measureClass: string;
-  naturalLineHeight: boolean;
-  onHeight: (height: number) => void;
+  onHeight: (height: number, measured: string) => void;
 }) {
   return (
     <Text
       accessibilityElementsHidden
       class={`${props.stepClass} ${props.measureClass}`}
       style={{
-        position: "absolute",
+        position: "fixed",
         top: 0,
         left: 0,
         width: props.width,
-        ...(props.naturalLineHeight ? { lineHeight: 0 } : {}),
+        opacity: 0,
+        pointerEvents: "none",
       }}
-      onLayout={({ bounds }) => props.onHeight(bounds.size.height)}
+      onTextLayout={({ lines }) => {
+        const last = lines[lines.length - 1];
+        if (!last) return;
+        const measured = lines.map((line) => line.text).join("");
+        props.onHeight(last.bounds.origin.y + last.bounds.size.height, measured);
+      }}
     >
       {props.text}
     </Text>
@@ -93,55 +102,38 @@ function FontProbes(props: {
   text: string;
   width: number;
   measureClass: string;
-  naturalLineHeight: boolean;
-  onHeight: (index: number, height: number) => void;
+  onHeight: (index: number, height: number, measured: string) => void;
 }) {
   return (
-    <View
-      accessibilityElementsHidden
-      style={{
-        position: "absolute",
-        top: 0,
-        left: 0,
-        width: 0,
-        height: 0,
-        overflow: "hidden",
-        opacity: 0,
-        pointerEvents: "none",
-      }}
-    >
+    <View accessibilityElementsHidden style={{ position: "absolute", width: 0, height: 0 }}>
       {/* One probe per FONT_SIZE_STEPS entry; recordProbe waits until every one has a height. */}
       <FontProbe
         text={props.text}
         width={props.width}
         stepClass={FONT_SIZE_STEPS[0]}
         measureClass={props.measureClass}
-        naturalLineHeight={props.naturalLineHeight}
-        onHeight={(height) => props.onHeight(0, height)}
+        onHeight={(height, measured) => props.onHeight(0, height, measured)}
       />
       <FontProbe
         text={props.text}
         width={props.width}
         stepClass={FONT_SIZE_STEPS[1]}
         measureClass={props.measureClass}
-        naturalLineHeight={props.naturalLineHeight}
-        onHeight={(height) => props.onHeight(1, height)}
+        onHeight={(height, measured) => props.onHeight(1, height, measured)}
       />
       <FontProbe
         text={props.text}
         width={props.width}
         stepClass={FONT_SIZE_STEPS[2]}
         measureClass={props.measureClass}
-        naturalLineHeight={props.naturalLineHeight}
-        onHeight={(height) => props.onHeight(2, height)}
+        onHeight={(height, measured) => props.onHeight(2, height, measured)}
       />
       <FontProbe
         text={props.text}
         width={props.width}
         stepClass={FONT_SIZE_STEPS[3]}
         measureClass={props.measureClass}
-        naturalLineHeight={props.naturalLineHeight}
-        onHeight={(height) => props.onHeight(3, height)}
+        onHeight={(height, measured) => props.onHeight(3, height, measured)}
       />
     </View>
   );
@@ -165,6 +157,8 @@ export function Textarea(props: TextareaProps) {
   let sampleKey = "";
   let sampleHeights = FONT_SIZE_STEPS.map(() => 0);
   let sampleCount = 0;
+  // A field that is still too tall can lower this. Probes cannot raise it for the same text and width.
+  let ceiling = LARGEST_FONT_STEP;
 
   const containerPadding = () => {
     if (props.footer !== undefined) return "";
@@ -173,7 +167,13 @@ export function Textarea(props: TextareaProps) {
 
   effect(() => {
     if (!stepped()) return;
-    if (sourceText().length === 0) fontStep.set(LARGEST_FONT_STEP);
+    if (sourceText().length === 0) {
+      ceiling = LARGEST_FONT_STEP;
+      sampleKey = "";
+      sampleHeights = FONT_SIZE_STEPS.map(() => 0);
+      sampleCount = 0;
+      fontStep.set(LARGEST_FONT_STEP);
+    }
   });
 
   effect(() => {
@@ -181,23 +181,50 @@ export function Textarea(props: TextareaProps) {
     props.onFontStep?.(fontStep());
   });
 
-  function recordProbe(index: number, height: number) {
+  function resetSample(key: string) {
+    sampleKey = key;
+    sampleHeights = FONT_SIZE_STEPS.map(() => 0);
+    sampleCount = 0;
+    ceiling = LARGEST_FONT_STEP;
+  }
+
+  function commitStep(next: number) {
+    const capped = Math.min(next, ceiling);
+    if (fontStep() !== capped) fontStep.set(capped);
+  }
+
+  function recordProbe(index: number, height: number, measured: string) {
+    if (!stepped() || height <= 0) return;
+    const text = sourceText();
+    const width = contentWidth();
+    if (text.length === 0 || width < 1) return;
+    if (comparableMeasureText(measured) !== comparableMeasureText(text)) return;
+    if (measurementLooksCollapsed(text, width, height, index)) return;
+    const scale = fontScale();
+    const key = `${Math.round(width)}:${scale}:${text}`;
+    if (key !== sampleKey) resetSample(key);
+    if (sampleHeights[index] === 0) sampleCount += 1;
+    sampleHeights[index] = height;
+    if (sampleCount < FONT_SIZE_STEPS.length) return;
+    commitStep(pickFontStep(sampleHeights, fontFitBudget(scale), fontFitSlack(scale)));
+  }
+
+  function correctFromField(height: number) {
     if (!stepped() || height <= 0) return;
     const text = sourceText();
     const width = contentWidth();
     if (text.length === 0 || width < 1) return;
     const scale = fontScale();
+    const limit = fontFitBudget(scale) + fontFitSlack(scale);
+    const step = clampFontStep(fontStep());
+    if (height <= limit || step <= SMALLEST_FONT_STEP) return;
     const key = `${Math.round(width)}:${scale}:${text}`;
-    if (key !== sampleKey) {
-      sampleKey = key;
-      sampleHeights = FONT_SIZE_STEPS.map(() => 0);
-      sampleCount = 0;
-    }
-    if (sampleHeights[index] === 0) sampleCount += 1;
-    sampleHeights[index] = height;
-    if (sampleCount < FONT_SIZE_STEPS.length) return;
-    const next = pickFontStep(sampleHeights, fontFitBudget(scale), fontFitSlack(scale));
-    if (fontStep() !== next) fontStep.set(next);
+    const probed = key === sampleKey ? (sampleHeights[step] ?? 0) : 0;
+    const fontSize = FONT_STEP_POINTS[step] ?? 16;
+    if (!fieldShouldStepDown(height, probed, limit, step, fontSize)) return;
+    if (key !== sampleKey) resetSample(key);
+    ceiling = step - 1;
+    commitStep(ceiling);
   }
 
   return (
@@ -221,6 +248,7 @@ export function Textarea(props: TextareaProps) {
           onFocus={() => props.onFocus?.()}
           onSubmit={({ text }) => props.onSubmit?.(text)}
           onCompositionChange={(event) => props.onCompositionChange?.(event)}
+          onContentSizeChange={({ size }) => correctFromField(size.height)}
           onLayout={({ bounds }) => {
             if (!stepped()) return;
             const next = bounds.size.width;
@@ -239,8 +267,7 @@ export function Textarea(props: TextareaProps) {
           text={sourceText()}
           width={contentWidth()}
           measureClass={measureClass()}
-          naturalLineHeight={naturalLineHeight()}
-          onHeight={(index, height) => recordProbe(index, height)}
+          onHeight={(index, height, measured) => recordProbe(index, height, measured)}
         />
       </If>
     </View>

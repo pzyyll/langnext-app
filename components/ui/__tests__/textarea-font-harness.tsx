@@ -14,6 +14,7 @@ function SteppedFontHarness() {
   return (
     <View class="w-full flex-1 p-3">
       <Text>{`step:${step()}`}</Text>
+      <Text>{`length:${text().length}`}</Text>
       <Textarea
         testID="stepped-source"
         fontScale="stepped"
@@ -24,6 +25,12 @@ function SteppedFontHarness() {
       />
       <Text testID="use-long-text" onPress={() => text.set(LONG_TEXT)}>
         Use long text
+      </Text>
+      <Text testID="use-cjk" onPress={() => text.set("\u7a7a".repeat(72))}>
+        Use cjk
+      </Text>
+      <Text testID="clear-text" onPress={() => text.set("")}>
+        Clear text
       </Text>
       <Text>{`largest:${LARGEST_FONT_STEP}`}</Text>
     </View>

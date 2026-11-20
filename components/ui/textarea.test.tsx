@@ -32,3 +32,31 @@ test("a stepped textarea uses a larger step for a short line than a long passage
   expect(next).toBeLessThan(LARGEST_FONT_STEP);
   expect(next).toBeGreaterThanOrEqual(0);
 });
+
+async function settledStep(app: {
+  texts: () => readonly string[];
+  wait: (ms: number) => Promise<void>;
+  waitUntil: (condition: () => boolean) => Promise<void>;
+}): Promise<string> {
+  let previous = "";
+  await app.waitUntil(() => {
+    const label = stepLabel(app.texts()) ?? "";
+    const stable = label === previous && label.startsWith("step:") && label !== "step:-1";
+    previous = label;
+    return stable;
+  });
+  await app.wait(50);
+  return stepLabel(app.texts()) ?? "";
+}
+
+test("the same source text settles on the same stepped size", async () => {
+  const app = await open("./__tests__/textarea-font-harness.tsx", viewport);
+  await app.press("id:use-cjk");
+  await app.waitUntil(() => app.texts().includes("length:72"));
+  const settled = await settledStep(app);
+
+  await app.press("id:clear-text");
+  await app.waitUntil(() => stepLabel(app.texts()) === `step:${LARGEST_FONT_STEP}`);
+  await app.press("id:use-cjk");
+  expect(await settledStep(app)).toBe(settled);
+});
