@@ -8,6 +8,7 @@ import chevronDownIcon from "../../assets/icons/chevron-down.svg";
 import chevronRightIcon from "../../assets/icons/chevron-right.svg";
 import chevronUpIcon from "../../assets/icons/chevron-up.svg";
 import clearIcon from "../../assets/icons/clear.svg";
+import collapseTextInputIcon from "../../assets/icons/icon-park-outline--collapse-text-input.svg";
 import closeIcon from "../../assets/icons/close.svg";
 import copyIcon from "../../assets/icons/copy.svg";
 import cubeOutlineIcon from "../../assets/icons/cube-outline.svg";
@@ -39,6 +40,7 @@ const ICONS = {
   "chevron-up": chevronUpIcon,
   clear: clearIcon,
   close: closeIcon,
+  "collapse-text-input": collapseTextInputIcon,
   copy: copyIcon,
   "cube-outline": cubeOutlineIcon,
   delete: deleteIcon,

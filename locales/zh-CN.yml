@@ -472,6 +472,8 @@ quickTranslate:
   copied: 已复制
   sourceLabel: 源文本
   sourcePlaceholder: 输入要翻译的文本…
+  collapseSource: 收起输入框
+  editSource: 编辑输入框
   error:
     blankInput: 请输入要翻译的文本。
     presetDisabled: 所选预设已停用，请在“预设”中启用或选择其他预设。

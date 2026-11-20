@@ -472,6 +472,8 @@ quickTranslate:
   copied: Copied
   sourceLabel: Source text
   sourcePlaceholder: Enter text to translate…
+  collapseSource: Collapse input
+  editSource: Edit input
   error:
     blankInput: Enter text to translate.
     presetDisabled: Selected preset is disabled. Enable it in Presets or choose another preset.

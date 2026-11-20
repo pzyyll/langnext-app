@@ -132,6 +132,51 @@ test("desktop: quick popup translates on Enter, preserves Shift+Enter newline, a
   expect(app.requests()).toHaveLength(1);
 });
 
+test("quick popup: collapses a non-empty source into a one-line preview and returns to the editor", async () => {
+  const app = await open(POPUP_HARNESS, {
+    ...viewport,
+    storage: seedWithPresets([makePreset()]),
+  });
+
+  await app.waitFor("id:quick-translate-source");
+  // The collapse action exists only while the field has content.
+  expect(app.shows("id:quick-translate-collapse-source")).toBe(false);
+
+  await app.type("id:quick-translate-source", "First line");
+  await app.keyboard.press("shift+enter");
+  await app.type("id:quick-translate-source", "Second line");
+  expect(app.shows("id:quick-translate-collapse-source")).toBe(true);
+
+  await app.hover("id:quick-translate-collapse-source");
+  await app.waitFor(`text:${t("quickTranslate.collapseSource")}`);
+
+  // Collapsed: one preview line, the toolbar stays, and no translation starts.
+  await app.press("id:quick-translate-collapse-source");
+  await app.waitFor("id:quick-translate-source-preview");
+  expect(app.shows("id:quick-translate-source")).toBe(false);
+  expect(app.texts()).toContain("First line");
+  expect(app.texts()).not.toContain("Second line");
+  expect(app.shows("id:quick-translate-source-toolbar")).toBe(true);
+  expect(app.requests()).toHaveLength(0);
+
+  await app.hover("id:quick-translate-collapse-source");
+  await app.waitFor(`text:${t("quickTranslate.editSource")}`);
+
+  // Pressing the preview returns to the editor with the whole draft.
+  await app.press("id:quick-translate-source-preview");
+  await app.waitFor("id:quick-translate-source");
+  expect(app.value("id:quick-translate-source")).toBe("First line\nSecond line");
+  expect(app.shows("id:quick-translate-source-preview")).toBe(false);
+
+  // An empty field always shows the editor again.
+  await app.press("id:quick-translate-collapse-source");
+  await app.waitFor("id:quick-translate-source-preview");
+  await app.press("id:quick-translate-clear");
+  await app.waitFor("id:quick-translate-source");
+  expect(app.value("id:quick-translate-source")).toBe("");
+  expect(app.shows("id:quick-translate-collapse-source")).toBe(false);
+});
+
 test("quick popup: renders streamed text while translating and keeps partial text on failure", async () => {
   const app = await open(POPUP_HARNESS, {
     ...viewport,

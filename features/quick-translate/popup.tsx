@@ -1,4 +1,13 @@
-import { platform, signal, Text, View, type Accessor, type Align, type InputRef } from "nsh";
+import {
+  effect,
+  platform,
+  signal,
+  Text,
+  View,
+  type Accessor,
+  type Align,
+  type InputRef,
+} from "nsh";
 import { t } from "nsh/i18n";
 import { Button } from "../../components/ui/button";
 import { Card } from "../../components/ui/card";
@@ -335,6 +344,94 @@ export function QuickTranslatePopup(props: QuickTranslatePopupProps) {
   // once the pinned NSH release aligns Windows input measurement with drawing.
   // Zero uses the font's natural line height in NSH 0.6.1.
   const sourceInputClass = platform.os === "windows" ? "min-h-10 leading-[0]" : "min-h-10";
+  const sourceText = () => props.session.sourceText();
+  const hasSourceText = () => sourceText().length > 0;
+  // Collapse is a view-only mode: an empty field always shows the editor for the next input.
+  const sourceCollapsed = signal(false);
+  const isSourceCollapsed = () => sourceCollapsed() && hasSourceText();
+  const sourceFirstLine = () => sourceText().split(/\r?\n/, 1)[0] ?? "";
+  const sourceHasMultipleLines = () => /\r?\n/.test(sourceText());
+  const sourceInputRef = signal<InputRef | null>(null);
+  const focusSourceAfterExpand = signal(false);
+
+  effect(() => {
+    if (!hasSourceText()) sourceCollapsed.set(false);
+  });
+
+  const expandSource = () => {
+    focusSourceAfterExpand.set(true);
+    sourceCollapsed.set(false);
+  };
+
+  // The editor remounts on expand: focus it with the caret past the last character.
+  effect(() => {
+    const input = sourceInputRef();
+    if (!focusSourceAfterExpand() || isSourceCollapsed() || input === null) return;
+    focusSourceAfterExpand.set(false);
+    input.focus();
+    const end = sourceText().length;
+    input.setSelection(end, end);
+  });
+
+  const renderSourceToolbar = () => (
+    <View
+      testID="quick-translate-source-toolbar"
+      class="min-h-7 flex-row items-center justify-between gap-2"
+    >
+      <View class="min-w-0 flex-1 pl-1.5">
+        <If when={detectionLabel() !== null}>
+          <Text
+            testID="quick-translate-source-detection"
+            class="truncate text-xs text-muted-foreground"
+          >
+            {detectionLabel() ?? ""}
+          </Text>
+        </If>
+      </View>
+      <If when={hasSourceText()}>
+        <View class="flex-row items-center gap-1">
+          <Button
+            testID="quick-translate-collapse-source"
+            size="icon-sm"
+            variant="ghost"
+            tooltip={
+              isSourceCollapsed()
+                ? t("quickTranslate.editSource")
+                : t("quickTranslate.collapseSource")
+            }
+            accessibilityLabel={
+              isSourceCollapsed()
+                ? t("quickTranslate.editSource")
+                : t("quickTranslate.collapseSource")
+            }
+            onPress={() => {
+              if (isSourceCollapsed()) {
+                expandSource();
+                return;
+              }
+              sourceCollapsed.set(true);
+            }}
+          >
+            <Icon
+              name={isSourceCollapsed() ? "edit" : "collapse-text-input"}
+              tone="muted-foreground"
+              class="size-3.5"
+            />
+          </Button>
+          <Button
+            testID="quick-translate-clear"
+            size="icon-sm"
+            variant="ghost"
+            tooltip={t("common.clearInput")}
+            accessibilityLabel={t("common.clearInput")}
+            onPress={() => props.session.handleClearSource()}
+          >
+            <Icon name="clear" tone="muted-foreground" class="size-3.5" />
+          </Button>
+        </View>
+      </If>
+    </View>
+  );
 
   return (
     <View class="gap-2 p-3">
@@ -378,52 +475,54 @@ export function QuickTranslatePopup(props: QuickTranslatePopupProps) {
         </Card>
       </If>
 
-      <Textarea
-        testID="quick-translate-source"
-        variant="card"
-        autoFocus
-        submitBehavior="submit"
-        value={props.session.sourceText()}
-        placeholder={t("quickTranslate.sourcePlaceholder")}
-        accessibilityLabel={t("quickTranslate.sourceLabel")}
-        inputClass={sourceInputClass}
-        footer={
-          <View
-            testID="quick-translate-source-toolbar"
-            class="min-h-7 flex-row items-center justify-between gap-2"
+      <If
+        when={isSourceCollapsed()}
+        else={
+          <Textarea
+            testID="quick-translate-source"
+            variant="card"
+            autoFocus
+            submitBehavior="submit"
+            value={sourceText()}
+            placeholder={t("quickTranslate.sourcePlaceholder")}
+            accessibilityLabel={t("quickTranslate.sourceLabel")}
+            inputClass={sourceInputClass}
+            footer={renderSourceToolbar()}
+            onChange={(nextText) => props.session.handleSourceChange(nextText)}
+            onSubmit={() => {
+              if (isComposing()) return;
+              props.session.handleSourceSubmit();
+            }}
+            onCompositionChange={({ composing }) => isComposing.set(composing)}
+            ref={(node) => {
+              sourceInputRef.set(node);
+              props.onAttachSourceInput?.(node);
+            }}
+          />
+        }
+      >
+        {/* Same surface as the card variant of <Textarea>, with a one-line preview instead of the editor. */}
+        <View class="rounded-xl border border-border bg-card">
+          <Button
+            testID="quick-translate-source-preview"
+            variant="ghost"
+            size="row"
+            accessibilityLabel={t("quickTranslate.editSource")}
+            class="h-10 min-h-0 w-full min-w-0 justify-start rounded-t-xl rounded-b-none px-3"
+            onPress={() => expandSource()}
           >
-            <View class="min-w-0 flex-1 pl-1.5">
-              <If when={detectionLabel() !== null}>
-                <Text
-                  testID="quick-translate-source-detection"
-                  class="truncate text-xs text-muted-foreground"
-                >
-                  {detectionLabel() ?? ""}
-                </Text>
+            <View class="min-w-0 flex-1 flex-row items-center gap-1.5">
+              <Text class="min-w-0 flex-1 truncate text-sm text-card-foreground">
+                {sourceFirstLine()}
+              </Text>
+              <If when={sourceHasMultipleLines()}>
+                <Icon name="chevron-down" tone="muted-foreground" class="size-3.5 shrink-0" />
               </If>
             </View>
-            <If when={props.session.sourceText().length > 0}>
-              <Button
-                testID="quick-translate-clear"
-                size="icon-sm"
-                variant="ghost"
-                tooltip={t("common.clearInput")}
-                accessibilityLabel={t("common.clearInput")}
-                onPress={() => props.session.handleClearSource()}
-              >
-                <Icon name="clear" tone="muted-foreground" class="size-3.5" />
-              </Button>
-            </If>
-          </View>
-        }
-        onChange={(nextText) => props.session.handleSourceChange(nextText)}
-        onSubmit={() => {
-          if (isComposing()) return;
-          props.session.handleSourceSubmit();
-        }}
-        onCompositionChange={({ composing }) => isComposing.set(composing)}
-        ref={(node) => props.onAttachSourceInput?.(node)}
-      />
+          </Button>
+          <View class="px-1.5 pb-1.5">{renderSourceToolbar()}</View>
+        </View>
+      </If>
 
       <If when={props.session.prefsSaveError() !== null}>
         <Text
