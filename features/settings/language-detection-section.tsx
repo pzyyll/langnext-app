@@ -236,7 +236,18 @@ export function LanguageDetectionSection(props: LanguageDetectionSectionProps) {
             label={t("settings.languageDetection.ai")}
             onSelect={() => setMode("ai")}
           />
+          <ModeOption
+            testID="settings-detection-mode-google"
+            checked={draft().mode === "google"}
+            label={t("settings.languageDetection.google")}
+            onSelect={() => setMode("google")}
+          />
         </RadioGroup>
+        <If when={draft().mode === "google"}>
+          <Text testID="settings-detection-google-disclosure" class="text-xs text-muted-foreground">
+            {t("settings.languageDetection.googleDisclosure")}
+          </Text>
+        </If>
       </View>
 
       <If when={draft().mode === "ai"}>

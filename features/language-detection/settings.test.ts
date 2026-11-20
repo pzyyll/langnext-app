@@ -285,6 +285,31 @@ test("detection settings: rejects automatic and identical language preferences",
   expect(mem.getSetCalls()).toBe(0);
 });
 
+test("detection settings: saves Google detection without any model", async () => {
+  const mem = createMemoryStorage();
+  const store = createLanguageDetectionSettingsStore(mem.storage);
+  await store.load();
+
+  const result = await store.save({
+    mode: "google",
+    modelIds: [],
+    nativeLanguage: "zh",
+    preferredTranslationLanguage: null,
+  });
+  expect(result.ok).toBe(true);
+
+  const reopened = createLanguageDetectionSettingsStore(mem.storage);
+  await reopened.load();
+  expect(reopened.loadError()).toBeNull();
+  expect(reopened.settings()).toEqual({
+    mode: "google",
+    modelIds: [],
+    nativeLanguage: "zh",
+    preferredTranslationLanguage: null,
+  });
+  expect(JSON.parse(mem.backing[LANGUAGE_DETECTION_STORAGE_KEY]!).mode).toBe("google");
+});
+
 test("detection settings: accepts one unset preference and a disabled mode with saved models", async () => {
   const mem = createMemoryStorage();
   const store = createLanguageDetectionSettingsStore(mem.storage);

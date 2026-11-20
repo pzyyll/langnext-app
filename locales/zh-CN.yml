@@ -67,6 +67,7 @@ settings:
     detection: 检测
     off: 关闭
     ai: AI
+    google: Google
     models: 检测模型
     primary: 主模型
     backups: 备用模型
@@ -79,6 +80,7 @@ settings:
     preferenceUnset: 未设置
     help: 目标语言设为自动时，非母语译为母语，母语译为上方指定的语言。
     disclosure: 自动检测源语言会把一段文本样本发送到所选模型，必要时也会发送到所选备用模型。
+    googleDisclosure: 自动检测源语言会把一段文本样本发送给 Google 翻译。
     error:
       storageReadFailed: 无法读取已保存的语言检测设置。
       storageMalformed: 已保存的语言检测设置无法解析。
@@ -94,7 +96,8 @@ languageDetection:
     unconfigured: 请配置语言检测，或手动选择源语言。
     noEligibleModel: 请检查已配置的检测模型，或手动选择源语言。
     unknownLanguage: 无法识别源语言，请手动选择源语言。
-    failed: 语言检测失败，请检查检测模型，或手动选择源语言。
+    unsupportedLanguage: 检测到的语言不受支持，请手动选择源语言。
+    failed: 语言检测失败，请手动选择源语言。
     missingNativeLanguage: 请设置母语，或选择具体的目标语言。
     missingPreferredLanguage: 请设置母语译为的语言，或选择具体的目标语言。
 models:

@@ -269,6 +269,45 @@ test("language detection: saves and restores the ordered detector chain and lang
   expect(reopened.requests()).toHaveLength(0);
 });
 
+test("language detection: saves Google detection without model configuration", async () => {
+  const seed = makeSeedStorage({
+    channels: [makeChannel({ id: "ch-openai", displayName: "OpenAI Main", enabled: true })],
+    models: [
+      makeModel({ id: "m-1", providerId: "ch-openai", modelKey: "gpt-4.1-mini", enabled: true }),
+    ],
+  });
+  const app = await open(APP_ENTRY, { ...viewport, storage: seed });
+
+  await app.press("id:nav-settings");
+  await app.press("id:settings-nav-language-detection");
+  await app.waitFor("id:settings-detection-card");
+
+  await app.press("id:settings-detection-mode-google");
+  await app.waitFor("id:settings-detection-google-disclosure");
+  expect(app.shows("id:settings-detection-primary")).toBe(false);
+  expect(app.shows("id:settings-detection-add-backup")).toBe(false);
+  expect(app.texts()).toContain(
+    "Automatic source detection sends a text sample to Google Translate.",
+  );
+
+  await app.press("id:settings-detection-native-language");
+  await app.waitFor("role:option[Chinese]");
+  await app.press("role:option[Chinese]");
+  await app.press("id:settings-detection-save");
+  await app.waitUntil(() => Boolean(app.storage()[LANGUAGE_DETECTION_STORAGE_KEY]));
+
+  const stored = JSON.parse(app.storage()[LANGUAGE_DETECTION_STORAGE_KEY]!);
+  expect(stored).toMatchObject({ version: 1, mode: "google", modelIds: [], nativeLanguage: "zh" });
+  expect(app.requests()).toHaveLength(0);
+
+  const reopened = await open(APP_ENTRY, { ...viewport, storage: app.storage() });
+  await reopened.press("id:nav-settings");
+  await reopened.press("id:settings-nav-language-detection");
+  await reopened.waitFor("id:settings-detection-google-disclosure");
+  expect(reopened.shows("id:settings-detection-primary")).toBe(false);
+  expect(reopened.requests()).toHaveLength(0);
+});
+
 test("language detection: keeps unavailable saved models and offers Models recovery", async () => {
   const savedSettings = JSON.stringify({
     version: 1,
@@ -354,6 +393,7 @@ test("language detection: localizes labels and help text in both languages", asy
   await app.waitFor("id:settings-detection-card");
   expect(app.texts()).toContain("Language Detection");
   expect(app.texts()).toContain("Off");
+  expect(app.texts()).toContain("Google");
   expect(app.texts()).toContain("Native language");
   expect(app.texts()).toContain("Translate my native language into");
   expect(app.texts()).toContain(

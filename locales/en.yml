@@ -67,6 +67,7 @@ settings:
     detection: Detection
     off: "Off"
     ai: AI
+    google: Google
     models: Detection models
     primary: Primary model
     backups: Backup models
@@ -79,6 +80,7 @@ settings:
     preferenceUnset: Not set
     help: When the target is set to Automatic, text in other languages is translated into your native language. Text in your native language is translated into the language selected above.
     disclosure: Automatic source detection sends a text sample to the chosen model, and may send it to the chosen backups if needed.
+    googleDisclosure: Automatic source detection sends a text sample to Google Translate.
     error:
       storageReadFailed: Could not read the saved language detection settings.
       storageMalformed: The saved language detection settings are unreadable.
@@ -94,7 +96,8 @@ languageDetection:
     unconfigured: Configure language detection, or choose the source language.
     noEligibleModel: Check the configured detection models, or choose the source language.
     unknownLanguage: The detector could not identify the source language. Choose the source language.
-    failed: Language detection failed. Check the detection models, or choose the source language.
+    unsupportedLanguage: The detected language is not supported here. Choose the source language.
+    failed: Language detection failed. Choose the source language.
     missingNativeLanguage: Set your native language, or choose a concrete target language.
     missingPreferredLanguage: Set the translation language for your native language, or choose a concrete target language.
 models:

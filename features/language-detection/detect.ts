@@ -5,6 +5,7 @@ import {
   type AiClientCallOptions,
   type AiClientInput,
 } from "../../modules/ai/runtime/client";
+import { DEFAULT_HTTP_TIMEOUT_MS } from "../../modules/ai/runtime/http";
 import { resolveSavedModelRequest, type SavedModelRequestResolution } from "../models/store";
 import { isLanguageId, LANGUAGE_IDS, type LanguageId } from "../presets/languages";
 import type { LanguageDetectionSettings } from "./settings";
@@ -31,6 +32,7 @@ export type LanguageDetectionFailureCode =
   | "unconfigured"
   | "no_eligible_model"
   | "unknown_language"
+  | "unsupported_language"
   | "failed"
   | "cancelled";
 
@@ -47,7 +49,37 @@ export interface DetectLanguageOptions {
     request: TextGenerationRequest,
     options?: AiClientCallOptions,
   ) => Promise<string>;
+  googleFetch?: GoogleDetectionFetch;
 }
+
+/**
+ * Free Google Translate endpoint used by the `google` mode. It is undocumented and has no
+ * support contract: no key, per-IP rate limits, and a plain-text refusal page under abuse.
+ * The sample travels in a form body, so it never appears in a URL.
+ */
+export const GOOGLE_DETECTION_URL =
+  "https://translate.googleapis.com/translate_a/t?client=gtx&sl=auto&tl=en";
+
+/** Legacy codes Google still answers with for two supported languages. */
+const GOOGLE_CODE_ALIASES: Record<string, LanguageId> = { iw: "he", in: "id" };
+
+/** Minimal response shape the Google request needs; a real `Response` satisfies it. */
+export interface GoogleDetectionResponseLike {
+  ok: boolean;
+  status: number;
+  json(): Promise<unknown>;
+}
+
+/** Fetch boundary replacement point for isolated tests. */
+export type GoogleDetectionFetch = (
+  url: string,
+  init: {
+    method: "POST";
+    headers: Record<string, string>;
+    body: string;
+    signal: AbortSignal;
+  },
+) => Promise<GoogleDetectionResponseLike>;
 
 function failure(code: LanguageDetectionFailureCode): LanguageDetectionResult {
   return { ok: false, code };
@@ -66,6 +98,86 @@ type Answer =
   | { kind: "undetermined" }
   | { kind: "invalid" };
 
+/**
+ * Maps a Google language code onto a supported concrete ID. A regional code keeps its base
+ * language (`zh-CN` -> `zh`, `pt-BR` -> `pt`), and an unsupported language returns `null`.
+ */
+export function normalizeGoogleLanguageCode(raw: string): LanguageId | null {
+  const normalized = raw.trim().toLowerCase();
+  if (normalized.length === 0) return null;
+  const base = normalized.split(/[-_]/)[0] ?? "";
+  const candidate = GOOGLE_CODE_ALIASES[base] ?? base;
+  return isLanguageId(candidate) ? candidate : null;
+}
+
+function looksLikeLanguageCode(value: string): boolean {
+  return /^[a-z]{2,3}(?:[-_][a-z0-9]{2,8})?$/i.test(value);
+}
+
+/**
+ * Reads the detected code from a `translate_a/t` payload. One input answers
+ * `[[translatedText, code]]`; other shapes put the code beside the segments.
+ */
+export function readGoogleLanguageCode(payload: unknown): string | null {
+  if (!Array.isArray(payload)) return null;
+  for (const entry of payload) {
+    if (Array.isArray(entry) && typeof entry[1] === "string" && looksLikeLanguageCode(entry[1])) {
+      return entry[1];
+    }
+  }
+  for (const entry of payload) {
+    if (typeof entry === "string" && looksLikeLanguageCode(entry)) return entry;
+  }
+  return null;
+}
+
+/** Sends one bounded sample to Google Translate and maps its answer onto a supported ID. */
+async function detectWithGoogle(
+  sample: string,
+  options: DetectLanguageOptions,
+): Promise<LanguageDetectionResult> {
+  const runFetch: GoogleDetectionFetch = options.googleFetch ?? ((url, init) => fetch(url, init));
+  const external = options.signal;
+  const controller = new AbortController();
+  const onExternalAbort = () => controller.abort();
+  external?.addEventListener("abort", onExternalAbort, { once: true });
+  const timer = setTimeout(() => controller.abort(), options.timeoutMs ?? DEFAULT_HTTP_TIMEOUT_MS);
+
+  try {
+    let response: GoogleDetectionResponseLike;
+    try {
+      response = await runFetch(GOOGLE_DETECTION_URL, {
+        method: "POST",
+        headers: { "content-type": "application/x-www-form-urlencoded" },
+        body: `q=${encodeURIComponent(sample)}`,
+        signal: controller.signal,
+      });
+    } catch {
+      return external?.aborted ? failure("cancelled") : failure("failed");
+    }
+
+    if (external?.aborted) return failure("cancelled");
+    if (!response.ok || controller.signal.aborted) return failure("failed");
+
+    let payload: unknown;
+    try {
+      payload = await response.json();
+    } catch {
+      return external?.aborted ? failure("cancelled") : failure("failed");
+    }
+
+    if (external?.aborted) return failure("cancelled");
+
+    const code = readGoogleLanguageCode(payload);
+    if (code === null) return failure("unknown_language");
+    const language = normalizeGoogleLanguageCode(code);
+    return language === null ? failure("unsupported_language") : { ok: true, language };
+  } finally {
+    clearTimeout(timer);
+    external?.removeEventListener("abort", onExternalAbort);
+  }
+}
+
 /** Accepts exactly one supported ID or `und`; rejects prose, JSON, locale variants, and `auto`. */
 export function parseDetectionAnswer(raw: string): Answer {
   const normalized = raw.trim().toLowerCase();
@@ -75,8 +187,12 @@ export function parseDetectionAnswer(raw: string): Answer {
 }
 
 /**
- * Detects the dominant language with the saved AI model chain, trying each model in order.
- * Only a valid supported ID wins; `und`, unavailable models, and provider failures fall through.
+ * Detects the dominant language with the saved detector.
+ *
+ * `ai` tries each saved model in order: only a valid supported ID wins, and `und`, unavailable
+ * models, and provider failures fall through. `google` asks the free Google Translate endpoint
+ * once. Neither mode falls back to the other, so no sample reaches a service the user did not
+ * choose.
  */
 export async function detectLanguage(
   text: string,
@@ -87,6 +203,7 @@ export async function detectLanguage(
 
   const sample = boundDetectionSample(text);
   if (sample.length === 0) return failure("blank_input");
+  if (settings.mode === "google") return detectWithGoogle(sample, options);
   if (settings.mode !== "ai" || settings.modelIds.length === 0) return failure("unconfigured");
 
   const resolveModel = options.resolveSavedModelRequest ?? resolveSavedModelRequest;

@@ -14,6 +14,8 @@ export function languageResolutionErrorMessage(code: LanguageResolutionFailureCo
       return t("languageDetection.failure.noEligibleModel");
     case "unknown_language":
       return t("languageDetection.failure.unknownLanguage");
+    case "unsupported_language":
+      return t("languageDetection.failure.unsupportedLanguage");
     case "blank_input":
       return t("quickTranslate.error.blankInput");
     default:

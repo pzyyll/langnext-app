@@ -5,12 +5,14 @@ import { isLanguageId, type LanguageId } from "../presets/languages";
 export const LANGUAGE_DETECTION_STORAGE_KEY = "settings.languageDetection.v1";
 const STORAGE_VERSION = 1;
 
-export type LanguageDetectionMode = "off" | "ai";
+export type LanguageDetectionMode = "off" | "ai" | "google";
 
-/** Saved detection configuration. AI detection stays off until a mode, primary model, and save exist. */
+/** Detector behind automatic source detection; `off` leaves every automatic source unresolved. */
+
+/** Saved detection configuration. Detection stays off until a mode, its settings, and save exist. */
 export interface LanguageDetectionSettings {
   mode: LanguageDetectionMode;
-  /** Ordered detector chain: the primary model first, then its backups. */
+  /** Ordered AI detector chain used in `ai` mode: the primary model first, then its backups. */
   modelIds: readonly string[];
   nativeLanguage: LanguageId | null;
   preferredTranslationLanguage: LanguageId | null;
@@ -76,7 +78,7 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
 }
 
 function isMode(value: unknown): value is LanguageDetectionMode {
-  return value === "off" || value === "ai";
+  return value === "off" || value === "ai" || value === "google";
 }
 
 function isPreference(value: unknown): value is LanguageId | null {
