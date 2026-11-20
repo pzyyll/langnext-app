@@ -271,6 +271,7 @@ protocol:
     missingModels: Expected a models array in provider response.
     missingGeminiModels: Expected a Gemini models list in provider response.
     missingGeneratedText: Provider response contained no generated text.
+    outputTruncated: Provider stopped before the text was complete.
     streamInterrupted: Provider stopped the stream before the text was complete.
 ai:
   protocol:

@@ -2,6 +2,7 @@ import { t } from "nsh/i18n";
 import { ProviderProtocolError } from "../../contracts/errors";
 import type { RemoteModelRecord } from "../../contracts/model";
 import type {
+  ImageTextGenerationRequest,
   ProtocolConnection,
   ProtocolContext,
   ProtocolDefinition,
@@ -16,6 +17,7 @@ import {
   normalizeCredential,
   normalizeRequestRoot,
   parseEventPayload,
+  requireCompleteOutput,
   requireGeneratedText,
   requireModelId,
 } from "../shared";
@@ -64,6 +66,35 @@ function anthropicBody(request: TextGenerationRequest, stream: boolean): Record<
   if (request.disableReasoning) {
     // Extended thinking is opt-in, but disabled states keep the intent explicit.
     body.thinking = { type: "disabled" };
+  }
+  return body;
+}
+
+/** Builds the Messages body for one buffered image; the image block follows the instruction text. */
+function anthropicImageBody(request: ImageTextGenerationRequest): Record<string, unknown> {
+  const body: Record<string, unknown> = {
+    model: requireModelId({ kind: "model", modelId: request.modelId }),
+    messages: [
+      {
+        role: "user",
+        content: [
+          { type: "text", text: request.user },
+          {
+            type: "image",
+            source: {
+              type: "base64",
+              media_type: request.image.mimeType,
+              data: request.image.base64,
+            },
+          },
+        ],
+      },
+    ],
+    max_tokens: ANTHROPIC_DEFAULT_MAX_TOKENS,
+    stream: false,
+  };
+  if (request.system.trim().length > 0) {
+    body.system = request.system;
   }
   return body;
 }
@@ -164,6 +195,24 @@ export const anthropicProtocol: ProtocolDefinition = {
       timeoutMs: context.timeoutMs,
       redirect: "error",
     });
+    return requireGeneratedText(anthropicTextParts(payload));
+  },
+
+  async generateTextFromImage(
+    connection: ProtocolConnection,
+    request: ImageTextGenerationRequest,
+    context: ProtocolContext,
+  ): Promise<string> {
+    const target = anthropicProtocol.resolveTarget(connection, {
+      kind: "model",
+      modelId: request.modelId,
+    });
+    const payload = await context.http.postJson(target, anthropicImageBody(request), {
+      signal: context.signal,
+      timeoutMs: context.timeoutMs,
+      redirect: "error",
+    });
+    requireCompleteOutput(payload.stop_reason === "max_tokens");
     return requireGeneratedText(anthropicTextParts(payload));
   },
 

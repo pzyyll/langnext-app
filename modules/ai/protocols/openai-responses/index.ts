@@ -1,6 +1,7 @@
 import { t } from "nsh/i18n";
 import { ProviderProtocolError } from "../../contracts/errors";
 import type {
+  ImageTextGenerationRequest,
   ProtocolConnection,
   ProtocolContext,
   ProtocolDefinition,
@@ -16,9 +17,11 @@ import {
   withBearer,
 } from "../openai-common";
 import {
+  imageDataUrl,
   isPlainObject,
   normalizeRequestRoot,
   parseEventPayload,
+  requireCompleteOutput,
   requireGeneratedText,
   requireModelId,
 } from "../shared";
@@ -65,6 +68,27 @@ function responsesBody(request: TextGenerationRequest, stream: boolean): Record<
   }
   if (request.disableReasoning) {
     body.reasoning = { effort: "none" };
+  }
+  return body;
+}
+
+/** Builds the Responses body for one buffered image; the user input carries text and PNG content. */
+function responsesImageBody(request: ImageTextGenerationRequest): Record<string, unknown> {
+  const body: Record<string, unknown> = {
+    model: requireModelId({ kind: "model", modelId: request.modelId }),
+    input: [
+      {
+        role: "user",
+        content: [
+          { type: "input_text", text: request.user },
+          { type: "input_image", image_url: imageDataUrl(request.image) },
+        ],
+      },
+    ],
+    stream: false,
+  };
+  if (request.system.trim().length > 0) {
+    body.instructions = request.system;
   }
   return body;
 }
@@ -118,6 +142,24 @@ export const openAIResponsesProtocol: ProtocolDefinition = {
       timeoutMs: context.timeoutMs,
       redirect: "error",
     });
+    return extractResponsesText(payload);
+  },
+
+  async generateTextFromImage(
+    connection: ProtocolConnection,
+    request: ImageTextGenerationRequest,
+    context: ProtocolContext,
+  ): Promise<string> {
+    const target = openAIResponsesProtocol.resolveTarget(connection, {
+      kind: "model",
+      modelId: request.modelId,
+    });
+    const payload = await context.http.postJson(target, responsesImageBody(request), {
+      signal: context.signal,
+      timeoutMs: context.timeoutMs,
+      redirect: "error",
+    });
+    requireCompleteOutput(payload.status === "incomplete");
     return extractResponsesText(payload);
   },
 

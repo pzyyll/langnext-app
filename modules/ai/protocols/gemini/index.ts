@@ -2,6 +2,7 @@ import { t } from "nsh/i18n";
 import { ProviderProtocolError } from "../../contracts/errors";
 import type { RemoteModelRecord } from "../../contracts/model";
 import type {
+  ImageTextGenerationRequest,
   ProtocolConnection,
   ProtocolContext,
   ProtocolDefinition,
@@ -16,6 +17,7 @@ import {
   normalizeCredential,
   normalizeRequestRoot,
   parseEventPayload,
+  requireCompleteOutput,
   requireGeneratedText,
   requireModelId,
 } from "../shared";
@@ -136,6 +138,25 @@ function geminiBody(request: TextGenerationRequest): Record<string, unknown> {
   return body;
 }
 
+/** Builds the Gemini body for one buffered image; the image part follows the instruction text. */
+function geminiImageBody(request: ImageTextGenerationRequest): Record<string, unknown> {
+  const body: Record<string, unknown> = {
+    contents: [
+      {
+        role: "user",
+        parts: [
+          { text: request.user },
+          { inlineData: { mimeType: request.image.mimeType, data: request.image.base64 } },
+        ],
+      },
+    ],
+  };
+  if (request.system.trim().length > 0) {
+    body.systemInstruction = { parts: [{ text: request.system }] };
+  }
+  return body;
+}
+
 /** Gemini API wire protocol, including page-token pagination and encoded model IDs. */
 export const geminiProtocol: ProtocolDefinition = {
   id: "gemini",
@@ -212,6 +233,30 @@ export const geminiProtocol: ProtocolDefinition = {
     if (!Array.isArray(payload.candidates)) {
       throw new ProviderProtocolError("invalid_response", t("protocol.error.missingGeneratedText"));
     }
+    return requireGeneratedText(geminiTextParts(payload));
+  },
+
+  async generateTextFromImage(
+    connection: ProtocolConnection,
+    request: ImageTextGenerationRequest,
+    context: ProtocolContext,
+  ): Promise<string> {
+    const target = geminiProtocol.resolveTarget(connection, {
+      kind: "model",
+      modelId: request.modelId,
+    });
+    const payload = await context.http.postJson(target, geminiImageBody(request), {
+      signal: context.signal,
+      timeoutMs: context.timeoutMs,
+      redirect: "error",
+    });
+    if (!Array.isArray(payload.candidates)) {
+      throw new ProviderProtocolError("invalid_response", t("protocol.error.missingGeneratedText"));
+    }
+    const firstCandidate = payload.candidates[0];
+    requireCompleteOutput(
+      isPlainObject(firstCandidate) && firstCandidate.finishReason === "MAX_TOKENS",
+    );
     return requireGeneratedText(geminiTextParts(payload));
   },
 

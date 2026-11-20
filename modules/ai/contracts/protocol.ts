@@ -25,6 +25,20 @@ export interface TextGenerationRequest {
   disableReasoning?: boolean;
 }
 
+/** Buffered image attached to one vision request. */
+export interface ImageInput {
+  mimeType: "image/png";
+  base64: string;
+}
+
+/** Image-to-text request executed by a protocol that reads images. */
+export interface ImageTextGenerationRequest {
+  modelId: string;
+  system: string;
+  user: string;
+  image: ImageInput;
+}
+
 /** Resolved HTTP method, URL, and headers for one protocol operation. */
 export interface ResolvedRequestTarget {
   method: "GET" | "POST";
@@ -91,6 +105,15 @@ export interface ProtocolDefinition {
   generateText?(
     connection: ProtocolConnection,
     request: TextGenerationRequest,
+    context: ProtocolContext,
+  ): Promise<string>;
+  /**
+   * Sends one buffered image and resolves with the answer text. Absent when the wire API cannot
+   * read images, so callers can reject the protocol before any request.
+   */
+  generateTextFromImage?(
+    connection: ProtocolConnection,
+    request: ImageTextGenerationRequest,
     context: ProtocolContext,
   ): Promise<string>;
   /**

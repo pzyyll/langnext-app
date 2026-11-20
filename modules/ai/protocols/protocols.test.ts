@@ -5,6 +5,9 @@ import { anthropicProtocol } from "./anthropic";
 import { geminiProtocol } from "./gemini";
 import { openAIChatProtocol } from "./openai-chat";
 import { openAIResponsesProtocol } from "./openai-responses";
+import type { ProtocolDefinition } from "../contracts/protocol";
+import { createAiClient } from "../runtime/client";
+import { createAiRegistry } from "../runtime/registry";
 
 interface RequestLog {
   url: string;
@@ -791,5 +794,307 @@ test("text generation: rejects missing or blank text output as invalid_response"
     await expect(
       item.protocol.generateText!(connection, { modelId: "m-1", system: "s", user: "u" }, { http }),
     ).rejects.toMatchObject({ kind: "invalid_response" });
+  }
+});
+
+/** Smallest valid PNG payload; the protocols treat the bytes as opaque. */
+const PNG_BASE64 =
+  "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8DwHwAFAAH/q842iQAAAABJRU5ErkJggg==";
+const PNG_IMAGE = { mimeType: "image/png" as const, base64: PNG_BASE64 };
+const PNG_DATA_URL = `data:image/png;base64,${PNG_BASE64}`;
+const IMAGE_ANSWER = "first line\n第二行";
+
+test("protocol image input: the client sends a PNG through the Responses adapter", async () => {
+  const log: RequestLog[] = [];
+  const registry = createAiRegistry();
+  registry.registerProtocol(openAIResponsesProtocol);
+  registry.registerProvider({
+    id: "example:vision",
+    labelKey: "models.preset.custom",
+    allowedProtocolIds: ["openai-responses"],
+    defaultProtocolId: "openai-responses",
+    defaultBaseUrl: "https://gateway.example.com/ai/v1",
+    catalogProviderId: null,
+  });
+  const client = createAiClient({
+    registry,
+    http: createJsonHttpClient({
+      fetchImpl: fixedFetch(
+        {
+          output: [
+            {
+              type: "message",
+              role: "assistant",
+              content: [{ type: "output_text", text: IMAGE_ANSWER }],
+            },
+          ],
+        },
+        log,
+      ),
+    }),
+  });
+
+  const text = await client.generateTextFromImage(
+    {
+      providerTypeId: "example:vision",
+      protocolId: "openai-responses",
+      baseUrl: "https://gateway.example.com/ai/v1",
+      credential: "sk-dummy",
+    },
+    {
+      modelId: "gpt-4.1",
+      system: "Transcribe.",
+      user: "Read the text in this image.",
+      image: PNG_IMAGE,
+    },
+  );
+
+  expect(text).toBe(IMAGE_ANSWER);
+  expect(log).toHaveLength(1);
+  expect(log[0]!.method).toBe("POST");
+  expect(log[0]!.url).toBe("https://gateway.example.com/ai/v1/responses");
+  expect(log[0]!.headers.Authorization).toBe("Bearer sk-dummy");
+  expect(log[0]!.redirect).toBe("error");
+  expect(JSON.parse(log[0]!.body!)).toEqual({
+    model: "gpt-4.1",
+    instructions: "Transcribe.",
+    input: [
+      {
+        role: "user",
+        content: [
+          { type: "input_text", text: "Read the text in this image." },
+          { type: "input_image", image_url: PNG_DATA_URL },
+        ],
+      },
+    ],
+    stream: false,
+  });
+});
+
+test("protocol image input: Chat sends a text part and an image_url part", async () => {
+  const log: RequestLog[] = [];
+  const http = createJsonHttpClient({
+    fetchImpl: fixedFetch(
+      { choices: [{ message: { content: "第一行" }, finish_reason: "stop" }] },
+      log,
+    ),
+  });
+
+  const text = await openAIChatProtocol.generateTextFromImage!(
+    { baseUrl: "https://proxy.example.com/ai/v1", credential: "sk-dummy" },
+    {
+      modelId: "gpt-4.1",
+      system: "Transcribe.",
+      user: "Read the text in this image.",
+      image: PNG_IMAGE,
+    },
+    { http },
+  );
+
+  expect(text).toBe("第一行");
+  expect(log).toHaveLength(1);
+  expect(log[0]!.url).toBe("https://proxy.example.com/ai/v1/chat/completions");
+  expect(log[0]!.headers.Authorization).toBe("Bearer sk-dummy");
+  expect(log[0]!.redirect).toBe("error");
+  expect(JSON.parse(log[0]!.body!)).toEqual({
+    model: "gpt-4.1",
+    messages: [
+      { role: "system", content: "Transcribe." },
+      {
+        role: "user",
+        content: [
+          { type: "text", text: "Read the text in this image." },
+          { type: "image_url", image_url: { url: PNG_DATA_URL } },
+        ],
+      },
+    ],
+    stream: false,
+  });
+});
+
+test("protocol image input: Messages sends a base64 image block", async () => {
+  const log: RequestLog[] = [];
+  const http = createJsonHttpClient({
+    fetchImpl: fixedFetch(
+      {
+        stop_reason: "end_turn",
+        content: [
+          { type: "thinking", thinking: "hidden" },
+          { type: "text", text: "第二行" },
+        ],
+      },
+      log,
+    ),
+  });
+
+  const text = await anthropicProtocol.generateTextFromImage!(
+    { baseUrl: "https://proxy.example.com/claude", credential: "sk-ant-dummy" },
+    {
+      modelId: "claude-sonnet-4",
+      system: "",
+      user: "Read the text in this image.",
+      image: PNG_IMAGE,
+    },
+    { http },
+  );
+
+  expect(text).toBe("第二行");
+  expect(log).toHaveLength(1);
+  expect(log[0]!.url).toBe("https://proxy.example.com/claude/v1/messages");
+  expect(log[0]!.headers["x-api-key"]).toBe("sk-ant-dummy");
+  expect(log[0]!.redirect).toBe("error");
+  expect(JSON.parse(log[0]!.body!)).toEqual({
+    model: "claude-sonnet-4",
+    messages: [
+      {
+        role: "user",
+        content: [
+          { type: "text", text: "Read the text in this image." },
+          {
+            type: "image",
+            source: { type: "base64", media_type: "image/png", data: PNG_BASE64 },
+          },
+        ],
+      },
+    ],
+    max_tokens: 1024,
+    stream: false,
+  });
+});
+
+test("protocol image input: Gemini sends inlineData parts", async () => {
+  const log: RequestLog[] = [];
+  const http = createJsonHttpClient({
+    fetchImpl: fixedFetch(
+      {
+        candidates: [
+          {
+            finishReason: "STOP",
+            content: { parts: [{ thought: true, text: "hidden" }, { text: "第一行" }] },
+          },
+        ],
+      },
+      log,
+    ),
+  });
+
+  const text = await geminiProtocol.generateTextFromImage!(
+    { baseUrl: "https://proxy.example.com/gemini", credential: "AIza-dummy" },
+    {
+      modelId: "gemini-2.5-flash",
+      system: "Transcribe.",
+      user: "Read the text in this image.",
+      image: PNG_IMAGE,
+    },
+    { http },
+  );
+
+  expect(text).toBe("第一行");
+  expect(log).toHaveLength(1);
+  expect(log[0]!.url).toBe(
+    "https://proxy.example.com/gemini/v1beta/models/gemini-2.5-flash:generateContent?key=AIza-dummy",
+  );
+  expect(log[0]!.redirect).toBe("error");
+  expect(JSON.parse(log[0]!.body!)).toEqual({
+    systemInstruction: { parts: [{ text: "Transcribe." }] },
+    contents: [
+      {
+        role: "user",
+        parts: [
+          { text: "Read the text in this image." },
+          { inlineData: { mimeType: "image/png", data: PNG_BASE64 } },
+        ],
+      },
+    ],
+  });
+});
+
+test("protocol image input: rejects a protocol without image support before any request", async () => {
+  const log: RequestLog[] = [];
+  const textOnlyProtocol: ProtocolDefinition = {
+    id: "text-only",
+    labelKey: "ai.protocol.openaiChat",
+    resolveTarget: () => ({
+      method: "POST",
+      url: "https://text-only.test/generate",
+      headers: {},
+    }),
+    listModels: async () => [],
+    generateText: async () => "text",
+  };
+  const registry = createAiRegistry();
+  registry.registerProtocol(textOnlyProtocol);
+  registry.registerProvider({
+    id: "example:text",
+    labelKey: "models.preset.custom",
+    allowedProtocolIds: ["text-only"],
+    defaultProtocolId: "text-only",
+    defaultBaseUrl: "https://text-only.test",
+    catalogProviderId: null,
+  });
+  const client = createAiClient({
+    registry,
+    http: createJsonHttpClient({ fetchImpl: fixedFetch({}, log) }),
+  });
+
+  await expect(
+    client.generateTextFromImage(
+      {
+        providerTypeId: "example:text",
+        protocolId: "text-only",
+        baseUrl: "https://text-only.test",
+        credential: null,
+      },
+      { modelId: "m-1", system: "", user: "u", image: PNG_IMAGE },
+    ),
+  ).rejects.toMatchObject({
+    kind: "invalid_request",
+    message: t("models.error.unsupportedProtocol"),
+  });
+  expect(log).toHaveLength(0);
+});
+
+test("protocol image input: rejects output the provider marks as truncated", async () => {
+  const connection = {
+    baseUrl: "https://proxy.example.com/v1",
+    credential: "sk-dummy",
+  };
+  const request = { modelId: "m-1", system: "", user: "u", image: PNG_IMAGE };
+  const cases = [
+    {
+      protocol: openAIChatProtocol,
+      body: { choices: [{ message: { content: "partial" }, finish_reason: "length" }] },
+    },
+    {
+      protocol: openAIResponsesProtocol,
+      body: {
+        status: "incomplete",
+        output: [{ type: "message", content: [{ type: "output_text", text: "partial" }] }],
+      },
+    },
+    {
+      protocol: anthropicProtocol,
+      body: {
+        stop_reason: "max_tokens",
+        content: [{ type: "text", text: "partial" }],
+      },
+    },
+    {
+      protocol: geminiProtocol,
+      body: {
+        candidates: [
+          { finishReason: "MAX_TOKENS", content: { parts: [{ text: "partial" }] } },
+        ],
+      },
+    },
+  ];
+
+  for (const item of cases) {
+    const http = createJsonHttpClient({ fetchImpl: fixedFetch(item.body) });
+    await expect(item.protocol.generateTextFromImage!(connection, request, { http })).rejects
+      .toMatchObject({
+        kind: "invalid_response",
+        message: t("protocol.error.outputTruncated"),
+      });
   }
 });

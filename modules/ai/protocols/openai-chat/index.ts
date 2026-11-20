@@ -1,6 +1,7 @@
 import { t } from "nsh/i18n";
 import { ProviderProtocolError } from "../../contracts/errors";
 import type {
+  ImageTextGenerationRequest,
   ProtocolConnection,
   ProtocolContext,
   ProtocolDefinition,
@@ -16,9 +17,11 @@ import {
   withBearer,
 } from "../openai-common";
 import {
+  imageDataUrl,
   isPlainObject,
   normalizeRequestRoot,
   parseEventPayload,
+  requireCompleteOutput,
   requireGeneratedText,
   requireModelId,
 } from "../shared";
@@ -83,6 +86,27 @@ function chatBody(request: TextGenerationRequest, stream: boolean): Record<strin
   return body;
 }
 
+/** Builds the Chat body for one buffered image; the user message carries the text and the PNG. */
+function chatImageBody(request: ImageTextGenerationRequest): Record<string, unknown> {
+  const messages: Array<Record<string, unknown>> = [];
+  if (request.system.trim().length > 0) {
+    messages.push({ role: "system", content: request.system });
+  }
+  messages.push({
+    role: "user",
+    content: [
+      { type: "text", text: request.user },
+      { type: "image_url", image_url: { url: imageDataUrl(request.image) } },
+    ],
+  });
+
+  return {
+    model: requireModelId({ kind: "model", modelId: request.modelId }),
+    messages,
+    stream: false,
+  };
+}
+
 /**
  * OpenAI Chat Completions wire API. It knows no provider brand: the host resolves
  * the root and credential before calling it.
@@ -132,6 +156,25 @@ export const openAIChatProtocol: ProtocolDefinition = {
       timeoutMs: context.timeoutMs,
       redirect: "error",
     });
+    return extractChatText(payload);
+  },
+
+  async generateTextFromImage(
+    connection: ProtocolConnection,
+    request: ImageTextGenerationRequest,
+    context: ProtocolContext,
+  ): Promise<string> {
+    const target = openAIChatProtocol.resolveTarget(connection, {
+      kind: "model",
+      modelId: request.modelId,
+    });
+    const payload = await context.http.postJson(target, chatImageBody(request), {
+      signal: context.signal,
+      timeoutMs: context.timeoutMs,
+      redirect: "error",
+    });
+    const firstChoice = Array.isArray(payload.choices) ? payload.choices[0] : undefined;
+    requireCompleteOutput(isPlainObject(firstChoice) && firstChoice.finish_reason === "length");
     return extractChatText(payload);
   },
 

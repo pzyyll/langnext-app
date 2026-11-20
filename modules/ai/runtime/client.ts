@@ -4,6 +4,7 @@ import type { ProviderTypeId } from "../contracts/channel";
 import { ProviderProtocolError } from "../contracts/errors";
 import type { DiscoveredRemoteModel, ModelFacts } from "../contracts/model";
 import type {
+  ImageTextGenerationRequest,
   JsonHttpClient,
   ProtocolConnection,
   ProtocolContext,
@@ -60,6 +61,15 @@ export interface AiClient {
   generateText(
     input: AiClientInput,
     request: TextGenerationRequest,
+    options?: AiClientCallOptions,
+  ): Promise<string>;
+  /**
+   * Sends one buffered image and resolves with the answer text. A protocol that cannot read
+   * images is rejected before any request.
+   */
+  generateTextFromImage(
+    input: AiClientInput,
+    request: ImageTextGenerationRequest,
     options?: AiClientCallOptions,
   ): Promise<string>;
   /** Streams one generation, reports progress through `options.onText`, and resolves with the full text. */
@@ -241,8 +251,22 @@ export function createAiClient(options: AiClientOptions): AiClient {
       );
     },
 
-    async streamText(input, request, callOptions) {
+    async generateTextFromImage(input, request, callOptions = {}) {
       const resolved = resolveOperation(registry, input, {
+        kind: "model",
+        modelId: request.modelId,
+      });
+      if (!resolved.protocol.generateTextFromImage) {
+        throw unsupportedProtocol();
+      }
+      return resolved.protocol.generateTextFromImage(
+        resolved.connection,
+        request,
+        callContext(callOptions),
+      );
+    },
+
+    async streamText(input, request, callOptions) {      const resolved = resolveOperation(registry, input, {
         kind: "model",
         modelId: request.modelId,
       });

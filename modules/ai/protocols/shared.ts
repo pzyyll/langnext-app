@@ -1,6 +1,6 @@
 import { t } from "nsh/i18n";
 import { ProviderProtocolError } from "../contracts/errors";
-import type { RequestOperation } from "../contracts/protocol";
+import type { ImageInput, RequestOperation } from "../contracts/protocol";
 
 /** Trims a resolved connection root and any trailing slashes it still carries. */
 export function normalizeRequestRoot(baseUrl: string): string {
@@ -49,4 +49,19 @@ export function requireGeneratedText(parts: readonly string[]): string {
     throw new ProviderProtocolError("invalid_response", t("protocol.error.missingGeneratedText"));
   }
   return combined;
+}
+
+/** Builds the `data:` URL a provider accepts for one buffered image part. */
+export function imageDataUrl(image: ImageInput): string {
+  return `data:${image.mimeType};base64,${image.base64}`;
+}
+
+/**
+ * Rejects an answer the provider stopped early, so a caller never imports partial text as a
+ * complete transcription.
+ */
+export function requireCompleteOutput(truncated: boolean): void {
+  if (truncated) {
+    throw new ProviderProtocolError("invalid_response", t("protocol.error.outputTruncated"));
+  }
 }
