@@ -62,6 +62,14 @@ settings:
     description: When enabled on Windows, reads clipboard text after two quick Ctrl+C presses. If automatic translation is on in Quick Translate, it sends that text to the selected service.
     enableError: Could not start the Windows double-copy listener. The listener stays off.
     saveError: Could not save the double-copy setting. Check storage and try again.
+  ocr:
+    title: OCR
+    error:
+      storageReadFailed: Could not read the saved OCR settings.
+      storageMalformed: The saved OCR settings are unreadable.
+      storageUnsupportedVersion: The saved OCR settings use an unsupported version.
+      storageWriteFailed: Could not save the OCR settings. Check storage and try again.
+      modelIdBlank: Choose a model for OCR.
   languageDetection:
     title: Language Detection
     detection: Detection
