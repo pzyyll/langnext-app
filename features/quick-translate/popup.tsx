@@ -14,6 +14,7 @@ import { Card } from "../../components/ui/card";
 import { Icon } from "../../components/ui/icon";
 import { Menu, MenuItem } from "../../components/ui/menu";
 import { Select, type SelectItem } from "../../components/ui/select";
+import { LARGEST_FONT_STEP } from "../../components/ui/font-step";
 import { Textarea } from "../../components/ui/textarea";
 import { getLanguageLabel } from "../presets/languages";
 import type { TranslationPreset } from "../presets/types";
@@ -353,6 +354,8 @@ export function QuickTranslatePopup(props: QuickTranslatePopupProps) {
   const sourceFirstLine = () => sourceText().split(/\r?\n/, 1)[0] ?? "";
   const sourceHasMultipleLines = () => /\r?\n/.test(sourceText());
   const sourceInputRef = signal<InputRef | null>(null);
+  // Survives the editor unmounting into the one-line preview, so expand does not flash the largest step.
+  const sourceFontStep = signal(LARGEST_FONT_STEP);
   const focusSourceAfterExpand = signal(false);
   let lastSourceDeliverySeq = props.session.sourceDeliverySeq();
 
@@ -492,6 +495,11 @@ export function QuickTranslatePopup(props: QuickTranslatePopupProps) {
             variant="card"
             autoFocus
             submitBehavior="submit"
+            fontScale="stepped"
+            initialFontStep={sourceFontStep()}
+            onFontStep={(step) => {
+              if (sourceFontStep() !== step) sourceFontStep.set(step);
+            }}
             value={sourceText()}
             placeholder={t("quickTranslate.sourcePlaceholder")}
             accessibilityLabel={t("quickTranslate.sourceLabel")}
