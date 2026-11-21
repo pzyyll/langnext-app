@@ -630,7 +630,7 @@ Quick Translate runs inside a separate floating NSH window (`id="quick-translate
 
 ### Windows selection acceptance
 
-Tested My Translator 0.1.0 at `5cb0c2d`. These results apply to the tested surfaces, not to all pages or app versions.
+Tested My Translator 0.1.0 at `5cb0c2d`. Repeated the core selection and screenshot checks at `eaf0e99`. These results apply to the tested surfaces, not to all pages or app versions.
 
 | App version | Surface | Result with `Alt+D` |
 | --- | --- | --- |
@@ -642,10 +642,27 @@ Tested My Translator 0.1.0 at `5cb0c2d`. These results apply to the tested surfa
 | Adobe Acrobat DC 21.001.20155 | PDF text | Same as the X page. |
 | Windows Terminal 1.25.261109001 | Terminal output | Same as the X page. |
 
-- **Live checks**: Notepad and Chrome translated with both Auto-translate and double-copy off. A fast focus change did not open a stale popup. Holding the shortcut did not repeat the translation. Pin state and clipboard contents did not change. The tray opened Quick Translate. Clearing `Alt+D` restored address-bar focus in Edge 157.0.4341.60 and File Explorer.
+- **Live checks**: Notepad and Chrome translated with both Auto-translate and double-copy off. In separate Windows tests with a local HTTP fixture, Notepad and the Chrome test page each sent one request with the full selection. For each app, the foreground probe recorded a run with no intervening foreground window before Quick Translate appeared. The popup opened about 15 physical pixels from the pointer on each axis. Some other probe runs could not identify the first foreground window, even though translation completed. A fast focus change did not open a stale popup. Holding the shortcut did not repeat the translation. Pin state and clipboard contents did not change. The tray opened Quick Translate. Clearing `Alt+D` restored address-bar focus in Edge 157.0.4341.60 and File Explorer.
 - **Windows settings**: Inspected four combinations of light, dark, `en`, and `zh-CN` at `1040 × 720` and `720 × 520` points. No label clipping was visible. Hover feedback and keyboard focus were visible. Recording and Escape worked, including at the compact size with reduced motion. The native shortcut test also covered saving, clearing, and resetting.
-- **Automated checks**: `mise run verify` passed (436 passed, 6 skipped; build succeeded). The four interactive UI Automation tests passed, including the caret and password cases. Double-copy passed its headless and Win32 worker checks. Screenshot Translate passed its headless and native overlay checks; no live OCR provider request was sent.
-- **Desktop suite**: Native cursor and shortcut tests passed. `mise run test-desktop` stopped at `App.test.tsx` (3 passed, 16 failed). The baseline `ffe4677` reproduced the same failures. With English set in an isolated test fixture, 18 of 19 cases passed. The remaining assertion still found the page after the window reported that it was hidden. This does not count as a passing desktop run.
+- **Automated checks at `eaf0e99`**: `mise run verify` passed (437 passed, 6 skipped; build succeeded). The four interactive UI Automation tests passed. Double-copy passed its headless and Win32 worker checks. Screenshot Translate passed its headless, native overlay, and Windows end-to-end checks. The last check used the global `Alt+Shift+S` shortcut, confirmed a crop in the real overlay, sent one PNG to a local OCR fixture, and displayed the translated result. No external provider received the crop.
+- **Desktop suite**: Native cursor and shortcut tests passed. `mise run test-desktop` stopped at `App.test.tsx` (3 passed, 16 failed), so later files did not run. The pre-selection baseline `ffe4677` reproduced the same failures. With English set in an isolated test fixture, 18 of 19 cases passed. The remaining assertion still found the page after the window reported that it was hidden. This does not count as a passing desktop run.
+
+The development transcript has these red and green results. Times are UTC on 2026-11-21.
+
+| Case | First relevant failure | Passing run |
+| --- | --- | --- |
+| Native selected range | 11:37:55 — Expected `Selected`, got `Unavailable`. | 11:45:44 |
+| Selection shortcut to translation | 11:51:57 — The test timed out waiting for the read to start. | 11:54:41 |
+| Close during read | 11:58:32 — The result reopened the popup. | 11:59:06 |
+| Changed draft or target | 11:59:43 — The result opened the popup after an edit. | 12:00:07 |
+| Overlapping reads | 12:03:01 — Three reads started instead of one. | 12:05:39 |
+| Empty or failed read | 12:07:30 — A current empty result did not open the popup. | 12:07:44 |
+| OCR region overlay | 12:12:06 — A selection read started while the overlay was active. | 12:12:32 |
+| OCR recognition | 12:13:58 — Recognition stayed busy after selection delivery. | 12:15:37 |
+| Shortcut conflict and replacement | 12:19:14 — Existing shortcut priority passed; the rejected replacement test timed out waiting for its alert. | 12:26:09 |
+| Native `stale` with matching window handles | 14:02:30 — The result opened a closed popup and focused an open one. | 14:02:48 |
+
+The transcript has passing results for the native caret, password, and lost-foreground cases at 11:47:30. It does not show a separate red run for each of these three cases.
 
 ### Temporary Windows line-height workaround
 
