@@ -9,12 +9,13 @@ use std::sync::{Arc, Mutex};
 use nsh_core::prelude::*;
 use windows_sys::Win32::Foundation::{HWND, LPARAM, LRESULT, RECT, WPARAM};
 use windows_sys::Win32::Graphics::Gdi::{
-    BI_RGB, BITMAPINFO, BITMAPINFOHEADER, BeginPaint, BitBlt, CreateCompatibleDC, CreateDIBSection,
-    CreatePen, CreateSolidBrush, DEFAULT_GUI_FONT, DIB_RGB_COLORS, DT_CENTER, DT_NOPREFIX,
-    DT_SINGLELINE, DT_VCENTER, DeleteDC, DeleteObject, DrawTextW, EndPaint, EnumDisplayMonitors,
-    FillRect, GetDC, GetMonitorInfoW, GetStockObject, HDC, HGDIOBJ, HMONITOR, HOLLOW_BRUSH,
-    InvalidateRect, LineTo, MONITORINFO, MONITORINFOEXW, MoveToEx, PAINTSTRUCT, PS_DOT, PS_SOLID,
-    Rectangle, ReleaseDC, SRCCOPY, SelectObject, SetBkMode, SetTextColor,
+    AC_SRC_OVER, BI_RGB, BITMAPINFO, BITMAPINFOHEADER, BLACK_BRUSH, BLENDFUNCTION, BeginPaint,
+    BitBlt, CreateCompatibleDC, CreateDIBSection, CreatePen, CreateSolidBrush, DEFAULT_GUI_FONT,
+    DIB_RGB_COLORS, DT_CENTER, DT_NOPREFIX, DT_SINGLELINE, DT_VCENTER, DeleteDC, DeleteObject,
+    DrawTextW, EndPaint, EnumDisplayMonitors, ExcludeClipRect, FillRect, FrameRect, GdiAlphaBlend,
+    GetDC, GetMonitorInfoW, GetStockObject, HDC, HGDIOBJ, HMONITOR, InvalidateRect, LineTo,
+    MONITORINFO, MONITORINFOEXW, MoveToEx, PAINTSTRUCT, PS_DOT, ReleaseDC, RestoreDC, SRCCOPY,
+    SaveDC, SelectObject, SetBkMode, SetTextColor, WHITE_BRUSH,
 };
 use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows_sys::Win32::System::Threading::GetCurrentThreadId;
@@ -45,6 +46,9 @@ const CAPTION_HEIGHT: i32 = 56;
 const CAPTION_INSET: i32 = 24;
 const CAPTION_MAX_WIDTH: i32 = 760;
 const CAPTION_MIN_WIDTH: i32 = 240;
+
+/// The black preview mask uses 40% opacity, independent of the app theme.
+const MASK_ALPHA: u8 = 102;
 
 /// Request posted to the capture worker's queue when TSX cancels the session.
 const WM_APP_CANCEL: u32 = WM_APP + 1;
@@ -144,19 +148,42 @@ struct Snapshot {
 impl Snapshot {
     /// Copies one display's pixels into memory; `None` when Windows refuses the capture.
     fn capture(rect: MonitorRect) -> Option<Self> {
-        let width = rect.right - rect.left;
-        let height = rect.bottom - rect.top;
-        if width <= 0 || height <= 0 {
-            return None;
-        }
-
-        // SAFETY: every handle created here is either owned by the result or released below.
+        // SAFETY: the screen DC is released before returning, even when the copy fails.
         unsafe {
             let screen = GetDC(ptr::null_mut());
             if screen.is_null() {
                 return None;
             }
-            let dc = CreateCompatibleDC(screen);
+            let result = Self::new(screen, rect.right - rect.left, rect.bottom - rect.top).filter(
+                |snapshot| {
+                    BitBlt(
+                        snapshot.dc,
+                        0,
+                        0,
+                        snapshot.width,
+                        snapshot.height,
+                        screen,
+                        rect.left,
+                        rect.top,
+                        SRCCOPY,
+                    ) != 0
+                },
+            );
+            ReleaseDC(ptr::null_mut(), screen);
+            result
+        }
+    }
+
+    fn new(reference: HDC, width: i32, height: i32) -> Option<Self> {
+        if width <= 0 || height <= 0 {
+            return None;
+        }
+        // SAFETY: every handle created here is either owned by the result or released below.
+        unsafe {
+            let dc = CreateCompatibleDC(reference);
+            if dc.is_null() {
+                return None;
+            }
             let mut info: BITMAPINFO = std::mem::zeroed();
             info.bmiHeader = BITMAPINFOHEADER {
                 biSize: size_of::<BITMAPINFOHEADER>() as u32,
@@ -172,17 +199,18 @@ impl Snapshot {
                 biClrImportant: 0,
             };
             let mut bits: *mut c_void = ptr::null_mut();
-            let bitmap =
-                CreateDIBSection(screen, &info, DIB_RGB_COLORS, &mut bits, ptr::null_mut(), 0);
-
-            let mut snapshot = None;
-            if !dc.is_null() && !bitmap.is_null() && !bits.is_null() {
+            let bitmap = CreateDIBSection(
+                reference,
+                &info,
+                DIB_RGB_COLORS,
+                &mut bits,
+                ptr::null_mut(),
+                0,
+            );
+            if !bitmap.is_null() && !bits.is_null() {
                 let previous = SelectObject(dc, bitmap);
-                let copied = BitBlt(
-                    dc, 0, 0, width, height, screen, rect.left, rect.top, SRCCOPY,
-                );
-                if copied != 0 {
-                    snapshot = Some(Self {
+                if !previous.is_null() {
+                    return Some(Self {
                         dc,
                         bitmap,
                         previous,
@@ -190,21 +218,13 @@ impl Snapshot {
                         width,
                         height,
                     });
-                } else {
-                    SelectObject(dc, previous);
                 }
             }
-            ReleaseDC(ptr::null_mut(), screen);
-
-            if snapshot.is_none() {
-                if !bitmap.is_null() {
-                    DeleteObject(bitmap);
-                }
-                if !dc.is_null() {
-                    DeleteDC(dc);
-                }
+            if !bitmap.is_null() {
+                DeleteObject(bitmap);
             }
-            snapshot
+            DeleteDC(dc);
+            None
         }
     }
 }
@@ -241,6 +261,7 @@ impl Drop for CaptureWindow {
 /// Everything one selection session holds while its message loop runs.
 struct CaptureState {
     displays: Vec<CaptureWindow>,
+    mask: Snapshot,
     caption: Vec<u16>,
     accent: u32,
     text: u32,
@@ -449,7 +470,6 @@ fn paint(hwnd: HWND, state: &CaptureState) {
     };
     let display = &state.displays[index];
     let width = display.rect.right - display.rect.left;
-    let height = display.rect.bottom - display.rect.top;
 
     let mut paint = MaybeUninit::<PAINTSTRUCT>::zeroed();
     // SAFETY: `paint` is a stack-allocated out-parameter for this window's paint cycle.
@@ -460,15 +480,8 @@ fn paint(hwnd: HWND, state: &CaptureState) {
 
     // SAFETY: every GDI object is selected back and deleted inside the call.
     unsafe {
-        BitBlt(hdc, 0, 0, width, height, display.snapshot.dc, 0, 0, SRCCOPY);
-
-        if let Some(crop) = resolve_capture_rect(
-            std::slice::from_ref(&display.rect),
-            state.anchor.unwrap_or(DesktopPoint { x: 0, y: 0 }),
-            state.cursor.unwrap_or(DesktopPoint { x: 0, y: 0 }),
-        ) {
-            draw_selection(hdc, state.accent, crop);
-        }
+        let crop = resolve_selection(state).filter(|crop| crop.monitor == index);
+        paint_preview(hdc, &display.snapshot, &state.mask, crop);
 
         if state.keyboard
             && let Some(cursor) = state.cursor
@@ -485,39 +498,67 @@ fn paint(hwnd: HWND, state: &CaptureState) {
     }
 }
 
-/// Draws a two-stroke selection frame, so the edge reads without relying on color.
-fn draw_selection(hdc: HDC, accent: u32, crop: CaptureCrop) {
-    let rect = RECT {
+/// Blends the mask into the preview DC only. The original snapshot stays ready for PNG encoding.
+fn paint_preview(hdc: HDC, snapshot: &Snapshot, mask: &Snapshot, crop: Option<CaptureCrop>) {
+    let selection = crop.map(|crop| RECT {
         left: crop.x,
         top: crop.y,
         right: crop.x + crop.width,
         bottom: crop.y + crop.height,
-    };
-    // SAFETY: pens are selected back and deleted; the hollow brush is a shared stock object.
+    });
+    // SAFETY: all DCs are live. Restore the paint clip before drawing the frame and caption.
     unsafe {
-        let accent_pen = CreatePen(PS_SOLID, 2, accent);
-        let previous_pen = SelectObject(hdc, accent_pen);
-        let previous_brush = SelectObject(hdc, GetStockObject(HOLLOW_BRUSH));
-        Rectangle(hdc, rect.left, rect.top, rect.right, rect.bottom);
-
-        if crop.width > 6 && crop.height > 6 {
-            let inner_pen = CreatePen(PS_SOLID, 1, 0x00ff_ffff);
-            SelectObject(hdc, inner_pen);
-            Rectangle(
-                hdc,
-                rect.left + 3,
-                rect.top + 3,
-                rect.right - 3,
-                rect.bottom - 3,
-            );
-            SelectObject(hdc, previous_pen);
-            DeleteObject(inner_pen);
-        } else {
-            SelectObject(hdc, previous_pen);
+        BitBlt(
+            hdc,
+            0,
+            0,
+            snapshot.width,
+            snapshot.height,
+            snapshot.dc,
+            0,
+            0,
+            SRCCOPY,
+        );
+        let saved = SaveDC(hdc);
+        if saved != 0 {
+            if selection.as_ref().is_none_or(|rect| {
+                ExcludeClipRect(hdc, rect.left, rect.top, rect.right, rect.bottom) != 0
+            }) {
+                GdiAlphaBlend(
+                    hdc,
+                    0,
+                    0,
+                    snapshot.width,
+                    snapshot.height,
+                    mask.dc,
+                    0,
+                    0,
+                    mask.width,
+                    mask.height,
+                    BLENDFUNCTION {
+                        BlendOp: AC_SRC_OVER as u8,
+                        BlendFlags: 0,
+                        SourceConstantAlpha: MASK_ALPHA,
+                        AlphaFormat: 0,
+                    },
+                );
+            }
+            RestoreDC(hdc, saved);
         }
 
-        SelectObject(hdc, previous_brush);
-        DeleteObject(accent_pen);
+        if let Some(rect) = selection {
+            // Adjacent dark and light strokes remain distinct on any screenshot background.
+            FrameRect(hdc, &rect, GetStockObject(BLACK_BRUSH));
+            if rect.right - rect.left > 2 && rect.bottom - rect.top > 2 {
+                let inner = RECT {
+                    left: rect.left + 1,
+                    top: rect.top + 1,
+                    right: rect.right - 1,
+                    bottom: rect.bottom - 1,
+                };
+                FrameRect(hdc, &inner, GetStockObject(WHITE_BRUSH));
+            }
+        }
     }
 }
 
@@ -841,8 +882,15 @@ fn run_session(
         }
     }
 
+    let Some(mask) = Snapshot::new(displays[0].snapshot.dc, 1, 1) else {
+        return ScreenCaptureResult::failed();
+    };
+    // SAFETY: this new DIB owns one pixel and no GDI draw has used it yet.
+    unsafe { mask.pixels.write(0) };
+
     let mut state = CaptureState {
         displays,
+        mask,
         caption: overlay.caption.encode_utf16().collect(),
         accent: color_ref(&overlay.accent_color),
         text: color_ref(&overlay.text_color),
@@ -927,9 +975,42 @@ mod tests {
     use std::sync::mpsc;
     use std::thread;
     use std::time::{Duration, Instant};
+    use windows_sys::Win32::Graphics::Gdi::GetPixel;
     use windows_sys::Win32::UI::WindowsAndMessaging::{
         EnumThreadWindows, IsWindowVisible, PM_REMOVE, PeekMessageW,
     };
+
+    #[test]
+    fn preview_dims_only_unselected_pixels_and_keeps_the_crop_unmodified() {
+        let frame = Snapshot::new(ptr::null_mut(), 32, 32).unwrap();
+        let preview = Snapshot::new(frame.dc, 32, 32).unwrap();
+        let mask = Snapshot::new(frame.dc, 1, 1).unwrap();
+        let crop = CaptureCrop {
+            monitor: 0,
+            x: 8,
+            y: 8,
+            width: 16,
+            height: 16,
+        };
+        // SAFETY: the mask DIB has one pixel and has not been drawn into.
+        unsafe { mask.pixels.write(0) };
+        for (original, dim_range) in [(0x00ff_ffff, 152..=153), (0x0020_2020, 18..=19)] {
+            // SAFETY: the source DIB holds 32 × 32 pixels. GDI only reads it in `paint_preview`.
+            unsafe { std::slice::from_raw_parts_mut(frame.pixels, 32 * 32).fill(original) };
+            let pixel = |x, y| unsafe { GetPixel(preview.dc, x, y) };
+
+            paint_preview(preview.dc, &frame, &mask, Some(crop));
+            assert!(dim_range.contains(&(pixel(4, 4) & 0xff)));
+            assert_eq!(pixel(8, 16), 0);
+            assert_eq!(pixel(9, 16), 0x00ff_ffff);
+            assert_eq!(pixel(16, 16), original);
+            assert_eq!(unsafe { GetPixel(frame.dc, 8, 16) }, original);
+            assert_eq!(unsafe { GetPixel(frame.dc, 4, 4) }, original);
+
+            paint_preview(preview.dc, &frame, &mask, None);
+            assert_eq!(pixel(16, 16), pixel(4, 4));
+        }
+    }
 
     #[test]
     fn terminal_capture_keys_post_a_message_without_other_input() {
