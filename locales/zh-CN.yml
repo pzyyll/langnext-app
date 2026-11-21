@@ -95,11 +95,8 @@ settings:
     mode: 模式
     apiKey: API Key
     secretKey: Secret Key
-    privacy: 所选区域会发送给该模型。
-    privacyBaidu: 所选区域会发送给百度。
-    keepKeys: 两个输入框都留空会保留已保存的密钥。要更换密钥，请同时填写两项。
+    savedKeys: "•••••••••"
     keysUnreadable: 无法读取已保存的百度密钥。请同时填写两项。
-    switchToAi: 保存 AI OCR 会移除已保存的百度密钥。
     operation:
       general_basic: 标准版
       accurate_basic: 高精度版

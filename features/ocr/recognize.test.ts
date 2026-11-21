@@ -14,7 +14,14 @@ const PNG_BYTES = Uint8Array.from(Buffer.from(PNG_BASE64, "base64"));
 const VISION_MODEL_ID = "vision-model";
 
 function ocrBindingStorage(modelId: string): Record<string, string> {
-  return { [OCR_STORAGE_KEY]: JSON.stringify({ version: 1, kind: "ai", modelId }) };
+  return {
+    [OCR_STORAGE_KEY]: JSON.stringify({
+      version: 2,
+      active: "ai",
+      ai: { modelId },
+      baidu: null,
+    }),
+  };
 }
 
 /** Vision-capable reply: one JSON object with the two transcribed lines. */
@@ -406,10 +413,10 @@ const BAIDU_REF = "baidu-ref";
 function baiduBindingStorage(): Record<string, string> {
   return {
     [OCR_STORAGE_KEY]: JSON.stringify({
-      version: 1,
-      kind: "baidu",
-      operation: "accurate",
-      credentialRef: BAIDU_REF,
+      version: 2,
+      active: "baidu",
+      ai: null,
+      baidu: { operation: "accurate", credentialRef: BAIDU_REF },
     }),
     [baiduCredentialStorageKey(BAIDU_REF)]: JSON.stringify({
       apiKey: "synthetic-api-key",
@@ -524,10 +531,10 @@ test("ocr recognize: unreadable Baidu keys and a changed binding send nothing", 
   const broken = makeSeedStorage({
     extra: {
       [OCR_STORAGE_KEY]: JSON.stringify({
-        version: 1,
-        kind: "baidu",
-        operation: "accurate",
-        credentialRef: BAIDU_REF,
+        version: 2,
+        active: "baidu",
+        ai: null,
+        baidu: { operation: "accurate", credentialRef: BAIDU_REF },
       }),
       [baiduCredentialStorageKey(BAIDU_REF)]: JSON.stringify({ apiKey: 1 }),
     },

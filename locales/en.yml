@@ -95,11 +95,8 @@ settings:
     mode: Mode
     apiKey: API Key
     secretKey: Secret Key
-    privacy: The selected area is sent to this model.
-    privacyBaidu: The selected area is sent to Baidu.
-    keepKeys: Leave both fields blank to keep the saved keys. Enter both to replace them.
+    savedKeys: "•••••••••"
     keysUnreadable: The saved Baidu keys could not be read. Enter both keys.
-    switchToAi: Saving AI OCR removes the saved Baidu keys.
     operation:
       general_basic: General Basic
       accurate_basic: Accurate Basic

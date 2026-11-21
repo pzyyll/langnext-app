@@ -1222,7 +1222,7 @@ test("double copy: shell seam delivers copied text to a newly mounted popup, tra
 });
 
 const HARNESS_OCR_CAPTURE_KEY = "__test.qt.ocrCapture";
-const OCR_STORAGE_KEY = "settings.ocr.v1";
+const OCR_STORAGE_KEY = "settings.ocr.v2";
 const OCR_TEXT = "Screen line one\n第二行";
 const OCR_CAPTION = "Drag to select · Tab switches display · Space and Enter confirm · Esc cancels";
 const OCR_BUTTON = "id:quick-translate-header >> id:quick-translate-ocr";
@@ -1260,7 +1260,12 @@ function ocrSeed(extra: Record<string, string> = {}) {
     "quickTranslate.preferences.v1": popupPreferences({
       cards: [{ id: "card-1", presetId: "preset-1", templateId: null, collapsed: false }],
     }),
-    [OCR_STORAGE_KEY]: JSON.stringify({ version: 1, kind: "ai", modelId: "m-vision" }),
+    [OCR_STORAGE_KEY]: JSON.stringify({
+      version: 2,
+      active: "ai",
+      ai: { modelId: "m-vision" },
+      baidu: null,
+    }),
     ...extra,
   };
 }
@@ -1737,10 +1742,10 @@ const BAIDU_OCR_URL =
 function baiduOcrSeed(extra: Record<string, string> = {}) {
   return ocrSeed({
     [OCR_STORAGE_KEY]: JSON.stringify({
-      version: 1,
-      kind: "baidu",
-      operation: "accurate",
-      credentialRef: BAIDU_REF,
+      version: 2,
+      active: "baidu",
+      ai: null,
+      baidu: { operation: "accurate", credentialRef: BAIDU_REF },
     }),
     [baiduCredentialStorageKey(BAIDU_REF)]: JSON.stringify({
       apiKey: "synthetic-api-key",

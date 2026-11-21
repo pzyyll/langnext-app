@@ -1,4 +1,4 @@
-import { effect, signal, Text, View } from "nsh";
+import { effect, signal, Text, View, type InputRef } from "nsh";
 import { t } from "nsh/i18n";
 import { Button } from "../../components/ui/button";
 import { Card, SectionHeading } from "../../components/ui/card";
@@ -31,30 +31,36 @@ interface OcrSectionProps {
 
 type CredentialState = "unknown" | "readable" | "missing";
 
-/** Settings section for the one active OCR service. */
+/** Settings section for the OCR services; each keeps its own saved configuration. */
 export function OcrSection(props: OcrSectionProps) {
-  const saved = ocrSettingsStore.settings();
-  const selectedService = signal<OcrServiceKind>(saved?.kind ?? "ai");
-  const draftModelId = signal<string | null>(saved?.kind === "ai" ? saved.modelId : null);
+  const active = ocrSettingsStore.settings();
+  const selectedService = signal<OcrServiceKind>(active?.kind ?? "ai");
+  const draftModelId = signal<string | null>(ocrSettingsStore.savedAiBinding()?.modelId ?? null);
   const draftOperation = signal<BaiduOcrOperation>(
-    saved?.kind === "baidu" ? saved.operation : "accurate",
+    ocrSettingsStore.savedBaiduBinding()?.operation ?? "accurate",
   );
   const apiKeyDraft = signal("");
   const secretKeyDraft = signal("");
   const credentialState = signal<CredentialState>("unknown");
   const error = signal<string | null>(null);
   const saving = signal(false);
+  let apiKeyField: InputRef | undefined;
+  let secretKeyField: InputRef | undefined;
+  let mounted = true;
+
+  effect(() => () => {
+    mounted = false;
+  });
 
   effect(() => {
-    const current = ocrSettingsStore.settings();
-    if (current?.kind !== "baidu") {
+    const saved = ocrSettingsStore.savedBaiduBinding();
+    if (saved === null) {
       credentialState.set("unknown");
       return;
     }
-    const ref = current.credentialRef;
+    const ref = saved.credentialRef;
     void ocrSettingsStore.readBaiduCredentials(ref).then((pair) => {
-      const latest = ocrSettingsStore.settings();
-      if (latest?.kind !== "baidu" || latest.credentialRef !== ref) return;
+      if (ocrSettingsStore.savedBaiduBinding()?.credentialRef !== ref) return;
       credentialState.set(pair ? "readable" : "missing");
     });
   });
@@ -74,8 +80,9 @@ export function OcrSection(props: OcrSectionProps) {
   const showAiRecovery = () => selectedService() === "ai" && catalogUnusable();
   const canKeepKeys = () =>
     selectedService() === "baidu" &&
-    ocrSettingsStore.settings()?.kind === "baidu" &&
+    ocrSettingsStore.savedBaiduBinding() !== null &&
     credentialState() === "readable";
+  const savedKeysPlaceholder = () => (canKeepKeys() ? t("settings.ocr.savedKeys") : undefined);
 
   const serviceItems = (): SelectItem[] =>
     SERVICE_CHOICES.map((kind) => ({ value: kind, title: t(`settings.ocr.${kind}`) }));
@@ -86,12 +93,11 @@ export function OcrSection(props: OcrSectionProps) {
     error.set(null);
     apiKeyDraft.set("");
     secretKeyDraft.set("");
-    const current = ocrSettingsStore.settings();
     if (kind === "baidu") {
-      draftOperation.set(current?.kind === "baidu" ? current.operation : "accurate");
+      draftOperation.set(ocrSettingsStore.savedBaiduBinding()?.operation ?? "accurate");
     }
     if (kind === "ai") {
-      draftModelId.set(current?.kind === "ai" ? current.modelId : null);
+      draftModelId.set(ocrSettingsStore.savedAiBinding()?.modelId ?? null);
     }
     selectedService.set(kind);
   };
@@ -150,7 +156,13 @@ export function OcrSection(props: OcrSectionProps) {
       apiKeyDraft.set("");
       secretKeyDraft.set("");
       if (result.binding.kind === "ai") draftModelId.set(result.binding.modelId);
-      if (result.binding.kind === "baidu") draftOperation.set(result.binding.operation);
+      if (result.binding.kind === "baidu") {
+        draftOperation.set(result.binding.operation);
+        if (mounted) {
+          apiKeyField?.blur();
+          secretKeyField?.blur();
+        }
+      }
     } finally {
       saving.set(false);
     }
@@ -257,7 +269,11 @@ export function OcrSection(props: OcrSectionProps) {
               <FormField label={t("settings.ocr.apiKey")}>
                 <Input
                   testID="settings-ocr-baidu-api-key"
+                  ref={(node) => {
+                    apiKeyField = node;
+                  }}
                   value={apiKeyDraft()}
+                  placeholder={savedKeysPlaceholder()}
                   masked={true}
                   disabled={saving()}
                   accessibilityLabel={t("settings.ocr.apiKey")}
@@ -267,13 +283,14 @@ export function OcrSection(props: OcrSectionProps) {
                   }}
                 />
               </FormField>
-              <FormField
-                label={t("settings.ocr.secretKey")}
-                hint={canKeepKeys() ? t("settings.ocr.keepKeys") : null}
-              >
+              <FormField label={t("settings.ocr.secretKey")}>
                 <Input
                   testID="settings-ocr-baidu-secret-key"
+                  ref={(node) => {
+                    secretKeyField = node;
+                  }}
                   value={secretKeyDraft()}
+                  placeholder={savedKeysPlaceholder()}
                   masked={true}
                   disabled={saving()}
                   accessibilityLabel={t("settings.ocr.secretKey")}
@@ -297,16 +314,6 @@ export function OcrSection(props: OcrSectionProps) {
           {t("settings.ocr.keysUnreadable")}
         </Text>
       </If>
-
-      <If when={selectedService() === "ai" && ocrSettingsStore.settings()?.kind === "baidu"}>
-        <Text testID="settings-ocr-baidu-removal" class="text-xs text-muted-foreground">
-          {t("settings.ocr.switchToAi")}
-        </Text>
-      </If>
-
-      <Text testID="settings-ocr-privacy" class="text-xs text-muted-foreground">
-        {selectedService() === "baidu" ? t("settings.ocr.privacyBaidu") : t("settings.ocr.privacy")}
-      </Text>
 
       <If when={props.platformOs !== "windows"}>
         <Text testID="settings-ocr-windows-only" class="text-xs text-muted-foreground">
