@@ -246,7 +246,7 @@ function QuickTranslateWindowBody(props: { controller: QuickTranslateController 
               onPress={() => void props.controller.startOcr()}
               ref={(node) => ocrAction.set(node)}
             >
-              <Icon name="pic" tone="muted-foreground" class="size-3.5" />
+              <Icon name="scanning" tone="muted-foreground" class="size-3.5" />
             </Button>
           </If>
         </View>

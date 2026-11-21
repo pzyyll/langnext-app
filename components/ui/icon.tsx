@@ -25,6 +25,7 @@ import pinSolidIcon from "../../assets/icons/pin-solid.svg";
 import pinIcon from "../../assets/icons/pin.svg";
 import plusIcon from "../../assets/icons/plus.svg";
 import refreshIcon from "../../assets/icons/refresh.svg";
+import scanningIcon from "../../assets/icons/icon-park-outline--scanning.svg";
 import searchIcon from "../../assets/icons/search.svg";
 import switchIcon from "../../assets/icons/switch.svg";
 import videoIcon from "../../assets/icons/video.svg";
@@ -56,6 +57,7 @@ const ICONS = {
   "pin-solid": pinSolidIcon,
   plus: plusIcon,
   refresh: refreshIcon,
+  scanning: scanningIcon,
   search: searchIcon,
   switch: switchIcon,
   video: videoIcon,
