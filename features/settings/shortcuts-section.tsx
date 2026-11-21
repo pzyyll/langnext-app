@@ -1,8 +1,9 @@
 import { cleanup, signal, Text, View, type ViewRef } from "nsh";
 import { t } from "nsh/i18n";
+import { Badge } from "../../components/ui/badge";
 import { Button, KeyboardButton } from "../../components/ui/button";
 import { Card, SectionHeading } from "../../components/ui/card";
-import { Input } from "../../components/ui/input";
+import { Icon } from "../../components/ui/icon";
 import { Switch } from "../../components/ui/switch";
 import { canUseDoubleCopy } from "../../platform/quick-translate";
 import {
@@ -19,105 +20,133 @@ import {
 
 const RECORDING_CAPTURE_KEYS = ["escape"] as const;
 
-function QuickTranslateShortcutCard(props: {
-  compact: boolean;
-  setting: QuickTranslateShortcutSetting;
-}) {
-  const draft = signal<string | null>(null);
+function QuickTranslateShortcutRow(props: { setting: QuickTranslateShortcutSetting }) {
   const error = signal<Awaited<ReturnType<QuickTranslateShortcutSetting["save"]>>>(null);
-  const savedValue = () => formatShortcut(props.setting.shortcut());
-  let recordButton: ViewRef | undefined;
   const recording = () => props.setting.recording();
-  const stopRecording = () => props.setting.setRecording(false);
-  cleanup(stopRecording);
-  const canSave = () =>
-    !props.setting.busy() &&
-    !recording() &&
-    (props.setting.unavailable() || (draft() !== null && draft() !== savedValue()));
-  const save = async () => {
-    if (!canSave()) return;
+  const chord = () => props.setting.shortcut();
+  const editLabel = () => t("settings.shortcuts.edit");
+  const clearLabel = () => t("settings.shortcuts.clear");
+  const resetLabel = () => t("settings.shortcuts.reset");
+  let editButton: ViewRef | undefined;
+
+  const cancelRecording = () => {
+    props.setting.setRecording(false);
+    if (error() === "invalid") error.set(null);
+  };
+  cleanup(cancelRecording);
+
+  const save = async (value: string | null, restoreFocus = false) => {
+    if (props.setting.busy()) return;
     error.set(null);
-    const result = await props.setting.save(draft() ?? savedValue());
-    if (result) error.set(result);
-    else draft.set(null);
+    props.setting.setRecording(false);
+    const result = await props.setting.save(value);
+    error.set(result);
+    if (restoreFocus && !result) editButton?.focus();
   };
   const alert = () => error() ?? (props.setting.unavailable() ? "inactive" : null);
 
   return (
-    <Card
-      testID="settings-quick-translate-shortcut-card"
-      class={props.compact ? "gap-3 p-5" : "gap-3 p-6"}
-    >
-      <SectionHeading title={t("settings.shortcuts.quickTranslate")} />
-      <View class="flex-row items-center gap-2">
-        <Input
-          testID="settings-quick-translate-shortcut"
-          accessibilityLabel={t("settings.shortcuts.quickTranslate")}
-          class="min-w-0 flex-1"
-          value={draft() ?? savedValue()}
-          disabled={props.setting.busy()}
-          submitBehavior="submit"
-          onChange={(value) => {
-            draft.set(value);
-            error.set(null);
-          }}
-          onSubmit={() => void save()}
-        />
-        <KeyboardButton
-          testID="settings-quick-translate-shortcut-record"
-          class="min-w-20 shrink-0"
-          ref={(node) => {
-            recordButton = node;
-          }}
-          label={recording() ? t("common.cancel") : t("settings.shortcuts.record")}
-          accessibilityLabel={
-            recording() ? t("common.cancel") : t("settings.shortcuts.recordLabel")
-          }
-          selected={recording()}
-          disabled={props.setting.busy()}
-          captureKeys={recording() ? RECORDING_CAPTURE_KEYS : "none"}
-          onPress={() => {
-            if (recording()) {
-              stopRecording();
-            } else {
+    <View class="gap-2">
+      <View class="flex-row flex-wrap items-center justify-between gap-x-3 gap-y-2">
+        <SectionHeading title={t("settings.shortcuts.quickTranslate")} class="w-1/3 min-w-32" />
+        <View class="flex-1 basis-36 flex-row flex-wrap items-center gap-1">
+          <If when={!recording()}>
+            <If when={chord() !== null}>
+              <Badge testID="settings-quick-translate-shortcut" label={formatShortcut(chord()!)} />
+            </If>
+            <If when={chord() === null}>
+              <Text
+                testID="settings-quick-translate-shortcut-unassigned"
+                class="text-sm text-muted-foreground"
+              >
+                {t("settings.shortcuts.unassigned")}
+              </Text>
+            </If>
+          </If>
+          <KeyboardButton
+            testID="settings-quick-translate-shortcut-record"
+            ref={(node) => {
+              editButton = node;
+            }}
+            size={recording() ? "sm" : "icon-sm"}
+            variant={recording() ? "outline" : "ghost"}
+            label={recording() ? t("settings.shortcuts.pressShortcut") : undefined}
+            accessibilityLabel={recording() ? t("settings.shortcuts.pressShortcut") : editLabel()}
+            tooltip={recording() ? undefined : editLabel()}
+            selected={recording()}
+            disabled={props.setting.busy()}
+            captureKeys={recording() ? RECORDING_CAPTURE_KEYS : "none"}
+            onPress={() => {
+              if (recording() || props.setting.busy()) return;
               error.set(null);
               props.setting.setRecording(true);
-              recordButton?.focus();
-            }
-          }}
-          onBlur={stopRecording}
-          onKeyUp={(event) => {
-            // NSH can route Escape down to its navigation command before raw key handlers.
-            if (recording() && event.key === "Escape") stopRecording();
-          }}
-          onKeyDown={(event) => {
-            if (!recording() || event.key === "Escape") return;
-            const chord = recordQuickTranslateShortcut(event);
-            if (chord === undefined) return;
-            if (chord === null) {
-              error.set("invalid");
-              return;
-            }
-            draft.set(formatShortcut(chord));
-            error.set(null);
-            stopRecording();
-          }}
-        />
-        <Button
-          testID="settings-quick-translate-shortcut-save"
-          label={t("common.save")}
-          variant="primary"
-          disabled={!canSave()}
-          onPress={() => void save()}
-        />
+              editButton?.focus();
+            }}
+            onBlur={cancelRecording}
+            onKeyUp={(event) => {
+              // NSH can route Escape down to its navigation command before raw key handlers.
+              if (recording() && event.key === "Escape") cancelRecording();
+            }}
+            onKeyDown={(event) => {
+              if (!recording() || event.key === "Escape") return;
+              const next = recordQuickTranslateShortcut(event);
+              if (next === null) error.set("invalid");
+              else if (next !== undefined) void save(next);
+            }}
+          >
+            <If when={!recording()}>
+              <Icon name="edit" tone="muted-foreground" />
+            </If>
+          </KeyboardButton>
+          <If when={recording()}>
+            {/* Esc cancels from the recorder. Tab must skip this transient pointer action. */}
+            <KeyboardButton
+              testID="settings-quick-translate-shortcut-cancel"
+              focusable={false}
+              size="sm"
+              variant="ghost"
+              label={t("common.cancel")}
+              onPress={() => {
+                cancelRecording();
+                editButton?.focus();
+              }}
+            />
+          </If>
+        </View>
+        <If when={!recording()}>
+          <View class="w-16 shrink-0 flex-row items-center justify-end gap-1">
+            <If when={chord() !== null}>
+              <Button
+                testID="settings-quick-translate-shortcut-clear"
+                size="icon-sm"
+                variant="ghost"
+                accessibilityLabel={clearLabel()}
+                tooltip={clearLabel()}
+                disabled={props.setting.busy()}
+                onPress={() => void save(null, true)}
+              >
+                <Icon name="delete" tone="muted-foreground" />
+              </Button>
+            </If>
+            <If when={chord() !== DEFAULT_QUICK_TRANSLATE_SHORTCUT}>
+              <Button
+                testID="settings-quick-translate-shortcut-reset"
+                size="icon-sm"
+                variant="ghost"
+                accessibilityLabel={resetLabel()}
+                tooltip={resetLabel()}
+                disabled={props.setting.busy()}
+                onPress={() => void save(DEFAULT_QUICK_TRANSLATE_SHORTCUT, true)}
+              >
+                <Icon name="refresh" tone="muted-foreground" />
+              </Button>
+            </If>
+          </View>
+        </If>
       </View>
-      <Text class="text-xs text-muted-foreground">
-        {recording()
-          ? t("settings.shortcuts.recordingHint")
-          : t("settings.shortcuts.format", {
-              example: formatShortcut(DEFAULT_QUICK_TRANSLATE_SHORTCUT),
-            })}
-      </Text>
+      <If when={recording()}>
+        <Text class="text-xs text-muted-foreground">{t("settings.shortcuts.recordingHint")}</Text>
+      </If>
       <If when={alert() !== null}>
         <Text
           testID="settings-quick-translate-shortcut-error"
@@ -127,7 +156,7 @@ function QuickTranslateShortcutCard(props: {
           {t(`settings.shortcuts.${alert()}`)}
         </Text>
       </If>
-    </Card>
+    </View>
   );
 }
 
@@ -139,10 +168,9 @@ export function ShortcutsSection(props: {
   return (
     <>
       <If when={props.quickTranslateShortcut !== undefined}>
-        <QuickTranslateShortcutCard
-          compact={props.compact}
-          setting={props.quickTranslateShortcut!}
-        />
+        <Card testID="settings-quick-translate-shortcut-card" class={props.compact ? "p-5" : "p-6"}>
+          <QuickTranslateShortcutRow setting={props.quickTranslateShortcut!} />
+        </Card>
       </If>
       <If when={canUseDoubleCopy(props.platformOs)}>
         <Card testID="settings-double-copy-card" class={props.compact ? "gap-2 p-2" : "gap-2 p-3"}>

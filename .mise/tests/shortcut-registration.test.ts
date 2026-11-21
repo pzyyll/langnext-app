@@ -12,35 +12,44 @@ test("Windows records and registers a replacement Quick Translate shortcut", asy
       [QUICK_TRANSLATE_SHORTCUT_STORAGE_KEY]: "alt+shift+f8",
     },
   });
-  const field = "id:settings-quick-translate-shortcut";
-  await app.press("id:nav-settings");
-  await app.press("id:settings-nav-shortcuts");
-  await app.waitUntil(() => app.enabled(field));
   const record = "id:settings-quick-translate-shortcut-record";
   const error = "id:settings-quick-translate-shortcut-error";
-  const original = app.value(field);
+  const edit = "role:button[Edit Quick Translate shortcut]";
+  const listening = "role:button[Press a shortcut]";
+  await app.press("id:nav-settings");
+  await app.press("id:settings-nav-shortcuts");
+  await app.waitUntil(() => app.enabled(record));
+  expect(app.texts()).toContain("Alt+Shift+F8");
 
   await app.press(record);
-  await app.waitFor("role:button[Cancel]");
+  await app.waitFor(listening);
   await app.keyboard.press("escape");
-  await app.waitFor("role:button[Record Quick Translate shortcut]");
-  expect(app.value(field)).toBe(original);
+  await app.waitFor(edit);
+  expect(app.texts()).toContain("Alt+Shift+F8");
 
   await app.keyboard.press("enter");
-  await app.waitFor("role:button[Cancel]");
+  await app.waitFor(listening);
+  await app.press("role:button[Cancel]");
+  await app.waitFor(edit);
+  expect(app.storage()[QUICK_TRANSLATE_SHORTCUT_STORAGE_KEY]).toBe("alt+shift+f8");
+
+  await app.press(record);
+  await app.waitFor(listening);
   await app.keyboard.press("tab");
-  await app.waitFor("role:button[Record Quick Translate shortcut]");
+  await app.waitFor(edit);
 
   await app.press(record);
   await app.keyboard.press("ctrl+c");
   await app.waitFor(error);
-  expect(app.value(field)).toBe(original);
-  await app.keyboard.press("alt+shift+f9");
-  await app.waitUntil(() => app.value(field) === "Alt+Shift+F9");
-  expect(app.shows(error)).toBe(false);
   expect(app.storage()[QUICK_TRANSLATE_SHORTCUT_STORAGE_KEY]).toBe("alt+shift+f8");
-  await app.keyboard.press("tab");
-  await app.keyboard.press("enter");
+  await app.keyboard.press("alt+shift+f9");
   await app.waitUntil(() => app.storage()[QUICK_TRANSLATE_SHORTCUT_STORAGE_KEY] === "alt+shift+f9");
+  expect(app.texts()).toContain("Alt+Shift+F9");
   expect(app.shows(error)).toBe(false);
+  expect(app.shows("role:button[Save]")).toBe(false);
+
+  await app.press("role:button[Clear Quick Translate shortcut]");
+  await app.waitFor("id:settings-quick-translate-shortcut-unassigned");
+  expect(app.shows("role:button[Clear Quick Translate shortcut]")).toBe(false);
+  expect(app.shows("role:button[Restore default Quick Translate shortcut]")).toBe(true);
 });

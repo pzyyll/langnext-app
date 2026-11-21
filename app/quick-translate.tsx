@@ -103,10 +103,11 @@ export function registerQuickTranslateShortcut(
   cleanup(release);
 
   void setting.start().then(() => {
-    if (!released && setting.unavailable()) {
+    const chord = setting.shortcut();
+    if (!released && chord !== null && setting.unavailable()) {
       toast.warning(
         t("quickTranslate.shortcutUnavailable", {
-          shortcut: formatShortcut(setting.shortcut()),
+          shortcut: formatShortcut(chord),
         }),
       );
     }

@@ -3,6 +3,7 @@ import type { GlobalShortcutModule } from "nsh/desktop";
 
 export const DEFAULT_QUICK_TRANSLATE_SHORTCUT = "ctrl+shift+t";
 export const QUICK_TRANSLATE_SHORTCUT_STORAGE_KEY = "settings.shortcuts.quickTranslate";
+const UNASSIGNED_SHORTCUT = "";
 
 const MODIFIERS = { ctrl: "Ctrl", alt: "Alt", shift: "Shift", win: "Win" } as const;
 const MODIFIER_ORDER = Object.keys(MODIFIERS) as (keyof typeof MODIFIERS)[];
@@ -64,7 +65,7 @@ export function createQuickTranslateShortcutSetting(
   onPress: () => void,
   isMainWindowFocused: () => boolean,
 ) {
-  const shortcut = signal(DEFAULT_QUICK_TRANSLATE_SHORTCUT);
+  const shortcut = signal<string | null>(DEFAULT_QUICK_TRANSLATE_SHORTCUT);
   const busy = signal(true);
   const unavailable = signal(false);
   const recording = signal(false);
@@ -95,14 +96,22 @@ export function createQuickTranslateShortcutSetting(
   async function start(): Promise<void> {
     try {
       const saved = await Storage.getItem(QUICK_TRANSLATE_SHORTCUT_STORAGE_KEY);
-      if (saved && !disposed) {
-        shortcut.set(parseQuickTranslateShortcut(saved) ?? DEFAULT_QUICK_TRANSLATE_SHORTCUT);
+      if (!disposed && saved !== null) {
+        shortcut.set(
+          saved === UNASSIGNED_SHORTCUT
+            ? null
+            : (parseQuickTranslateShortcut(saved) ?? DEFAULT_QUICK_TRANSLATE_SHORTCUT),
+        );
       }
     } catch {
       // Use the default if storage is not readable at startup.
     }
     if (disposed) return;
     const chord = shortcut();
+    if (chord === null) {
+      busy.set(false);
+      return;
+    }
     const accepted = await register(chord);
     if (disposed) return;
     pending = null;
@@ -112,25 +121,26 @@ export function createQuickTranslateShortcutSetting(
     busy.set(false);
   }
 
-  async function save(value: string): Promise<ShortcutSaveError | null> {
+  async function save(value: string | null): Promise<ShortcutSaveError | null> {
     if (busy() || disposed) return null;
-    const chord = parseQuickTranslateShortcut(value);
-    if (!chord) return "invalid";
-    if (chord === active) return null;
+    const chord = value === null ? null : parseQuickTranslateShortcut(value);
+    if (value !== null && chord === null) return "invalid";
+    if (chord === shortcut() && chord === active) return null;
 
     busy.set(true);
     try {
-      if (!(await register(chord)) || disposed) return "unavailable";
+      if (chord !== null && !(await register(chord))) return "unavailable";
+      if (disposed) return null;
       if (shortcut() !== chord) {
         try {
-          await Storage.setItem(QUICK_TRANSLATE_SHORTCUT_STORAGE_KEY, chord);
+          await Storage.setItem(QUICK_TRANSLATE_SHORTCUT_STORAGE_KEY, chord ?? UNASSIGNED_SHORTCUT);
         } catch {
           return "saveError";
         }
       }
       if (disposed) return null;
 
-      // Keep the old binding until the new one is accepted and saved.
+      // Do not give back the old binding until the setting is saved.
       const previous = active;
       active = chord;
       pending = null;

@@ -333,54 +333,60 @@ test("desktop: quick window remains available while main window is hidden and re
   await app.waitUntil(() => app.window("main").state()?.visible === false);
 });
 
-const SHORTCUT_INPUT = "id:settings-quick-translate-shortcut";
-const SHORTCUT_SAVE = "id:settings-quick-translate-shortcut-save";
+const SHORTCUT_RECORD = "id:settings-quick-translate-shortcut-record";
+const SHORTCUT_CLEAR = "id:settings-quick-translate-shortcut-clear";
+const SHORTCUT_RESET = "id:settings-quick-translate-shortcut-reset";
 const SHORTCUT_ERROR = "id:settings-quick-translate-shortcut-error";
+const UNASSIGNED = "id:settings-quick-translate-shortcut-unassigned";
 const CUSTOM_SHORTCUT = "ctrl+shift+y";
 
-test("shortcut settings: replaces the active binding and restores it on relaunch", async () => {
-  const app = await open(HARNESS_ENTRY, { ...viewport, storage: { "settings.language": "en" } });
+test("shortcut settings: restores custom bindings, persists removal, and resets to the default", async () => {
+  const app = await open(HARNESS_ENTRY, {
+    ...viewport,
+    storage: { "settings.language": "en", [QUICK_TRANSLATE_SHORTCUT_STORAGE_KEY]: CUSTOM_SHORTCUT },
+  });
   await app.press("id:nav-settings");
   await app.press("id:settings-nav-shortcuts");
-  await app.waitFor(SHORTCUT_INPUT);
-  expect(app.enabled(SHORTCUT_SAVE)).toBe(false);
+  await app.waitUntil(() => app.enabled(SHORTCUT_CLEAR));
+  expect(app.texts()).toContain("Ctrl+Shift+Y");
+  expect(app.shows(SHORTCUT_RESET)).toBe(true);
 
-  await app.clear(SHORTCUT_INPUT);
-  await app.type(SHORTCUT_INPUT, "Ctrl+C");
-  await app.press(SHORTCUT_SAVE);
-  await app.waitFor(SHORTCUT_ERROR);
-  expect(app.texts().join(" ")).toContain("reg=1|");
-  expect(app.storage()[QUICK_TRANSLATE_SHORTCUT_STORAGE_KEY]).toBeUndefined();
-
-  await app.clear(SHORTCUT_INPUT);
-  await app.type(SHORTCUT_INPUT, "Shift + ctrl + y");
-  await app.submit(SHORTCUT_INPUT);
-  await app.waitUntil(() => app.value(SHORTCUT_INPUT) === "Ctrl+Shift+Y");
-  expect(app.storage()[QUICK_TRANSLATE_SHORTCUT_STORAGE_KEY]).toBe(CUSTOM_SHORTCUT);
-  expect(app.shows(SHORTCUT_ERROR)).toBe(false);
-  expect(app.texts().join(" ")).toContain("reg=2|unreg=1|");
-
-  await app.keyboard.press(DEFAULT_QUICK_TRANSLATE_SHORTCUT);
-  expect(app.window("quick-translate").state()).toBeNull();
   await app.keyboard.press(CUSTOM_SHORTCUT);
   await app.waitUntil(() => app.window("quick-translate").state()?.visible === true);
+  await app.keyboard.press("escape");
+  await app.waitUntil(() => !app.window("quick-translate").state());
+
+  await app.press(SHORTCUT_CLEAR);
+  await app.waitFor(UNASSIGNED);
+  expect(app.shows(SHORTCUT_CLEAR)).toBe(false);
+  expect(app.shows(SHORTCUT_RESET)).toBe(true);
+  expect(app.storage()[QUICK_TRANSLATE_SHORTCUT_STORAGE_KEY]).toBe("");
+  await app.keyboard.press(CUSTOM_SHORTCUT);
+  expect(app.window("quick-translate").state()).toBeNull();
 
   const reopened = await open(HARNESS_ENTRY, { ...viewport, storage: app.storage() });
   await reopened.press("id:nav-settings");
   await reopened.press("id:settings-nav-shortcuts");
-  await reopened.waitUntil(() => reopened.enabled(SHORTCUT_INPUT));
-  expect(reopened.value(SHORTCUT_INPUT)).toBe("Ctrl+Shift+Y");
-  await reopened.keyboard.press(CUSTOM_SHORTCUT);
+  await reopened.waitFor(UNASSIGNED);
+  expect(reopened.texts().join(" ")).toContain("reg=0|");
+  await reopened.press(SHORTCUT_RESET);
+  await reopened.waitUntil(() => reopened.texts().includes("Ctrl+Shift+T"));
+  expect(reopened.storage()[QUICK_TRANSLATE_SHORTCUT_STORAGE_KEY]).toBe(
+    DEFAULT_QUICK_TRANSLATE_SHORTCUT,
+  );
+  expect(reopened.shows(SHORTCUT_RESET)).toBe(false);
+  await reopened.keyboard.press(DEFAULT_QUICK_TRANSLATE_SHORTCUT);
   await reopened.waitUntil(() => reopened.window("quick-translate").state()?.visible === true);
 });
 
-test("shortcut settings: keeps the old binding on registration or storage failure", async () => {
+test("shortcut settings: keeps the old binding if reset cannot register or removal cannot save", async () => {
   for (const conflict of [true, false]) {
     const app = await open(HARNESS_ENTRY, {
       ...viewport,
       storage: {
         "settings.language": "en",
         [HARNESS_SHORTCUT_MODE_KEY]: conflict ? "conflict" : "ok",
+        [QUICK_TRANSLATE_SHORTCUT_STORAGE_KEY]: CUSTOM_SHORTCUT,
       },
       modules: conflict
         ? undefined
@@ -394,21 +400,19 @@ test("shortcut settings: keeps the old binding on registration or storage failur
     });
     await app.press("id:nav-settings");
     await app.press("id:settings-nav-shortcuts");
-    await app.waitUntil(() => app.enabled(SHORTCUT_INPUT));
-    await app.clear(SHORTCUT_INPUT);
-    await app.type(SHORTCUT_INPUT, "Ctrl+Shift+Y");
-    await app.press(SHORTCUT_SAVE);
+    await app.waitUntil(() => app.enabled(SHORTCUT_RECORD));
+    await app.press(conflict ? SHORTCUT_RESET : SHORTCUT_CLEAR);
     await app.waitFor(SHORTCUT_ERROR);
     expect(app.texts()).toContain(
       conflict
         ? "This shortcut is unavailable. Try another combination."
         : "Could not save the shortcut. Check storage and try again.",
     );
-    expect(app.storage()[QUICK_TRANSLATE_SHORTCUT_STORAGE_KEY]).toBeUndefined();
-    expect(app.value(SHORTCUT_INPUT)).toBe("Ctrl+Shift+Y");
-    await app.keyboard.press(CUSTOM_SHORTCUT);
-    expect(app.window("quick-translate").state()).toBeNull();
+    expect(app.storage()[QUICK_TRANSLATE_SHORTCUT_STORAGE_KEY]).toBe(CUSTOM_SHORTCUT);
+    expect(app.texts()).toContain("Ctrl+Shift+Y");
     await app.keyboard.press(DEFAULT_QUICK_TRANSLATE_SHORTCUT);
+    expect(app.window("quick-translate").state()).toBeNull();
+    await app.keyboard.press(CUSTOM_SHORTCUT);
     await app.waitUntil(() => app.window("quick-translate").state()?.visible === true);
   }
 });

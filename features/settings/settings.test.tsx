@@ -121,9 +121,11 @@ test("settings ui: renders cleanly at the minimum viewport in dark mode with red
   expect(app.shows("id:settings-transparency-card")).toBe(true);
 
   await app.press("id:settings-nav-shortcuts");
-  await app.waitFor("id:settings-quick-translate-shortcut");
+  await app.waitFor("id:settings-quick-translate-shortcut-card");
+  expect(app.shows("id:settings-double-copy-card")).toBe(true);
   expect(app.texts()).toContain("打开快速翻译");
-  expect(app.value("id:settings-quick-translate-shortcut")).toBe("Ctrl+Shift+T");
+  expect(app.texts()).toContain("Ctrl+Shift+T");
+  expect(app.shows("id:settings-quick-translate-shortcut-reset")).toBe(false);
   expect(app.shows("id:settings-double-copy-switch")).toBe(true);
 });
 

@@ -120,11 +120,11 @@ export function Button(props: ButtonProps) {
   );
 }
 
-interface KeyboardButtonProps extends Omit<ButtonProps, "children" | "tooltip"> {
-  label: string;
+interface KeyboardButtonProps extends ButtonProps {
+  focusable?: boolean;
   onBlur?: () => void;
   captureKeys?: "none" | readonly string[];
-  onKeyDown: (event: KeyEvent) => void;
+  onKeyDown?: (event: KeyEvent) => void;
   onKeyUp?: (event: KeyEvent) => void;
 }
 
@@ -137,15 +137,20 @@ export function KeyboardButton(props: KeyboardButtonProps) {
       ref={(node) => props.ref?.(node)}
       accessibilityLabel={props.accessibilityLabel ?? props.label}
       accessibilityState={{ selected: props.selected }}
+      focusable={props.focusable}
       disabled={props.disabled}
       onPress={() => props.onPress?.()}
       onBlur={props.onBlur}
       captureKeys={props.captureKeys}
       onKeyDown={props.onKeyDown}
       onKeyUp={props.onKeyUp}
+      tooltip={props.tooltip ? buildTooltip(props.tooltip, "top") : undefined}
       class={resolveButtonClass(props.variant, props.size, props.class)}
     >
-      <Text class={resolveTextClass(props.variant, props.size)}>{props.label}</Text>
+      <If when={props.label !== undefined}>
+        <Text class={resolveTextClass(props.variant, props.size)}>{props.label}</Text>
+      </If>
+      {props.children}
     </View>
   );
 }

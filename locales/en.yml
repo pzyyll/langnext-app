@@ -64,13 +64,15 @@ settings:
     error: Could not save language. Your choice will apply until you close the app.
   shortcuts:
     quickTranslate: Open Quick Translate
-    record: Record
-    recordLabel: Record Quick Translate shortcut
-    recordingHint: Press a key combination. Press Esc to cancel.
-    format: "Enter a shortcut such as %{example}."
+    edit: Edit Quick Translate shortcut
+    pressShortcut: Press a shortcut
+    recordingHint: Press Esc to cancel.
+    unassigned: Unassigned
+    clear: Clear Quick Translate shortcut
+    reset: Restore default Quick Translate shortcut
     invalid: Use Ctrl, Alt, or Win (with optional Shift) and a letter, digit, or F1–F11. Ctrl+C is reserved for copying.
     unavailable: This shortcut is unavailable. Try another combination.
-    inactive: This shortcut is inactive. Try saving it again or choose another.
+    inactive: This shortcut is inactive. Record another combination.
     saveError: Could not save the shortcut. Check storage and try again.
     windowsOnly: Global shortcuts are available on Windows only.
   doubleCopy:

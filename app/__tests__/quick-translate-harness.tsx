@@ -132,7 +132,8 @@ function QuickTranslateHarness(config: {
               lastRegisteredShortcut.set(shortcut);
               if (
                 config.shortcutMode === "false" ||
-                (config.shortcutMode === "conflict" && shortcut === "ctrl+shift+y")
+                (config.shortcutMode === "conflict" &&
+                  shortcut === DEFAULT_QUICK_TRANSLATE_SHORTCUT)
               ) {
                 return false;
               }
