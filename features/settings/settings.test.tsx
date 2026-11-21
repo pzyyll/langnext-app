@@ -21,6 +21,7 @@ test("settings ui: groups language under General and theme under Appearance in a
   expect(app.shows("id:settings-nav-appearance")).toBe(true);
   expect(app.shows("role:button[General]")).toBe(true);
   expect(app.shows("role:button[Appearance]")).toBe(true);
+  expect(app.shows("role:button[Shortcuts]")).toBe(true);
 
   // Rail categories belong to two groups: Application and Integrations.
   expect(app.shows("id:settings-group-application")).toBe(true);
@@ -54,6 +55,7 @@ test("settings ui: groups language under General and theme under Appearance in a
   await app.press("id:language-zh-CN");
   expect(app.shows("role:button[通用]")).toBe(true);
   expect(app.shows("role:button[外观]")).toBe(true);
+  expect(app.shows("role:button[快捷键]")).toBe(true);
   expect(app.texts()).toContain("通用");
   expect(app.texts()).toContain("语言");
   expect(app.texts()).toContain("应用");
@@ -117,6 +119,12 @@ test("settings ui: renders cleanly at the minimum viewport in dark mode with red
   await app.waitFor("id:settings-theme-card");
   expect(app.shows("id:theme-dark")).toBe(true);
   expect(app.shows("id:settings-transparency-card")).toBe(true);
+
+  await app.press("id:settings-nav-shortcuts");
+  await app.waitFor("id:settings-quick-translate-shortcut");
+  expect(app.texts()).toContain("打开快速翻译");
+  expect(app.value("id:settings-quick-translate-shortcut")).toBe("Ctrl+Shift+T");
+  expect(app.shows("id:settings-double-copy-switch")).toBe(true);
 });
 
 test("double copy: shows Windows-only opt-in off by default, hides outside Windows, and surfaces startup or enable failures", async () => {
@@ -126,20 +134,23 @@ test("double copy: shows Windows-only opt-in off by default, hides outside Windo
     storage: { "settings.language": "en" },
   });
   await macApp.press("id:nav-settings");
-  await macApp.waitFor("id:settings-general-card");
+  await macApp.press("id:settings-nav-shortcuts");
+  await macApp.waitFor("id:settings-shortcuts-windows-only");
   expect(macApp.shows("id:settings-double-copy-card")).toBe(false);
+  expect(macApp.shows("id:settings-quick-translate-shortcut")).toBe(false);
 
   const winApp = await open(APP_ENTRY, {
     ...viewport,
     storage: { "settings.language": "en" },
   });
   await winApp.press("id:nav-settings");
+  await winApp.waitFor("id:settings-general-card");
+  expect(winApp.shows("id:settings-double-copy-card")).toBe(false);
+  await winApp.press("id:settings-nav-shortcuts");
   await winApp.waitFor("id:settings-double-copy-card");
   expect(winApp.shows("id:settings-double-copy-switch")).toBe(true);
   expect(winApp.storage()["quickTranslate.preferences.v1"]).toBeUndefined();
-  expect(
-    winApp.texts().some((text) => text.includes("clipboard") || text.includes("automatic")),
-  ).toBe(true);
+  expect(winApp.texts().some((text) => text.includes("enabled presets"))).toBe(true);
 
   await winApp.press("id:settings-double-copy-switch");
   await winApp.waitUntil(() => Boolean(winApp.storage()["quickTranslate.preferences.v1"]));
@@ -149,7 +160,9 @@ test("double copy: shows Windows-only opt-in off by default, hides outside Windo
   });
 
   // Switch to zh-CN and verify localized copy.
+  await winApp.press("id:settings-nav-general");
   await winApp.press("id:language-zh-CN");
+  await winApp.press("id:settings-nav-shortcuts");
   await winApp.waitUntil(() => winApp.texts().some((text) => text.includes("双击 Ctrl+C")));
 
   // Toggle back off.
@@ -168,6 +181,7 @@ test("double copy: shows Windows-only opt-in off by default, hides outside Windo
     },
   });
   await enableFail.press("id:nav-settings");
+  await enableFail.press("id:settings-nav-shortcuts");
   await enableFail.waitFor("id:settings-double-copy-switch");
   expect(enableFail.texts()).toContain("active=false|reads=0");
   await enableFail.press("id:settings-double-copy-switch");
@@ -190,6 +204,7 @@ test("double copy: shows Windows-only opt-in off by default, hides outside Windo
     startupFail.texts().some((text) => text.includes("Windows double-copy listener")),
   );
   await startupFail.press("id:nav-settings");
+  await startupFail.press("id:settings-nav-shortcuts");
   await startupFail.waitFor("id:settings-double-copy-error");
   expect(startupFail.texts()).toContain("active=false|reads=0");
   await startupFail.press("id:dc-harness-trigger");

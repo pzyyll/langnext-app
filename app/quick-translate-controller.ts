@@ -13,7 +13,6 @@ import {
   Window,
   type Display,
   type DisplayId,
-  type GlobalShortcutModule,
   type WindowRef,
   type WindowState,
 } from "nsh/desktop";
@@ -33,7 +32,6 @@ import {
 } from "../platform/quick-translate";
 
 export const QUICK_TRANSLATE_WINDOW_ID = "quick-translate";
-export const QUICK_TRANSLATE_SHORTCUT = "ctrl+shift+t";
 
 export const POPUP_DEFAULT_SIZE = { width: 420, height: 360 } as const;
 export const POPUP_MIN_SIZE = { width: 340, height: 120 } as const;
@@ -42,8 +40,6 @@ export const POPUP_MIN_SIZE = { width: 340, height: 120 } as const;
 const HIDE_TIMEOUT_MS = 1_000;
 /** Interval between hidden checks; NSH reports the new value on its own schedule. */
 const HIDE_POLL_MS = 16;
-
-export type QuickTranslateShortcutBinding = Pick<GlobalShortcutModule, "register" | "unregister">;
 
 /** Theme colors the native selection overlay paints with. */
 export interface CaptureOverlayTheme {
@@ -105,11 +101,6 @@ export interface QuickTranslateController {
   fitContentHeight: (height: number) => void;
   handleBoundsChange: (bounds: Bounds) => void;
   setOnCloseCleanup: (callback: (() => void) | null) => void;
-}
-
-/** Only Windows registers the global Quick Translate shortcut. */
-export function canRegisterGlobalQuickTranslateShortcut(os: string): boolean {
-  return os === "windows";
 }
 
 function resolveMainWindowDisplay(allDisplays: readonly Display[]): DisplayId | undefined {

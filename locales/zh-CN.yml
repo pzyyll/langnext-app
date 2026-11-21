@@ -42,6 +42,7 @@ settings:
   sections:
     general: 通用
     appearance: 外观
+    shortcuts: 快捷键
     languageDetection: 语言检测
     ocr: OCR
   theme:
@@ -61,9 +62,17 @@ settings:
     en: English
     "zh-CN": 简体中文
     error: 无法保存语言设置。本次选择将在关闭应用前生效。
+  shortcuts:
+    quickTranslate: 打开快速翻译
+    format: 请输入快捷键，例如 %{example}。
+    invalid: 请用 Ctrl、Alt 或 Win（可加 Shift）搭配字母、数字或 F1–F11。Ctrl+C 保留用于复制。
+    unavailable: 此快捷键不可用，请试试其他组合。
+    inactive: 此快捷键未生效，请重新保存或换一个组合。
+    saveError: 无法保存快捷键，请检查存储后重试。
+    windowsOnly: 全局快捷键仅在 Windows 上可用。
   doubleCopy:
     label: 双击 Ctrl+C 快速翻译
-    description: 在 Windows 上启用后，连续按两次 Ctrl+C 会读取剪贴板文本；若同时开启了自动翻译，会将其发送到所选服务。
+    description: 连续按两次 Ctrl+C 会读取复制的文本，并使用已启用的预设进行翻译。
     enableError: 无法启动 Windows 双击复制监听，该功能已保持关闭。
     saveError: 无法保存双击复制设置，请重试。
   ocr:
@@ -503,7 +512,7 @@ quickTranslate:
   close: 关闭快速翻译
   ocr: 文本识别
   ocrRecognizing: 正在识别文字…
-  shortcutUnavailable: 全局快捷键 Ctrl+Shift+T 不可用，请通过托盘菜单打开快速翻译。
+  shortcutUnavailable: 全局快捷键 %{shortcut} 不可用，请通过托盘菜单打开快速翻译。
   presetLabel: 预设
   presetPlaceholder: 选择预设…
   presetsLoading: 正在加载预设…

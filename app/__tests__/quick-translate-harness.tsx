@@ -12,7 +12,7 @@ import { loadLanguage } from "../../features/settings/language";
 import { loadTransparency } from "../../features/settings/transparency";
 import type { DoubleCopyActivationEvent } from "../../platform/quick-translate";
 import { initializeAiModules } from "../ai-setup";
-import { QUICK_TRANSLATE_SHORTCUT } from "../quick-translate";
+import { DEFAULT_QUICK_TRANSLATE_SHORTCUT } from "../../features/settings/shortcuts";
 import { AppShell } from "../shell";
 
 initializeAiModules();
@@ -35,14 +35,14 @@ function isActionMenuItem(entry: MenuItem | null | undefined | false): entry is 
 }
 
 function QuickTranslateHarness(config: {
-  shortcutMode: "ok" | "false" | "reject";
+  shortcutMode: "ok" | "false" | "reject" | "conflict";
   doubleCopyMode: "ok" | "throw";
   initialClipboard: string;
   platformOs?: string;
   ocrCapture: HarnessCaptureMode;
 }) {
   let latestTray: TrayOptions | null = null;
-  let registeredCallback: (() => void) | null = null;
+  const registeredShortcuts = new Map<string, () => void>();
   let doubleCopyListener: ((event: DoubleCopyActivationEvent) => void) | null = null;
   let nextClipboardText = config.initialClipboard;
   const shellMounted = signal(true);
@@ -66,13 +66,9 @@ function QuickTranslateHarness(config: {
     entry?.onSelect?.();
   };
 
-  keymap.bind(
-    QUICK_TRANSLATE_SHORTCUT,
-    () => {
-      registeredCallback?.();
-    },
-    { when: "always" },
-  );
+  for (const chord of [DEFAULT_QUICK_TRANSLATE_SHORTCUT, "ctrl+shift+y"]) {
+    keymap.bind(chord, () => registeredShortcuts.get(chord)?.(), { when: "always" });
+  }
 
   return (
     <View class="flex-1">
@@ -134,16 +130,20 @@ function QuickTranslateHarness(config: {
             async register(shortcut, onPress) {
               registerCount.set(registerCount() + 1);
               lastRegisteredShortcut.set(shortcut);
-              registeredCallback = onPress;
-              if (config.shortcutMode === "false") {
+              if (
+                config.shortcutMode === "false" ||
+                (config.shortcutMode === "conflict" && shortcut === "ctrl+shift+y")
+              ) {
                 return false;
               }
               if (config.shortcutMode === "reject") {
                 throw new Error("shortcut conflict");
               }
+              registeredShortcuts.set(shortcut, onPress);
               return true;
             },
-            unregister() {
+            unregister(shortcut) {
+              registeredShortcuts.delete(shortcut);
               unregisterCount.set(unregisterCount() + 1);
             },
           }}
@@ -240,7 +240,8 @@ void Promise.all([
   Storage.getItem(HARNESS_DOUBLE_COPY_CLIPBOARD_KEY),
   Storage.getItem(HARNESS_OCR_CAPTURE_KEY),
 ]).then(([, , , , , , , , modeRaw, osRaw, dcModeRaw, dcClipboardRaw, ocrCaptureRaw]) => {
-  const shortcutMode = modeRaw === "false" || modeRaw === "reject" ? modeRaw : "ok";
+  const shortcutMode =
+    modeRaw === "false" || modeRaw === "reject" || modeRaw === "conflict" ? modeRaw : "ok";
   const doubleCopyMode = dcModeRaw === "throw" ? "throw" : "ok";
   const initialClipboard = dcClipboardRaw ?? "";
   const platformOs = osRaw || undefined;

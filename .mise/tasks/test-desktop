@@ -9,9 +9,10 @@ case "$(uname -s)" in
   *) echo "Unsupported desktop platform" >&2; exit 1 ;;
 esac
 
-# The cursor lookup uses the real Win32 monitor, not the headless display.
+# These checks need real Win32 monitor and global shortcut services.
 if [[ "$target" == windows ]]; then
   nsh test .mise/tests/cursor-match.test.ts --target "$target" "$@"
+  nsh test .mise/tests/shortcut-registration.test.ts --target "$target" "$@"
 fi
 
 shopt -s globstar nullglob

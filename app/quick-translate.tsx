@@ -27,6 +27,11 @@ import {
   saveQuickTranslatePopupState,
 } from "../features/quick-translate/preferences";
 import { createQuickTranslateSession } from "../features/quick-translate/session";
+import {
+  createQuickTranslateShortcutSetting,
+  formatShortcut,
+  type QuickTranslateShortcutBinding,
+} from "../features/settings/shortcuts";
 import { canCaptureScreen, ScreenCapture } from "../platform/screen-capture";
 import { canMonitorPointerPress, type DoubleCopyBinding } from "../platform/quick-translate";
 import {
@@ -35,23 +40,17 @@ import {
   readCursorAnchor,
 } from "../platform/quick-translate-native";
 import {
-  canRegisterGlobalQuickTranslateShortcut,
   createQuickTranslateController as createPureQuickTranslateController,
   POPUP_MIN_SIZE,
-  QUICK_TRANSLATE_SHORTCUT,
   QUICK_TRANSLATE_WINDOW_ID,
   type QuickTranslateController,
   type QuickTranslateControllerOptions,
-  type QuickTranslateShortcutBinding,
 } from "./quick-translate-controller";
 
 export {
-  canRegisterGlobalQuickTranslateShortcut,
-  QUICK_TRANSLATE_SHORTCUT,
   QUICK_TRANSLATE_WINDOW_ID,
   type QuickTranslateController,
   type QuickTranslateControllerOptions,
-  type QuickTranslateShortcutBinding,
 };
 
 /** Creates the desktop Quick Translate controller backed by native cursor anchor, preferences, and clipboard access. */
@@ -79,45 +78,37 @@ export function createQuickTranslateController(
   });
 }
 
-/** Registers `ctrl+shift+t` once on Windows and unregisters cleanly on shell disposal or quit. */
+/** Registers the saved Windows shortcut and releases it on shell disposal or quit. */
 export function registerQuickTranslateShortcut(
   controller: QuickTranslateController,
   binding: QuickTranslateShortcutBinding = GlobalShortcut,
   currentOs: string = platform.os,
-): () => void {
-  if (!canRegisterGlobalQuickTranslateShortcut(currentOs)) {
-    return () => {};
-  }
+) {
+  if (currentOs !== "windows") return undefined;
 
+  const setting = createQuickTranslateShortcutSetting(binding, () => controller.open());
   let released = false;
   const release = () => {
     if (released) return;
     released = true;
     stopQuitListener();
-    try {
-      binding.unregister(QUICK_TRANSLATE_SHORTCUT);
-    } catch {
-      // Ignore cleanup failures while tearing down the shell.
-    }
+    setting.dispose();
   };
 
   const stopQuitListener = Application.on("quit", release);
   cleanup(release);
 
-  void (async () => {
-    try {
-      const accepted = await binding.register(QUICK_TRANSLATE_SHORTCUT, () => controller.open());
-      if (!released && !accepted) {
-        toast.warning(t("quickTranslate.shortcutUnavailable"));
-      }
-    } catch {
-      if (!released) {
-        toast.warning(t("quickTranslate.shortcutUnavailable"));
-      }
+  void setting.start().then(() => {
+    if (!released && setting.unavailable()) {
+      toast.warning(
+        t("quickTranslate.shortcutUnavailable", {
+          shortcut: formatShortcut(setting.shortcut()),
+        }),
+      );
     }
-  })();
+  });
 
-  return release;
+  return setting;
 }
 
 /** Coordinates the Windows Raw Input double-copy listener with persisted opt-in preferences. */

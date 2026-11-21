@@ -42,6 +42,7 @@ settings:
   sections:
     general: General
     appearance: Appearance
+    shortcuts: Shortcuts
     languageDetection: Language Detection
     ocr: OCR
   theme:
@@ -61,9 +62,17 @@ settings:
     en: English
     "zh-CN": 简体中文
     error: Could not save language. Your choice will apply until you close the app.
+  shortcuts:
+    quickTranslate: Open Quick Translate
+    format: "Enter a shortcut such as %{example}."
+    invalid: Use Ctrl, Alt, or Win (with optional Shift) and a letter, digit, or F1–F11. Ctrl+C is reserved for copying.
+    unavailable: This shortcut is unavailable. Try another combination.
+    inactive: This shortcut is inactive. Try saving it again or choose another.
+    saveError: Could not save the shortcut. Check storage and try again.
+    windowsOnly: Global shortcuts are available on Windows only.
   doubleCopy:
     label: Double-copy Quick Translate (Ctrl+C × 2)
-    description: When enabled on Windows, reads clipboard text after two quick Ctrl+C presses. If automatic translation is on in Quick Translate, it sends that text to the selected service.
+    description: Reads copied text after two quick Ctrl+C presses and translates it with your enabled presets.
     enableError: Could not start the Windows double-copy listener. The listener stays off.
     saveError: Could not save the double-copy setting. Check storage and try again.
   ocr:
@@ -503,7 +512,7 @@ quickTranslate:
   close: Close Quick Translate
   ocr: OCR
   ocrRecognizing: Reading text…
-  shortcutUnavailable: Global shortcut Ctrl+Shift+T is unavailable. Use the tray icon menu to open Quick Translate.
+  shortcutUnavailable: Global shortcut %{shortcut} is unavailable. Use the tray icon menu to open Quick Translate.
   presetLabel: Preset
   presetPlaceholder: Select a preset…
   presetsLoading: Loading presets…

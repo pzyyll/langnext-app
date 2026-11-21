@@ -6,19 +6,15 @@ import { motion } from "../../components/motion";
 import { Button } from "../../components/ui/button";
 import { Card, SectionHeading } from "../../components/ui/card";
 import { Switch } from "../../components/ui/switch";
-import { canUseDoubleCopy } from "../../platform/quick-translate";
-import {
-  doubleCopyEnabled,
-  doubleCopyError,
-  selectDoubleCopy,
-} from "../quick-translate/preferences";
 import { appearance, appearanceError, selectAppearance, type Appearance } from "./appearance";
 import { language, languageError, selectLanguage, type LanguagePreference } from "./language";
 import { LanguageDetectionSection } from "./language-detection-section";
 import { OcrSection } from "./ocr-section";
+import { ShortcutsSection } from "./shortcuts-section";
+import type { QuickTranslateShortcutSetting } from "./shortcuts";
 import { selectTransparency, transparency, transparencyError } from "./transparency";
 
-export type SettingsSection = "general" | "appearance" | "language-detection" | "ocr";
+export type SettingsSection = "general" | "appearance" | "shortcuts" | "language-detection" | "ocr";
 
 interface SettingsSectionEntry {
   id: SettingsSection;
@@ -39,6 +35,7 @@ const SETTINGS_GROUPS: readonly SettingsGroup[] = [
     sections: [
       { id: "general", labelKey: "settings.sections.general" },
       { id: "appearance", labelKey: "settings.sections.appearance" },
+      { id: "shortcuts", labelKey: "settings.sections.shortcuts" },
     ],
   },
   {
@@ -104,46 +101,21 @@ function LanguageOption(props: { value: LanguagePreference; label: string }) {
   );
 }
 
-function GeneralSection(props: { compact: boolean; platformOs: string }) {
+function GeneralSection(props: { compact: boolean }) {
   return (
-    <>
-      <Card testID="settings-general-card" class={props.compact ? "gap-4 p-4" : "gap-5 p-6"}>
-        <SectionHeading title={t("settings.language.title")} />
-        <RadioGroup accessibilityLabel={t("settings.language.title")} class="flex-row gap-3">
-          <LanguageOption value="system" label={t("settings.language.system")} />
-          <LanguageOption value="en" label={t("settings.language.en")} />
-          <LanguageOption value="zh-CN" label={t("settings.language.zh-CN")} />
-        </RadioGroup>
-        <If when={languageError() !== null}>
-          <Text role="alert" class="text-sm text-destructive">
-            {languageError()}
-          </Text>
-        </If>
-      </Card>
-
-      <If when={canUseDoubleCopy(props.platformOs)}>
-        <Card testID="settings-double-copy-card" class={props.compact ? "gap-2 p-2" : "gap-2 p-3"}>
-          <Switch
-            testID="settings-double-copy-switch"
-            label={t("settings.doubleCopy.label")}
-            checked={doubleCopyEnabled()}
-            onChange={(checked) => void selectDoubleCopy(checked)}
-          />
-          <Text class="px-3 text-xs text-muted-foreground">
-            {t("settings.doubleCopy.description")}
-          </Text>
-          <If when={doubleCopyError() !== null}>
-            <Text
-              testID="settings-double-copy-error"
-              role="alert"
-              class="px-3 pb-1 text-sm text-destructive"
-            >
-              {doubleCopyError()}
-            </Text>
-          </If>
-        </Card>
+    <Card testID="settings-general-card" class={props.compact ? "gap-4 p-4" : "gap-5 p-6"}>
+      <SectionHeading title={t("settings.language.title")} />
+      <RadioGroup accessibilityLabel={t("settings.language.title")} class="flex-row gap-3">
+        <LanguageOption value="system" label={t("settings.language.system")} />
+        <LanguageOption value="en" label={t("settings.language.en")} />
+        <LanguageOption value="zh-CN" label={t("settings.language.zh-CN")} />
+      </RadioGroup>
+      <If when={languageError() !== null}>
+        <Text role="alert" class="text-sm text-destructive">
+          {languageError()}
+        </Text>
       </If>
-    </>
+    </Card>
   );
 }
 
@@ -181,7 +153,11 @@ function AppearanceSection(props: { compact: boolean }) {
 }
 
 /** Master-detail Settings workspace with resizable category rail and scrollable detail pane. */
-export function SettingsPage(props: { platformOs?: string; onNavigateToModels?: () => void } = {}) {
+export function SettingsPage(props: {
+  platformOs?: string;
+  onNavigateToModels?: () => void;
+  quickTranslateShortcut?: QuickTranslateShortcutSetting;
+}) {
   const compact = () => windowSize().width < 860;
   const currentOs = () => props.platformOs ?? platform.os;
   const activeSectionLabelKey = () => sectionLabelKey(selectedSection());
@@ -254,10 +230,17 @@ export function SettingsPage(props: { platformOs?: string; onNavigateToModels?: 
               class={`mx-auto w-full max-w-4xl ${compact() ? "gap-4 px-4 pb-4 pt-1" : "gap-5 px-6 pb-6 pt-2"}`}
             >
               <If when={selectedSection() === "general"}>
-                <GeneralSection compact={compact()} platformOs={currentOs()} />
+                <GeneralSection compact={compact()} />
               </If>
               <If when={selectedSection() === "appearance"}>
                 <AppearanceSection compact={compact()} />
+              </If>
+              <If when={selectedSection() === "shortcuts"}>
+                <ShortcutsSection
+                  compact={compact()}
+                  platformOs={currentOs()}
+                  quickTranslateShortcut={props.quickTranslateShortcut}
+                />
               </If>
               <If when={selectedSection() === "language-detection"}>
                 <LanguageDetectionSection

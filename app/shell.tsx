@@ -1,4 +1,4 @@
-import { cleanup, effect, signal, View } from "nsh";
+import { cleanup, effect, platform, signal, View } from "nsh";
 import { Application, currentWindow, titleBar, Tray, Window, type TrayOptions } from "nsh/desktop";
 import { t } from "nsh/i18n";
 import trayIcon from "../assets/logos/icon.svg";
@@ -18,8 +18,8 @@ import {
   registerQuickTranslateDoubleCopy,
   registerQuickTranslateShortcut,
   type QuickTranslateControllerOptions,
-  type QuickTranslateShortcutBinding,
 } from "./quick-translate";
+import type { QuickTranslateShortcutBinding } from "../features/settings/shortcuts";
 
 /** The app bar's height, which the platform centers the system's window
  * controls in: the same value as `window.titleBar.height` in nsh.json. */
@@ -57,8 +57,13 @@ export function AppShell(props: AppShellProps = {}) {
     trayApi.set(buildShellTrayOptions(() => quickTranslate.open()));
   });
 
-  registerQuickTranslateShortcut(quickTranslate, props.globalShortcut, props.platformOs);
-  registerQuickTranslateDoubleCopy(quickTranslate, props.doubleCopy, props.platformOs);
+  const currentOs = props.platformOs ?? platform.os;
+  const quickTranslateShortcut = registerQuickTranslateShortcut(
+    quickTranslate,
+    props.globalShortcut,
+    currentOs,
+  );
+  registerQuickTranslateDoubleCopy(quickTranslate, props.doubleCopy, currentOs);
 
   const win = currentWindow();
   effect(() => win.set({ backdrop: transparency() ? "popover" : "none" }));
@@ -135,7 +140,11 @@ export function AppShell(props: AppShellProps = {}) {
         </If>
         <If when={page() === "settings"}>
           <PageSurface testID="settings-page" layout="split">
-            <SettingsPage platformOs={props.platformOs} onNavigateToModels={selectModels} />
+            <SettingsPage
+              platformOs={currentOs}
+              onNavigateToModels={selectModels}
+              quickTranslateShortcut={quickTranslateShortcut}
+            />
           </PageSurface>
         </If>
       </View>
