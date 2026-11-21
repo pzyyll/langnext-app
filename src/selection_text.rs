@@ -85,14 +85,14 @@ impl SelectionTextNative {
         platform_is_current(&target)
     }
 
-    /// Reads the selection captured in `target`.
+    /// Reads the selection captured in `target`. If allowed, try Copy when UI Automation lacks selection support.
     ///
     /// # Rust
     ///
     /// The read runs on a blocking worker so UI Automation stays off the engine thread.
     /// A worker failure is `unavailable`.
-    pub async fn read(target: String) -> SelectionTextResult {
-        let joined = blocking(move || read_target(&target)).await;
+    pub async fn read(target: String, allow_copy_fallback: bool) -> SelectionTextResult {
+        let joined = blocking(move || read_target(&target, allow_copy_fallback)).await;
         joined.unwrap_or_else(|_| SelectionTextResult::unavailable())
     }
 }
@@ -120,14 +120,14 @@ fn platform_is_current(target: &str) -> bool {
     }
 }
 
-pub(crate) fn read_target(target: &str) -> SelectionTextResult {
+pub(crate) fn read_target(target: &str, allow_copy_fallback: bool) -> SelectionTextResult {
     #[cfg(windows)]
     {
-        windows::read_target(target)
+        windows::read_target(target, allow_copy_fallback)
     }
     #[cfg(not(windows))]
     {
-        let _ = target;
+        let _ = (target, allow_copy_fallback);
         SelectionTextResult::unavailable()
     }
 }

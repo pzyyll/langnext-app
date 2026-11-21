@@ -23,41 +23,43 @@ export function canReadSelectionText(os: string): boolean {
   return os === "windows";
 }
 
-/** Production selection reader over `SelectionTextNative`. A thrown call becomes no text. */
-export const SelectionText: SelectionTextPort = {
-  snapshot() {
-    if (!canReadSelectionText(platform.os)) return null;
-    try {
-      return SelectionTextNative.snapshot();
-    } catch {
-      return null;
-    }
-  },
-  isCurrent(target) {
-    if (!canReadSelectionText(platform.os)) return false;
-    try {
-      return SelectionTextNative.isCurrent(target);
-    } catch {
-      return false;
-    }
-  },
-  async read(target) {
-    if (!canReadSelectionText(platform.os)) return { status: "unavailable" };
-    try {
-      const result = await SelectionTextNative.read(target);
-      if (result.status === "selected" && typeof result.text === "string") {
-        return { status: "selected", text: result.text };
+/** Production reader. Copy fallback permission is sampled for each read. */
+export function createSelectionTextPort(allowCopyFallback: () => boolean): SelectionTextPort {
+  return {
+    snapshot() {
+      if (!canReadSelectionText(platform.os)) return null;
+      try {
+        return SelectionTextNative.snapshot();
+      } catch {
+        return null;
       }
-      if (
-        result.status === "noSelection" ||
-        result.status === "unavailable" ||
-        result.status === "stale"
-      ) {
-        return { status: result.status };
+    },
+    isCurrent(target) {
+      if (!canReadSelectionText(platform.os)) return false;
+      try {
+        return SelectionTextNative.isCurrent(target);
+      } catch {
+        return false;
       }
-      return { status: "unavailable" };
-    } catch {
-      return { status: "unavailable" };
-    }
-  },
-};
+    },
+    async read(target) {
+      if (!canReadSelectionText(platform.os)) return { status: "unavailable" };
+      try {
+        const result = await SelectionTextNative.read(target, allowCopyFallback());
+        if (result.status === "selected" && typeof result.text === "string") {
+          return { status: "selected", text: result.text };
+        }
+        if (
+          result.status === "noSelection" ||
+          result.status === "unavailable" ||
+          result.status === "stale"
+        ) {
+          return { status: result.status };
+        }
+        return { status: "unavailable" };
+      } catch {
+        return { status: "unavailable" };
+      }
+    },
+  };
+}

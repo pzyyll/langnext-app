@@ -10,6 +10,7 @@ import { presetsStore } from "./features/presets/store";
 import { loadQuickTranslatePreferences } from "./features/quick-translate/preferences";
 import { loadAppearance } from "./features/settings/appearance";
 import { loadLanguage } from "./features/settings/language";
+import { loadSelectionCopy } from "./features/settings/selection-copy";
 import { loadTransparency } from "./features/settings/transparency";
 
 async function startApp() {
@@ -17,6 +18,7 @@ async function startApp() {
   await Promise.all([
     loadAppearance(),
     loadLanguage(),
+    loadSelectionCopy(),
     loadTransparency(),
     loadQuickTranslatePreferences(),
     loadModelsState(),

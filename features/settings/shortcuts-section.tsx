@@ -12,6 +12,12 @@ import {
   selectDoubleCopy,
 } from "../quick-translate/preferences";
 import {
+  selectSelectionCopy,
+  selectionCopyEnabled,
+  selectionCopySaveFailed,
+  selectionCopySaving,
+} from "./selection-copy";
+import {
   formatShortcut,
   recordQuickTranslateShortcut,
   TRANSLATION_SHORTCUTS,
@@ -180,6 +186,28 @@ export function ShortcutsSection(props: {
               </>
             )}
           </Each>
+          <View class="h-px bg-border" />
+          <View class="gap-2">
+            <Switch
+              testID="settings-selection-copy-switch"
+              label={t("settings.selectionCopy.label")}
+              checked={selectionCopyEnabled()}
+              disabled={selectionCopySaving()}
+              onChange={(checked) => void selectSelectionCopy(checked)}
+            />
+            <Text class="px-3 text-xs text-muted-foreground">
+              {t("settings.selectionCopy.description")}
+            </Text>
+            <If when={selectionCopySaveFailed()}>
+              <Text
+                testID="settings-selection-copy-error"
+                role="alert"
+                class="px-3 text-sm text-destructive"
+              >
+                {t("settings.selectionCopy.saveError")}
+              </Text>
+            </If>
+          </View>
         </Card>
       </If>
       <If when={canUseDoubleCopy(props.platformOs)}>

@@ -3,6 +3,7 @@ import { SPLIT_RAIL_STORAGE_KEYS } from "../../components/layout/split-rail";
 import { LANGUAGE_DETECTION_STORAGE_KEY } from "../language-detection/settings";
 import { makeChannel, makeModel, makeSeedStorage } from "../models/__tests__/fixtures";
 import { baiduCredentialStorageKey, OCR_STORAGE_KEY } from "../ocr/settings";
+import { SELECTION_COPY_STORAGE_KEY } from "./selection-copy";
 
 const APP_ENTRY = "../../App.tsx";
 const viewport = { width: 1040, height: 720, platform: "windows" as const };
@@ -138,6 +139,56 @@ test("settings ui: renders cleanly at the minimum viewport in dark mode with red
   expect(app.shows("id:settings-screenshot-translate-shortcut-reset")).toBe(false);
   expect(app.shows("id:settings-quick-translate-shortcut-reset")).toBe(false);
   expect(app.shows("id:settings-double-copy-switch")).toBe(true);
+  expect(app.texts()).toContain("模拟复制获取文本");
+});
+
+test("selection copy: defaults off and restores the saved setting", async () => {
+  const switchId = "id:settings-selection-copy-switch";
+  const app = await open(APP_ENTRY, {
+    ...viewport,
+    storage: { "settings.language": "en" },
+  });
+  await app.press("id:nav-settings");
+  await app.press("id:settings-nav-shortcuts");
+  await app.waitFor(switchId);
+  expect(app.texts()).toContain("Simulate Copy to Get Text");
+  expect(app.storage()[SELECTION_COPY_STORAGE_KEY]).toBeUndefined();
+
+  await app.press(switchId);
+  await app.waitUntil(() => app.storage()[SELECTION_COPY_STORAGE_KEY] === "true");
+  const reopened = await open(APP_ENTRY, { ...viewport, storage: app.storage() });
+  await reopened.press("id:nav-settings");
+  await reopened.press("id:settings-nav-shortcuts");
+  await reopened.press(switchId);
+  await reopened.waitUntil(() => reopened.storage()[SELECTION_COPY_STORAGE_KEY] === "false");
+});
+
+test("selection copy: a failed write keeps the fallback off and can be retried", async () => {
+  const switchId = "id:settings-selection-copy-switch";
+  let fail = true;
+  const saved: Record<string, string> = { "settings.language": "en" };
+  const app = await open(APP_ENTRY, {
+    ...viewport,
+    modules: {
+      nsh: {
+        "Storage.getItem": async (key: string) => saved[key] ?? null,
+        "Storage.setItem": async (key: string, value: string) => {
+          if (key === SELECTION_COPY_STORAGE_KEY && fail) throw new Error("Storage unavailable");
+          saved[key] = value;
+        },
+      },
+    },
+  });
+  await app.press("id:nav-settings");
+  await app.press("id:settings-nav-shortcuts");
+  await app.press(switchId);
+  await app.waitFor("id:settings-selection-copy-error");
+  expect(saved[SELECTION_COPY_STORAGE_KEY]).toBeUndefined();
+
+  fail = false;
+  await app.press(switchId);
+  await app.waitUntil(() => saved[SELECTION_COPY_STORAGE_KEY] === "true");
+  expect(app.shows("id:settings-selection-copy-error")).toBe(false);
 });
 
 test("double copy: shows Windows-only opt-in off by default, hides outside Windows, and surfaces startup or enable failures", async () => {
@@ -150,6 +201,7 @@ test("double copy: shows Windows-only opt-in off by default, hides outside Windo
   await macApp.press("id:settings-nav-shortcuts");
   await macApp.waitFor("id:settings-shortcuts-windows-only");
   expect(macApp.shows("id:settings-double-copy-card")).toBe(false);
+  expect(macApp.shows("id:settings-selection-copy-switch")).toBe(false);
   expect(macApp.shows("id:settings-quick-translate-shortcut")).toBe(false);
   expect(macApp.shows("id:settings-translation-shortcuts-card")).toBe(false);
 

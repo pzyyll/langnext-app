@@ -8,8 +8,8 @@ use windows::Win32::System::Com::{
 };
 use windows::Win32::UI::Accessibility::{
     CUIAutomation8, IUIAutomation2, IUIAutomationElement, IUIAutomationTextPattern,
-    IUIAutomationTreeWalker, TextPatternRangeEndpoint_End, TextPatternRangeEndpoint_Start,
-    UIA_E_NOTSUPPORTED, UIA_TextPatternId,
+    IUIAutomationTreeWalker, SupportedTextSelection_None, TextPatternRangeEndpoint_End,
+    TextPatternRangeEndpoint_Start, UIA_E_NOTSUPPORTED, UIA_TextPatternId,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
     GA_ROOT, GUITHREADINFO, GetAncestor, GetForegroundWindow, GetGUIThreadInfo,
@@ -18,6 +18,8 @@ use windows::Win32::UI::WindowsAndMessaging::{
 use windows::core::Error;
 
 use super::{SelectionTextResult, SelectionTextStatus};
+
+mod copy;
 
 /// Milliseconds UI Automation may wait for one provider connection.
 const CONNECTION_TIMEOUT_MS: u32 = 250;
@@ -110,7 +112,7 @@ pub(crate) fn is_current(target: &str) -> bool {
 }
 
 /// Reads `target` if it is still the foreground focus.
-pub(crate) fn read_target(target: &str) -> SelectionTextResult {
+pub(crate) fn read_target(target: &str, allow_copy_fallback: bool) -> SelectionTextResult {
     if !is_current(target) {
         return SelectionTextResult::stale();
     }
@@ -126,7 +128,7 @@ pub(crate) fn read_target(target: &str) -> SelectionTextResult {
         Err(_) => return keep_current(target, SelectionTextResult::unavailable()),
     };
     let started = Instant::now();
-    let result = match read_focused_selection(foreground, started) {
+    let result = match read_focused_selection(target, foreground, started, allow_copy_fallback) {
         Ok(result) => result,
         Err(ReadFailure::Unavailable) => SelectionTextResult::unavailable(),
     };
@@ -142,8 +144,10 @@ fn keep_current(target: &str, result: SelectionTextResult) -> SelectionTextResul
 }
 
 fn read_focused_selection(
+    target: &str,
     foreground: HWND,
     started: Instant,
+    allow_copy_fallback: bool,
 ) -> Result<SelectionTextResult, ReadFailure> {
     ensure_budget(started)?;
     // SAFETY: `CUIAutomation8` is the in-process UI Automation class, created on this MTA worker.
@@ -212,6 +216,12 @@ fn read_focused_selection(
             }
         }
         if at_foreground_root(&candidate, foreground)? {
+            if allow_copy_fallback {
+                ensure_budget(started)?;
+                return copy::read(target, foreground, || {
+                    Ok(focus_matches(&automation, &focused)? && !is_protected(&focused)?)
+                });
+            }
             break;
         }
     }
@@ -249,16 +259,23 @@ fn confirm_focus(
     result: SelectionTextResult,
 ) -> Result<SelectionTextResult, ReadFailure> {
     ensure_budget(started)?;
+    if focus_matches(automation, initial)? {
+        Ok(result)
+    } else {
+        Ok(SelectionTextResult::stale())
+    }
+}
+
+fn focus_matches(
+    automation: &IUIAutomation2,
+    initial: &IUIAutomationElement,
+) -> Result<bool, ReadFailure> {
     // SAFETY: both elements come from this same automation client.
     let current =
         unsafe { automation.GetFocusedElement() }.map_err(|_| ReadFailure::Unavailable)?;
     let same = unsafe { automation.CompareElements(initial, &current) }
         .map_err(|_| ReadFailure::Unavailable)?;
-    if same.as_bool() {
-        Ok(result)
-    } else {
-        Ok(SelectionTextResult::stale())
-    }
+    Ok(same.as_bool())
 }
 
 fn selection_text(
@@ -276,10 +293,24 @@ fn selection_text(
         };
     ensure_budget(started)?;
     // SAFETY: `GetSelection` returns only the selected ranges, never the whole document.
-    let ranges = unsafe { pattern.GetSelection() }.map_err(|_| ReadFailure::Unavailable)?;
+    let ranges = match unsafe { pattern.GetSelection() } {
+        Ok(ranges) => ranges,
+        Err(error) if pattern_is_missing(&error) => {
+            return if lacks_text_selection(&pattern, started)? {
+                Ok(CandidateText::Unsupported)
+            } else {
+                Err(ReadFailure::Unavailable)
+            };
+        }
+        Err(_) => return Err(ReadFailure::Unavailable),
+    };
     let length = unsafe { ranges.Length() }.map_err(|_| ReadFailure::Unavailable)?;
     if length <= 0 {
-        return Ok(CandidateText::Empty);
+        return if lacks_text_selection(&pattern, started)? {
+            Ok(CandidateText::Unsupported)
+        } else {
+            Ok(CandidateText::Empty)
+        };
     }
 
     let mut parts = Vec::new();
@@ -312,6 +343,17 @@ fn selection_text(
     } else {
         Ok(CandidateText::Text(text))
     }
+}
+
+fn lacks_text_selection(
+    pattern: &IUIAutomationTextPattern,
+    started: Instant,
+) -> Result<bool, ReadFailure> {
+    ensure_budget(started)?;
+    // SAFETY: queries the selection capabilities of this text pattern.
+    unsafe { pattern.SupportedTextSelection() }
+        .map(|support| support == SupportedTextSelection_None)
+        .map_err(|_| ReadFailure::Unavailable)
 }
 
 fn is_protected(element: &IUIAutomationElement) -> Result<bool, ReadFailure> {
@@ -388,7 +430,11 @@ fn ensure_budget(started: Instant) -> Result<(), ReadFailure> {
 
 fn pattern_is_missing(error: &Error) -> bool {
     let code = error.code().0 as u32;
-    code == UIA_E_NOTSUPPORTED || code == E_NOINTERFACE || code == E_NOTIMPL
+    // windows-rs returns an empty error when UI Automation leaves the interface null.
+    error.code() == Error::empty().code()
+        || code == UIA_E_NOTSUPPORTED
+        || code == E_NOINTERFACE
+        || code == E_NOTIMPL
 }
 
 fn encode_target(foreground: HWND, focus: HWND) -> String {

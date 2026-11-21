@@ -7,18 +7,26 @@ use std::sync::mpsc;
 use std::thread;
 use std::time::Duration;
 
-use windows_sys::Win32::Foundation::{HWND, LPARAM, LRESULT, WPARAM};
+use windows_sys::Win32::Foundation::{GlobalFree, HWND, LPARAM, LRESULT, WPARAM};
+use windows_sys::Win32::System::DataExchange::{
+    CloseClipboard, EmptyClipboard, GetClipboardSequenceNumber, OpenClipboard, SetClipboardData,
+};
 use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
+use windows_sys::Win32::System::Memory::{GMEM_MOVEABLE, GlobalAlloc, GlobalLock, GlobalUnlock};
+use windows_sys::Win32::System::Ole::CF_UNICODETEXT;
 use windows_sys::Win32::System::Threading::{AttachThreadInput, GetCurrentThreadId};
-use windows_sys::Win32::UI::Input::KeyboardAndMouse::{GetFocus, SetFocus};
+use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
+    GetFocus, GetKeyState, SetFocus, VK_C, VK_CONTROL,
+};
 use windows_sys::Win32::UI::WindowsAndMessaging::{
     ASFW_ANY, AllowSetForegroundWindow, CW_USEDEFAULT, CreateWindowExW, DefWindowProcW,
     DestroyWindow, DispatchMessageW, ES_AUTOVSCROLL, ES_MULTILINE, ES_PASSWORD, ES_WANTRETURN,
-    GA_ROOT, GUITHREADINFO, GetAncestor, GetForegroundWindow, GetGUIThreadInfo,
-    GetWindowThreadProcessId, HWND_NOTOPMOST, HWND_TOPMOST, MSG, PM_REMOVE, PeekMessageW,
-    RegisterClassW, SW_SHOWNORMAL, SWP_NOMOVE, SWP_NOSIZE, SWP_SHOWWINDOW, SendMessageW,
-    SetForegroundWindow, SetWindowPos, SetWindowTextW, ShowWindow, TranslateMessage,
-    UnregisterClassW, WM_QUIT, WNDCLASSW, WS_CHILD, WS_OVERLAPPEDWINDOW, WS_VISIBLE, WS_VSCROLL,
+    GA_ROOT, GUITHREADINFO, GWLP_USERDATA, GetAncestor, GetForegroundWindow, GetGUIThreadInfo,
+    GetWindowLongPtrW, GetWindowThreadProcessId, HWND_NOTOPMOST, HWND_TOPMOST, MSG, PM_REMOVE,
+    PeekMessageW, RegisterClassW, SW_SHOWNORMAL, SWP_NOMOVE, SWP_NOSIZE, SWP_SHOWWINDOW,
+    SendMessageW, SetForegroundWindow, SetWindowLongPtrW, SetWindowPos, SetWindowTextW, ShowWindow,
+    TranslateMessage, UnregisterClassW, WM_KEYDOWN, WM_QUIT, WNDCLASSW, WS_CHILD,
+    WS_OVERLAPPEDWINDOW, WS_VISIBLE, WS_VSCROLL,
 };
 
 use super::{SelectionTextNative, SelectionTextStatus, read_target};
@@ -30,6 +38,10 @@ const FIXTURE_TEXT: &str = "alpha SELECTED beta";
 const SELECTED_TEXT: &str = "SELECTED";
 const CLASS_NAME: &str = "MyTranslatorSelectionFixture";
 const COVER_CLASS_NAME: &str = "MyTranslatorSelectionCover";
+const COPY_CLASS_NAME: &str = "MyTranslatorCopyOnlyFixture";
+const COPY_PROBE_CLASS_NAME: &str = "MyTranslatorCopyProbeFixture";
+const COPY_PROBE_WAITING: isize = 1;
+const COPY_PROBE_SEEN: isize = 2;
 
 struct TextFixture {
     top: HWND,
@@ -128,12 +140,19 @@ fn run_fixture(
     ready: mpsc::Sender<(isize, isize)>,
     stop: &AtomicBool,
 ) {
+    let copy_probe = class_name == COPY_PROBE_CLASS_NAME;
+    let copy_only = copy_probe || class_name == COPY_CLASS_NAME;
     let class_name = wide(&class_name);
-    let edit_class = wide("EDIT");
+    let edit_class = if copy_only {
+        class_name.clone()
+    } else {
+        wide("EDIT")
+    };
     let title = wide("Selection fixture");
     let text = wide(&text);
     // SAFETY: the class procedure is static, and these windows are destroyed before return.
-    let created = unsafe { create_fixture(&class_name, &edit_class, &title, &text, password) };
+    let created =
+        unsafe { create_fixture(&class_name, &edit_class, &title, &text, password, copy_only) };
     let Some((top, edit)) = created else {
         let _ = ready.send((0, 0));
         return;
@@ -141,6 +160,9 @@ fn run_fixture(
     // SAFETY: both handles belong to this thread.
     unsafe {
         SendMessageW(edit, EM_SETSEL, start as WPARAM, end as LPARAM);
+        if copy_probe {
+            SetWindowLongPtrW(edit, GWLP_USERDATA, COPY_PROBE_WAITING);
+        }
         show_in_front(top, edit);
         pump_once();
     }
@@ -164,11 +186,16 @@ unsafe fn create_fixture(
     title: &[u16],
     text: &[u16],
     password: bool,
+    copy_only: bool,
 ) -> Option<(HWND, HWND)> {
     let instance = unsafe { GetModuleHandleW(ptr::null()) };
     let class = WNDCLASSW {
         style: 0,
-        lpfnWndProc: Some(fixture_wnd_proc),
+        lpfnWndProc: Some(if copy_only {
+            copy_fixture_wnd_proc
+        } else {
+            fixture_wnd_proc
+        }),
         cbClsExtra: 0,
         cbWndExtra: 0,
         hInstance: instance,
@@ -300,6 +327,52 @@ unsafe extern "system" fn fixture_wnd_proc(
     unsafe { DefWindowProcW(hwnd, message, wparam, lparam) }
 }
 
+unsafe extern "system" fn copy_fixture_wnd_proc(
+    hwnd: HWND,
+    message: u32,
+    wparam: WPARAM,
+    lparam: LPARAM,
+) -> LRESULT {
+    if message == WM_KEYDOWN
+        && wparam == usize::from(VK_C)
+        && unsafe { GetKeyState(i32::from(VK_CONTROL)) } < 0
+    {
+        if unsafe { GetWindowLongPtrW(hwnd, GWLP_USERDATA) } == 0 {
+            put_fixture_text_on_clipboard(hwnd);
+        } else {
+            unsafe { SetWindowLongPtrW(hwnd, GWLP_USERDATA, COPY_PROBE_SEEN) };
+        }
+        0
+    } else {
+        unsafe { DefWindowProcW(hwnd, message, wparam, lparam) }
+    }
+}
+
+fn put_fixture_text_on_clipboard(hwnd: HWND) {
+    let text = wide(SELECTED_TEXT);
+    // SAFETY: the window belongs to this thread. The clipboard takes ownership only on success.
+    unsafe {
+        let handle = GlobalAlloc(GMEM_MOVEABLE, text.len() * size_of::<u16>());
+        if handle.is_null() {
+            return;
+        }
+        let buffer = GlobalLock(handle).cast::<u16>();
+        if !buffer.is_null() {
+            ptr::copy_nonoverlapping(text.as_ptr(), buffer, text.len());
+            GlobalUnlock(handle);
+            if OpenClipboard(hwnd) != 0 {
+                let copied = EmptyClipboard() != 0
+                    && !SetClipboardData(u32::from(CF_UNICODETEXT), handle).is_null();
+                CloseClipboard();
+                if copied {
+                    return;
+                }
+            }
+        }
+        GlobalFree(handle);
+    }
+}
+
 fn foreground_edit(top: HWND) -> Option<HWND> {
     unsafe {
         if GetForegroundWindow() != top || GetAncestor(top, GA_ROOT) != top {
@@ -333,7 +406,7 @@ fn desktop_selection_text_reads_only_the_selected_range() {
     let target = SelectionTextNative::snapshot().unwrap_or_else(|| {
         panic!("test setup failed: snapshot returned no foreground target");
     });
-    let result = read_target(&target);
+    let result = read_target(&target, true);
     assert_eq!(
         (result.status, result.text.as_deref()),
         (SelectionTextStatus::Selected, Some(SELECTED_TEXT))
@@ -370,7 +443,7 @@ fn desktop_selection_text_lost_foreground_is_stale() {
         panic!("test setup failed: snapshot returned no foreground target");
     });
     let _cover = TextFixture::cover();
-    let result = read_target(&target);
+    let result = read_target(&target, true);
     assert_eq!(
         (result.status, result.text.as_deref()),
         (SelectionTextStatus::Stale, None)
@@ -378,9 +451,53 @@ fn desktop_selection_text_lost_foreground_is_stale() {
     drop(fixture);
 }
 
+#[test]
+#[ignore = "requires an interactive Windows desktop and replaces its clipboard contents"]
+fn desktop_selection_falls_back_to_copy_only_when_enabled() {
+    let _fixture = TextFixture::open(COPY_CLASS_NAME, "Copy-only fixture", 0, 0, false);
+    let target = SelectionTextNative::snapshot().expect("foreground target");
+    let before = unsafe { GetClipboardSequenceNumber() };
+    let disabled = read_target(&target, false);
+    assert_eq!(disabled.status, SelectionTextStatus::Unavailable);
+    assert_eq!(unsafe { GetClipboardSequenceNumber() }, before);
+
+    let enabled = read_target(&target, true);
+    assert_eq!(
+        (enabled.status, enabled.text.as_deref()),
+        (SelectionTextStatus::Selected, Some(SELECTED_TEXT)),
+    );
+    assert_ne!(unsafe { GetClipboardSequenceNumber() }, before);
+}
+
+#[test]
+#[ignore = "requires an interactive Windows desktop"]
+fn desktop_selection_text_does_not_translate_a_copy_without_new_clipboard_text() {
+    let fixture = TextFixture::open(COPY_PROBE_CLASS_NAME, "Copy probe", 0, 0, false);
+    let target = SelectionTextNative::snapshot().expect("foreground target");
+    let before = unsafe { GetClipboardSequenceNumber() };
+
+    let disabled = read_target(&target, false);
+    assert_eq!(disabled.status, SelectionTextStatus::Unavailable);
+    assert_eq!(
+        unsafe { GetWindowLongPtrW(fixture.edit, GWLP_USERDATA) },
+        COPY_PROBE_WAITING
+    );
+
+    let enabled = read_target(&target, true);
+    assert_eq!(
+        (enabled.status, enabled.text),
+        (SelectionTextStatus::Unavailable, None)
+    );
+    assert_eq!(
+        unsafe { GetWindowLongPtrW(fixture.edit, GWLP_USERDATA) },
+        COPY_PROBE_SEEN
+    );
+    assert_eq!(unsafe { GetClipboardSequenceNumber() }, before);
+}
+
 fn read_foreground() -> super::SelectionTextResult {
     let target = SelectionTextNative::snapshot().unwrap_or_else(|| {
         panic!("test setup failed: snapshot returned no foreground target");
     });
-    read_target(&target)
+    read_target(&target, true)
 }

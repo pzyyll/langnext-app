@@ -77,6 +77,10 @@ settings:
     inactive: 此快捷键未生效，请录制其他组合。
     saveError: 无法保存快捷键，请检查存储后重试。
     windowsOnly: 全局快捷键仅在 Windows 上可用。
+  selectionCopy:
+    label: 模拟复制获取文本
+    description: 无法直接读取选区时尝试复制。这可能替换剪贴板内容。
+    saveError: 无法保存模拟复制设置，请重试。
   doubleCopy:
     label: 双击 Ctrl+C 快速翻译
     description: 连续按两次 Ctrl+C 会读取复制的文本，并使用已启用的预设进行翻译。

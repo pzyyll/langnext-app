@@ -27,6 +27,7 @@ import {
   saveQuickTranslatePopupState,
 } from "../features/quick-translate/preferences";
 import { createQuickTranslateSession } from "../features/quick-translate/session";
+import { selectionCopyEnabled } from "../features/settings/selection-copy";
 import {
   createTranslationShortcutSetting,
   formatShortcut,
@@ -34,7 +35,7 @@ import {
   type TranslationShortcutId,
 } from "../features/settings/shortcuts";
 import { canCaptureScreen, ScreenCapture } from "../platform/screen-capture";
-import { canReadSelectionText, SelectionText } from "../platform/selection-text";
+import { canReadSelectionText, createSelectionTextPort } from "../platform/selection-text";
 import { canMonitorPointerPress, type DoubleCopyBinding } from "../platform/quick-translate";
 import {
   nativeDoubleCopyBinding,
@@ -76,7 +77,9 @@ export function createQuickTranslateController(
       textColor: token("foreground"),
       backdropColor: token("background"),
     }),
-    selectionText: canReadSelectionText(platform.os) ? SelectionText : undefined,
+    selectionText: canReadSelectionText(platform.os)
+      ? createSelectionTextPort(selectionCopyEnabled)
+      : undefined,
     ...options,
   });
 }
