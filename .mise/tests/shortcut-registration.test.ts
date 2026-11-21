@@ -2,6 +2,7 @@ import { expect, open, test } from "nsh/test";
 import {
   QUICK_TRANSLATE_SHORTCUT_STORAGE_KEY,
   SCREENSHOT_TRANSLATE_SHORTCUT_STORAGE_KEY,
+  SELECTION_TRANSLATE_SHORTCUT_STORAGE_KEY,
 } from "../../features/settings/shortcuts";
 
 // Run with --target windows. Headless NSH does not answer native hotkey registration.
@@ -74,4 +75,34 @@ test("Windows records and registers independent translation shortcuts", async ()
   expect(app.shows(`${screenshot}-error`)).toBe(false);
   expect(app.shows(`${screenshot}-reset`)).toBe(true);
   expect(app.storage()[QUICK_TRANSLATE_SHORTCUT_STORAGE_KEY]).toBe("");
+
+  const selection = "id:settings-selection-translate-shortcut";
+  expect(app.shows(`${selection}-row`)).toBe(true);
+  expect(app.texts()).toContain("Alt+D");
+  await app.waitUntil(() => app.enabled(`${selection}-record`));
+  await app.press(`${selection}-record`);
+  await app.waitFor(listening);
+  await app.keyboard.press("alt+shift+f7");
+  await app.waitUntil(
+    () => app.storage()[SELECTION_TRANSLATE_SHORTCUT_STORAGE_KEY] === "alt+shift+f7",
+  );
+  expect(app.shows(`${selection}-error`)).toBe(false);
+  expect(app.storage()[SCREENSHOT_TRANSLATE_SHORTCUT_STORAGE_KEY]).toBe("alt+shift+f6");
+
+  await app.press(`${selection}-clear`);
+  await app.waitFor(`${selection}-unassigned`);
+  expect(app.storage()[SELECTION_TRANSLATE_SHORTCUT_STORAGE_KEY]).toBe("");
+
+  await app.press(`${selection}-reset`);
+  await app.waitUntil(
+    () =>
+      app.storage()[SELECTION_TRANSLATE_SHORTCUT_STORAGE_KEY] === "alt+d" ||
+      app.shows(`${selection}-error`),
+  );
+  if (app.shows(`${selection}-error`)) {
+    expect(app.texts()).toContain("This shortcut is unavailable. Try another combination.");
+    expect(app.storage()[SELECTION_TRANSLATE_SHORTCUT_STORAGE_KEY]).toBe("");
+  } else {
+    expect(app.storage()[SELECTION_TRANSLATE_SHORTCUT_STORAGE_KEY]).toBe("alt+d");
+  }
 });

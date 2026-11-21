@@ -11,7 +11,9 @@ import { loadAppearance } from "../../features/settings/appearance";
 import { loadLanguage } from "../../features/settings/language";
 import {
   DEFAULT_QUICK_TRANSLATE_SHORTCUT,
-  DEFAULT_SCREENSHOT_TRANSLATE_SHORTCUT,
+  QUICK_TRANSLATE_SHORTCUT_STORAGE_KEY,
+  SCREENSHOT_TRANSLATE_SHORTCUT_STORAGE_KEY,
+  SELECTION_TRANSLATE_SHORTCUT_STORAGE_KEY,
 } from "../../features/settings/shortcuts";
 import { loadTransparency } from "../../features/settings/transparency";
 import type { DoubleCopyActivationEvent } from "../../platform/quick-translate";
@@ -49,6 +51,8 @@ function QuickTranslateHarness(config: {
   initialClipboard: string;
   platformOs?: string;
   ocrCapture: HarnessCaptureMode;
+  /** Chords already stored at launch. Conflict mode still registers these. */
+  savedChords: ReadonlySet<string>;
 }) {
   let latestTray: TrayOptions | null = null;
   const registeredShortcuts = new Map<string, () => void>();
@@ -80,15 +84,7 @@ function QuickTranslateHarness(config: {
   let finishSelection: ((result: SelectionTextRead) => void) | undefined;
   const selectionReadCount = signal(0);
   const selectionText = "Selected line one\nSelected line two";
-
-  for (const chord of [
-    DEFAULT_QUICK_TRANSLATE_SHORTCUT,
-    DEFAULT_SCREENSHOT_TRANSLATE_SHORTCUT,
-    "alt+d",
-    "ctrl+shift+y",
-  ]) {
-    keymap.bind(chord, () => registeredShortcuts.get(chord)?.(), { when: "always" });
-  }
+  const shortcutBindings = new Map<string, () => void>();
 
   return (
     <View class="flex-1">
@@ -170,22 +166,29 @@ function QuickTranslateHarness(config: {
           globalShortcut={{
             async register(shortcut, onPress) {
               registerCount.set(registerCount() + 1);
-              if (
-                config.shortcutMode === "false" ||
-                (config.shortcutMode === "conflict" &&
-                  shortcut === DEFAULT_QUICK_TRANSLATE_SHORTCUT)
-              ) {
+              const replacementRefused =
+                config.shortcutMode === "conflict" &&
+                (shortcut === DEFAULT_QUICK_TRANSLATE_SHORTCUT ||
+                  (shortcut === "ctrl+shift+y" && !config.savedChords.has(shortcut)));
+              if (config.shortcutMode === "false" || replacementRefused) {
                 return false;
               }
               if (config.shortcutMode === "reject") {
                 throw new Error("shortcut conflict");
               }
               registeredShortcuts.set(shortcut, onPress);
+              shortcutBindings.get(shortcut)?.();
+              shortcutBindings.set(
+                shortcut,
+                keymap.bind(shortcut, () => onPress(), { when: "always" }),
+              );
               syncShortcutList();
               return true;
             },
             unregister(shortcut) {
               registeredShortcuts.delete(shortcut);
+              shortcutBindings.get(shortcut)?.();
+              shortcutBindings.delete(shortcut);
               syncShortcutList();
               unregisterCount.set(unregisterCount() + 1);
             },
@@ -310,26 +313,52 @@ void Promise.all([
   Storage.getItem(HARNESS_DOUBLE_COPY_MODE_KEY),
   Storage.getItem(HARNESS_DOUBLE_COPY_CLIPBOARD_KEY),
   Storage.getItem(HARNESS_OCR_CAPTURE_KEY),
-]).then(([, , , , , , , , modeRaw, osRaw, dcModeRaw, dcClipboardRaw, ocrCaptureRaw]) => {
-  const shortcutMode =
-    modeRaw === "false" || modeRaw === "reject" || modeRaw === "conflict" ? modeRaw : "ok";
-  const doubleCopyMode = dcModeRaw === "throw" ? "throw" : "ok";
-  const initialClipboard = dcClipboardRaw ?? "";
-  const platformOs = osRaw || undefined;
-  const ocrCapture: HarnessCaptureMode =
-    ocrCaptureRaw === "cancel" ||
-    ocrCaptureRaw === "tooLarge" ||
-    ocrCaptureRaw === "fail" ||
-    ocrCaptureRaw === "wait"
-      ? ocrCaptureRaw
-      : "png";
-  mount(() => (
-    <QuickTranslateHarness
-      shortcutMode={shortcutMode}
-      doubleCopyMode={doubleCopyMode}
-      initialClipboard={initialClipboard}
-      platformOs={platformOs}
-      ocrCapture={ocrCapture}
-    />
-  ));
-});
+  Storage.getItem(QUICK_TRANSLATE_SHORTCUT_STORAGE_KEY),
+  Storage.getItem(SCREENSHOT_TRANSLATE_SHORTCUT_STORAGE_KEY),
+  Storage.getItem(SELECTION_TRANSLATE_SHORTCUT_STORAGE_KEY),
+]).then(
+  ([
+    ,
+    ,
+    ,
+    ,
+    ,
+    ,
+    ,
+    ,
+    modeRaw,
+    osRaw,
+    dcModeRaw,
+    dcClipboardRaw,
+    ocrCaptureRaw,
+    quickSaved,
+    screenshotSaved,
+    selectionSaved,
+  ]) => {
+    const shortcutMode =
+      modeRaw === "false" || modeRaw === "reject" || modeRaw === "conflict" ? modeRaw : "ok";
+    const doubleCopyMode = dcModeRaw === "throw" ? "throw" : "ok";
+    const initialClipboard = dcClipboardRaw ?? "";
+    const platformOs = osRaw || undefined;
+    const ocrCapture: HarnessCaptureMode =
+      ocrCaptureRaw === "cancel" ||
+      ocrCaptureRaw === "tooLarge" ||
+      ocrCaptureRaw === "fail" ||
+      ocrCaptureRaw === "wait"
+        ? ocrCaptureRaw
+        : "png";
+    const savedChords = new Set(
+      [quickSaved, screenshotSaved, selectionSaved].filter((chord) => chord !== null),
+    );
+    mount(() => (
+      <QuickTranslateHarness
+        shortcutMode={shortcutMode}
+        doubleCopyMode={doubleCopyMode}
+        initialClipboard={initialClipboard}
+        platformOs={platformOs}
+        ocrCapture={ocrCapture}
+        savedChords={savedChords}
+      />
+    ));
+  },
+);

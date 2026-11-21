@@ -12,6 +12,7 @@ import {
   formatShortcut,
   QUICK_TRANSLATE_SHORTCUT_STORAGE_KEY,
   SCREENSHOT_TRANSLATE_SHORTCUT_STORAGE_KEY,
+  SELECTION_TRANSLATE_SHORTCUT_STORAGE_KEY,
 } from "../features/settings/shortcuts";
 import { createQuickTranslateController, POPUP_MIN_SIZE } from "./quick-translate-controller";
 
@@ -459,6 +460,72 @@ test("shortcut settings: the new screenshot default does not take over an existi
   expect(app.texts().join(" ")).toContain("ocrCap=0|");
 });
 
+test("selection shortcut: an existing action keeps Alt+D and the selection row stays inactive", async () => {
+  const owners = [
+    {
+      key: QUICK_TRANSLATE_SHORTCUT_STORAGE_KEY,
+      effect: "source",
+    },
+    {
+      key: SCREENSHOT_TRANSLATE_SHORTCUT_STORAGE_KEY,
+      effect: "ocr",
+    },
+  ] as const;
+  for (const owner of owners) {
+    const app = await open(HARNESS_ENTRY, {
+      ...viewport,
+      storage: {
+        "settings.language": "en",
+        [owner.key]: DEFAULT_SELECTION_TRANSLATE_SHORTCUT,
+      },
+    });
+    await app.press("id:nav-settings");
+    await app.press("id:settings-nav-shortcuts");
+    await app.waitFor("id:settings-selection-translate-shortcut-error");
+    expect(app.texts()).toContain("This shortcut is inactive. Record another combination.");
+    expect(app.texts()).toContain("Alt+D");
+    expect(app.shows("id:settings-selection-translate-shortcut-error")).toBe(true);
+
+    await app.keyboard.press(DEFAULT_SELECTION_TRANSLATE_SHORTCUT);
+    if (owner.effect === "source") {
+      await app.waitFor("id:quick-translate-source");
+    } else {
+      await app.waitFor("id:quick-translate-ocr-status");
+    }
+    expect(app.texts().join(" ")).toContain("selReads=0|");
+  }
+});
+
+test("selection shortcut: a refused replacement keeps the previous binding", async () => {
+  const previous = DEFAULT_SELECTION_TRANSLATE_SHORTCUT;
+  // Headless Windows does not deliver a raw key to the focused recorder. Linux does,
+  // while the harness still registers the Windows shortcuts.
+  const app = await open(HARNESS_ENTRY, {
+    ...viewport,
+    platform: "linux",
+    storage: {
+      "settings.language": "en",
+      [HARNESS_PLATFORM_OS_KEY]: "windows",
+      [HARNESS_SHORTCUT_MODE_KEY]: "conflict",
+      [SELECTION_TRANSLATE_SHORTCUT_STORAGE_KEY]: previous,
+    },
+  });
+  await app.press("id:nav-settings");
+  await app.press("id:settings-nav-shortcuts");
+  const selection = "id:settings-selection-translate-shortcut";
+  await app.waitUntil(() => app.enabled(`${selection}-record`));
+  await app.press(`${selection}-record`);
+  await app.keyboard.press(CUSTOM_SHORTCUT);
+  await app.waitFor(`${selection}-error`);
+  expect(app.texts()).toContain("This shortcut is unavailable. Try another combination.");
+  expect(app.storage()[SELECTION_TRANSLATE_SHORTCUT_STORAGE_KEY]).toBe(previous);
+  expect(app.texts()).toContain("Alt+D");
+
+  await app.keyboard.press(previous);
+  await app.waitUntil(() => app.texts().some((text) => text.includes("selReads=1|")));
+  expect(app.window("quick-translate").state()).toBeNull();
+});
+
 test("desktop: quick window unregisters the global shortcuts on shell disposal", async () => {
   const app = await open(HARNESS_ENTRY, {
     ...viewport,
@@ -741,10 +808,7 @@ test("double copy: controller reads clipboard once, skips when disabled or empty
 
 test("selection controller: close while reading does not reopen a closed popup", async () => {
   const pendingReads: Array<{
-    resolve: (result: {
-      status: "selected";
-      text: string;
-    }) => void;
+    resolve: (result: { status: "selected"; text: string }) => void;
   }> = [];
   const controller = createQuickTranslateController({
     selectionText: {
@@ -1240,16 +1304,12 @@ test("selection controller: recognition keeps the first delivery", async () => {
   await app.press("id:harness-finish-selection");
   await app.waitFor("id:quick-translate-source-preview");
   expect(app.texts()).toContain("Selected line one");
-  expect(app.shows("id:quick-translate-source-toolbar >> id:quick-translate-ocr-busy")).toBe(
-    false,
-  );
+  expect(app.shows("id:quick-translate-source-toolbar >> id:quick-translate-ocr-busy")).toBe(false);
   expect(app.texts().join("\n")).not.toContain(OCR_TEXT);
   await app.waitUntil(
     () => app.requests().filter((request) => request.url.includes("api.openai.com")).length === 1,
   );
-  const delivered = app
-    .requests()
-    .filter((request) => request.url.includes("api.openai.com"))[0]!;
+  const delivered = app.requests().filter((request) => request.url.includes("api.openai.com"))[0]!;
   expect(JSON.parse(delivered.body!).messages[1].content).toBe(selected);
 
   const lateSelection = await open(HARNESS_ENTRY, {
