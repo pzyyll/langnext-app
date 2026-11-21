@@ -80,7 +80,7 @@ test("desktop: quick window opens from production tray action, reuses existing w
   expect(app.value("id:quick-translate-source")).toBe("Hello quick window");
 
   // Re-invoking shortcut while unpinned focuses and preserves existing draft.
-  await app.keyboard.press("ctrl+shift+t");
+  await app.keyboard.press(DEFAULT_QUICK_TRANSLATE_SHORTCUT);
   expect(app.window("quick-translate").state()?.visible).toBe(true);
   expect(app.window("quick-translate").state()?.focused).toBe(true);
   expect(app.value("id:quick-translate-source")).toBe("Hello quick window");
@@ -383,7 +383,7 @@ test("shortcut settings: restores custom bindings, persists removal, and resets 
   );
   expect(reopened.texts().join(" ")).toContain("|reg=1|");
   await reopened.press(SHORTCUT_RESET);
-  await reopened.waitUntil(() => reopened.texts().includes("Ctrl+Shift+T"));
+  await reopened.waitUntil(() => reopened.texts().includes("Alt+Shift+D"));
   expect(reopened.storage()[QUICK_TRANSLATE_SHORTCUT_STORAGE_KEY]).toBe(
     DEFAULT_QUICK_TRANSLATE_SHORTCUT,
   );
@@ -490,7 +490,7 @@ test("desktop: quick window warns and keeps tray fallback when global shortcut r
     },
   });
   await rejected.waitUntil(() =>
-    rejected.texts().includes("全局快捷键 Ctrl+Shift+T 不可用，请通过托盘菜单打开快速翻译。"),
+    rejected.texts().includes("全局快捷键 Alt+Shift+D 不可用，请通过托盘菜单打开快速翻译。"),
   );
   await rejected.press("id:harness-tray-quick-translate");
   await rejected.waitUntil(() => rejected.window("quick-translate").state()?.visible === true);
@@ -1123,7 +1123,7 @@ test("quick ocr: closing and reopening before the old result keeps the new draft
 
   await app.window("quick-translate").pressClose();
   await app.waitUntil(() => app.window("quick-translate").state()?.visible !== true);
-  await app.keyboard.press("ctrl+shift+t");
+  await app.keyboard.press(DEFAULT_QUICK_TRANSLATE_SHORTCUT);
   await app.waitUntil(() => app.window("quick-translate").state()?.visible === true);
   await app.waitFor("id:quick-translate-source");
   expect(app.value("id:quick-translate-source")).toBe("");

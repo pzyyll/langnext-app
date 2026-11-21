@@ -1,7 +1,7 @@
 import { signal, Storage, type KeyEvent } from "nsh";
 import type { GlobalShortcutModule } from "nsh/desktop";
 
-export const DEFAULT_QUICK_TRANSLATE_SHORTCUT = "ctrl+shift+t";
+export const DEFAULT_QUICK_TRANSLATE_SHORTCUT = "alt+shift+d";
 export const QUICK_TRANSLATE_SHORTCUT_STORAGE_KEY = "settings.shortcuts.quickTranslate";
 export const DEFAULT_SCREENSHOT_TRANSLATE_SHORTCUT = "alt+shift+s";
 export const SCREENSHOT_TRANSLATE_SHORTCUT_STORAGE_KEY = "settings.shortcuts.screenshotTranslate";

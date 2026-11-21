@@ -127,7 +127,7 @@ test("settings ui: renders cleanly at the minimum viewport in dark mode with red
   );
   expect(app.shows("id:settings-double-copy-card")).toBe(true);
   expect(app.texts()).toContain("打开快速翻译");
-  expect(app.texts()).toContain("Ctrl+Shift+T");
+  expect(app.texts()).toContain("Alt+Shift+D");
   expect(
     app.shows(
       "id:settings-translation-shortcuts-card >> id:settings-screenshot-translate-shortcut-row",
