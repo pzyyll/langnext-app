@@ -136,11 +136,11 @@ pub enum ScreenCaptureStatus {
 pub struct ScreenCaptureOverlay {
     /// Localized instruction shown on every display's overlay.
     pub caption: String,
-    /// Selection border color, as `#rrggbb`.
+    /// Keyboard crosshair color, as `#rrggbbaa` or `#rrggbb`.
     pub accent_color: String,
-    /// Instruction text color, as `#rrggbb`.
+    /// Instruction text color, as `#rrggbbaa` or `#rrggbb`.
     pub text_color: String,
-    /// Fill behind the instruction text, as `#rrggbb`.
+    /// Fill behind the instruction text, as `#rrggbbaa` or `#rrggbb`.
     pub backdrop_color: String,
 }
 

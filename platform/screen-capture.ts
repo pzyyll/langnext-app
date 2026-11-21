@@ -5,11 +5,11 @@ import { ScreenCaptureNative } from "my-translator/native";
 export interface ScreenCaptureOverlayConfig {
   /** Localized instruction shown on every display's overlay. */
   caption: string;
-  /** Selection border color, as `#rrggbb`. */
+  /** Keyboard crosshair color, as `#rrggbbaa` or `#rrggbb`. */
   accentColor: string;
-  /** Instruction text color, as `#rrggbb`. */
+  /** Instruction text color, as `#rrggbbaa` or `#rrggbb`. */
   textColor: string;
-  /** Fill behind the instruction text, as `#rrggbb`. */
+  /** Fill behind the instruction text, as `#rrggbbaa` or `#rrggbb`. */
   backdropColor: string;
 }
 

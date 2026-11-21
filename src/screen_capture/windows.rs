@@ -15,7 +15,7 @@ use windows_sys::Win32::Graphics::Gdi::{
     DrawTextW, EndPaint, EnumDisplayMonitors, FillRect, FrameRect, GdiAlphaBlend, GetDC,
     GetMonitorInfoW, GetStockObject, HDC, HGDIOBJ, HMONITOR, InvalidateRect, LineTo, MONITORINFO,
     MONITORINFOEXW, MoveToEx, PAINTSTRUCT, PS_DOT, ReleaseDC, SRCCOPY, SelectObject, SetBkMode,
-    SetTextColor, WHITE_BRUSH,
+    SetTextColor, TRANSPARENT, WHITE_BRUSH,
 };
 use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows_sys::Win32::System::Threading::GetCurrentThreadId;
@@ -123,16 +123,24 @@ fn publish_thread_id(request_id: u64, thread_id: u32) {
     }
 }
 
-/// Converts `#rrggbb` to a Win32 `COLORREF`; unreadable values fall back to white.
-fn color_ref(value: &str) -> u32 {
-    let hex = value.trim().trim_start_matches('#');
-    if hex.len() != 6 {
-        return 0x00ff_ffff;
+/// Converts an RGB or RGBA theme token to the opaque Win32 `COLORREF` format.
+fn color_ref(value: &str) -> Option<u32> {
+    let hex = value.trim().strip_prefix('#')?;
+    if !matches!(hex.len(), 6 | 8) || !hex.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+        return None;
     }
-    match u32::from_str_radix(hex, 16) {
-        Ok(rgb) => ((rgb >> 16) & 0xff) | (rgb & 0x0000_ff00) | ((rgb & 0xff) << 16),
-        Err(_) => 0x00ff_ffff,
-    }
+    let value = u32::from_str_radix(hex, 16).ok()?;
+    let rgb = if hex.len() == 8 { value >> 8 } else { value };
+    Some(((rgb >> 16) & 0xff) | (rgb & 0x0000_ff00) | ((rgb & 0xff) << 16))
+}
+
+/// Keep a readable foreground/background pair if either caption token is invalid.
+fn caption_colors(text: &str, backdrop: &str) -> (u32, u32) {
+    const LIGHT_TEXT: u32 = 0x00ff_ffff;
+    const DARK_BACKDROP: u32 = 0;
+    color_ref(text)
+        .zip(color_ref(backdrop))
+        .unwrap_or((LIGHT_TEXT, DARK_BACKDROP))
 }
 
 /// A top-down 32-bit bitmap in a memory DC.
@@ -293,6 +301,7 @@ struct CaptureWindow {
     hwnd: HWND,
     snapshot: Snapshot,
     dimmed: Snapshot,
+    scheduled_layers: Option<OverlayLayers>,
 }
 
 impl CaptureWindow {
@@ -303,6 +312,7 @@ impl CaptureWindow {
             hwnd: ptr::null_mut(),
             snapshot,
             dimmed,
+            scheduled_layers: None,
         })
     }
 }
@@ -318,9 +328,17 @@ impl Drop for CaptureWindow {
     }
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+struct OverlayLayers {
+    crop: Option<CaptureCrop>,
+    crosshair: Option<DesktopPoint>,
+    caption: bool,
+}
+
 /// Everything one selection session holds while its message loop runs.
 struct CaptureState {
     displays: Vec<CaptureWindow>,
+    back_buffer: Option<Snapshot>,
     caption: Vec<u16>,
     accent: u32,
     text: u32,
@@ -433,9 +451,26 @@ fn display_center(rect: MonitorRect) -> DesktopPoint {
     }
 }
 
-/// Repaints every surface; selection changes are immediate, with no animation.
-fn invalidate_all(state: &CaptureState) {
-    for display in &state.displays {
+fn overlay_layers(state: &CaptureState, index: usize, crop: Option<CaptureCrop>) -> OverlayLayers {
+    OverlayLayers {
+        crop: crop.filter(|crop| crop.monitor == index),
+        crosshair: state
+            .cursor
+            .filter(|&cursor| state.keyboard && state.displays[index].rect.contains(cursor)),
+        caption: index == state.active && !state.caption.is_empty(),
+    }
+}
+
+/// Schedules repaint only where content changed. An untouched display keeps its dimmed preview.
+fn invalidate_changed(state: &mut CaptureState) {
+    let crop = resolve_selection(state);
+    for index in 0..state.displays.len() {
+        let layers = overlay_layers(state, index, crop);
+        let display = &mut state.displays[index];
+        if display.scheduled_layers == Some(layers) {
+            continue;
+        }
+        display.scheduled_layers = Some(layers);
         // SAFETY: each window belongs to this worker thread.
         unsafe {
             InvalidateRect(display.hwnd, ptr::null(), 0);
@@ -472,7 +507,7 @@ fn cycle_display(state: &mut CaptureState) {
         None => display_center(rect),
     });
     focus_active(state);
-    invalidate_all(state);
+    invalidate_changed(state);
 }
 
 /// Moves the keyboard crosshair by one step inside the active display.
@@ -493,7 +528,7 @@ fn move_crosshair(state: &mut CaptureState, vk: u16) {
     point.y = point.y.clamp(rect.top, rect.bottom - 1);
     state.cursor = Some(point);
     state.keyboard = true;
-    invalidate_all(state);
+    invalidate_changed(state);
 }
 
 /// Applies one capture key, in any focus state, through the low-level keyboard hook.
@@ -506,7 +541,7 @@ fn handle_key(state: &mut CaptureState, vk: u16) {
             state.keyboard = true;
             if let Some(point) = state.cursor {
                 state.anchor = Some(point);
-                invalidate_all(state);
+                invalidate_changed(state);
             }
         }
         VK_RETURN if state.anchor.is_some() => finish_selection(state),
@@ -522,38 +557,66 @@ fn is_capture_key(vk: u16) -> bool {
     )
 }
 
-/// Draws the snapshot, the selection, the crosshair, and the instruction band.
-fn paint(hwnd: HWND, state: &CaptureState) {
+/// Reuses one back buffer on the capture thread and draws everything before presenting it.
+fn compose_frame(state: &mut CaptureState, index: usize) -> Option<HDC> {
+    let layers = overlay_layers(state, index, resolve_selection(state));
+    let display = &state.displays[index];
+    if layers == OverlayLayers::default() {
+        return Some(display.dimmed.dc);
+    }
+
+    let width = display.snapshot.width;
+    let height = display.snapshot.height;
+    if state
+        .back_buffer
+        .as_ref()
+        .is_none_or(|buffer| buffer.width != width || buffer.height != height)
+    {
+        state.back_buffer = Snapshot::new(display.dimmed.dc, width, height);
+    }
+    let dc = state.back_buffer.as_ref()?.dc;
+    paint_preview(dc, &display.snapshot, &display.dimmed, layers.crop);
+    if let Some(cursor) = layers.crosshair {
+        draw_crosshair(dc, state.accent, cursor, display.rect);
+    }
+    if layers.caption {
+        draw_caption(dc, state, width);
+    }
+    Some(dc)
+}
+
+/// Presents a complete frame in one window blit so intermediate layers are never shown.
+fn paint(hwnd: HWND, state: &mut CaptureState) {
     let Some(index) = display_index(state, hwnd) else {
         return;
     };
-    let display = &state.displays[index];
-    let width = display.rect.right - display.rect.left;
-
+    let source = compose_frame(state, index);
     let mut paint = MaybeUninit::<PAINTSTRUCT>::zeroed();
     // SAFETY: `paint` is a stack-allocated out-parameter for this window's paint cycle.
     let hdc = unsafe { BeginPaint(hwnd, paint.as_mut_ptr()) };
     if hdc.is_null() {
         return;
     }
-
-    // SAFETY: every GDI object is selected back and deleted inside the call.
+    // SAFETY: BeginPaint filled the structure, and the source, if present, stays live.
     unsafe {
-        let crop = resolve_selection(state).filter(|crop| crop.monitor == index);
-        paint_preview(hdc, &display.snapshot, &display.dimmed, crop);
-
-        if state.keyboard
-            && let Some(cursor) = state.cursor
-            && display.rect.contains(cursor)
-        {
-            draw_crosshair(hdc, state.accent, cursor, display.rect);
+        let paint = paint.assume_init();
+        if let Some(source) = source {
+            let rect = paint.rcPaint;
+            BitBlt(
+                hdc,
+                rect.left,
+                rect.top,
+                rect.right - rect.left,
+                rect.bottom - rect.top,
+                source,
+                rect.left,
+                rect.top,
+                SRCCOPY,
+            );
+        } else {
+            state.outcome = Some(ScreenCaptureResult::failed());
         }
-
-        if index == state.active {
-            draw_caption(hdc, state, width);
-        }
-
-        EndPaint(hwnd, paint.as_ptr());
+        EndPaint(hwnd, &paint);
     }
 }
 
@@ -640,7 +703,7 @@ fn draw_caption(hdc: HDC, state: &CaptureState, display_width: i32) {
         DeleteObject(brush);
 
         let previous_font = SelectObject(hdc, GetStockObject(DEFAULT_GUI_FONT));
-        SetBkMode(hdc, 1);
+        SetBkMode(hdc, TRANSPARENT as i32);
         SetTextColor(hdc, state.text);
         DrawTextW(
             hdc,
@@ -689,16 +752,17 @@ unsafe extern "system" fn capture_wnd_proc(
                 unsafe {
                     SetCapture(hwnd);
                 }
-                invalidate_all(state);
+                invalidate_changed(state);
             }
             0
         }
         WM_MOUSEMOVE => {
             if state.anchor.is_some()
                 && let Some(point) = pointer_point(state, hwnd, lparam)
+                && state.cursor != Some(point)
             {
                 state.cursor = Some(point);
-                invalidate_all(state);
+                invalidate_changed(state);
             }
             0
         }
@@ -713,7 +777,9 @@ unsafe extern "system" fn capture_wnd_proc(
             }
             state.anchor = None;
             state.keyboard = false;
-            invalidate_all(state);
+            if state.outcome.is_none() {
+                invalidate_changed(state);
+            }
             0
         }
         WM_KEYDOWN => {
@@ -927,12 +993,14 @@ fn run_session(
     }
     drop(mask);
 
+    let (text, backdrop) = caption_colors(&overlay.text_color, &overlay.backdrop_color);
     let mut state = CaptureState {
         displays,
+        back_buffer: None,
         caption: overlay.caption.encode_utf16().collect(),
-        accent: color_ref(&overlay.accent_color),
-        text: color_ref(&overlay.text_color),
-        backdrop: color_ref(&overlay.backdrop_color),
+        accent: color_ref(&overlay.accent_color).unwrap_or(text),
+        text,
+        backdrop,
         anchor: None,
         cursor: None,
         active: 0,
@@ -955,12 +1023,7 @@ fn run_session(
         )
     };
     focus_active(&state);
-    for display in &state.displays {
-        // SAFETY: repaints a surface shown by `create_windows` on this worker thread.
-        unsafe {
-            InvalidateRect(display.hwnd, ptr::null(), 0);
-        }
-    }
+    invalidate_changed(&mut state);
 
     loop {
         if cancelled.load(Ordering::Acquire) {
@@ -1013,10 +1076,25 @@ mod tests {
     use std::sync::mpsc;
     use std::thread;
     use std::time::{Duration, Instant};
-    use windows_sys::Win32::Graphics::Gdi::{GetPixel, UpdateWindow};
+    use windows_sys::Win32::Graphics::Gdi::{GetPixel, GetUpdateRect, UpdateWindow};
     use windows_sys::Win32::UI::WindowsAndMessaging::{
-        EnumThreadWindows, IsWindowVisible, PM_REMOVE, PeekMessageW,
+        EnumThreadWindows, IsWindowVisible, PM_REMOVE, PeekMessageW, SendMessageW,
     };
+
+    #[test]
+    fn theme_colors_keep_their_rgb_channels_with_or_without_alpha() {
+        assert_eq!(color_ref("#123456ff"), Some(0x0056_3412));
+        assert_eq!(color_ref("#123456"), Some(0x0056_3412));
+        assert_eq!(
+            caption_colors("#0a0a0aff", "#ffffffff"),
+            (0x000a_0a0a, 0x00ff_ffff)
+        );
+        assert_eq!(
+            caption_colors("#fafafaff", "#0a0a0aff"),
+            (0x00fa_fafa, 0x000a_0a0a)
+        );
+        assert_eq!(caption_colors("#fafafaXY", "#ffffffff"), (0x00ff_ffff, 0));
+    }
 
     #[test]
     fn preview_dims_only_unselected_pixels_and_keeps_the_crop_unmodified() {
@@ -1089,21 +1167,26 @@ mod tests {
 
     #[test]
     #[ignore = "requires an interactive Windows desktop"]
-    fn desktop_overlay_paints_the_mask_outside_the_selection() {
-        const SIDE: i32 = 128;
-        let frame = Snapshot::new(ptr::null_mut(), SIDE, SIDE).unwrap();
+    fn desktop_overlay_presents_the_complete_frame_on_the_affected_display() {
+        const SIDE: i32 = 320;
         let mask = Snapshot::black_mask().unwrap();
-        // SAFETY: the new DIB owns SIDE × SIDE pixels and has not been drawn into.
-        unsafe {
-            std::slice::from_raw_parts_mut(frame.pixels, (SIDE * SIDE) as usize).fill(0x00ff_ffff)
+        let display = |left| {
+            let frame = Snapshot::new(ptr::null_mut(), SIDE, SIDE).unwrap();
+            // SAFETY: the new DIB owns SIDE × SIDE pixels and has not been drawn into.
+            unsafe {
+                std::slice::from_raw_parts_mut(frame.pixels, (SIDE * SIDE) as usize)
+                    .fill(0x00ff_ffff)
+            };
+            CaptureWindow::new(MonitorRect::new(left, 0, left + SIDE, SIDE), frame, &mask).unwrap()
         };
-        let display = CaptureWindow::new(MonitorRect::new(0, 0, SIDE, SIDE), frame, &mask).unwrap();
+        let (text, backdrop) = caption_colors("#0a0a0aff", "#ffffffff");
         let mut state = CaptureState {
-            displays: vec![display],
+            displays: vec![display(0), display(SIDE)],
+            back_buffer: None,
             caption: "Test: OCR preview".encode_utf16().collect(),
             accent: 0,
-            text: 0,
-            backdrop: 0,
+            text,
+            backdrop,
             anchor: Some(DesktopPoint { x: 16, y: 88 }),
             cursor: Some(DesktopPoint { x: 48, y: 120 }),
             active: 0,
@@ -1112,22 +1195,51 @@ mod tests {
         };
         assert!(register_overlay_class() && create_windows(&mut state));
         let hwnd = state.displays[0].hwnd;
-        let samples = || {
+        let other_hwnd = state.displays[1].hwnd;
+        invalidate_changed(&mut state);
+        let samples = |window, text, backdrop| {
             // SAFETY: this test owns the live window and samples only its synthetic preview.
             unsafe {
-                InvalidateRect(hwnd, ptr::null(), 0);
-                UpdateWindow(hwnd);
-                let dc = GetDC(hwnd);
+                UpdateWindow(window);
+                let dc = GetDC(window);
                 assert!(!dc.is_null());
-                let result = [GetPixel(dc, 32, 100), GetPixel(dc, 88, 100)];
-                ReleaseDC(hwnd, dc);
-                result
+                let selection = [GetPixel(dc, 32, 100), GetPixel(dc, 88, 100)];
+                let caption_background = GetPixel(dc, CAPTION_INSET + 4, CAPTION_INSET + 4);
+                let caption_has_glyph = (CAPTION_INSET + 12..CAPTION_INSET + CAPTION_HEIGHT - 12)
+                    .any(|y| (SIDE / 2 - 60..SIDE / 2 + 60).any(|x| GetPixel(dc, x, y) == text));
+                ReleaseDC(window, dc);
+                assert_eq!(caption_background, backdrop);
+                assert!(
+                    caption_has_glyph,
+                    "the caption must have a visible text pixel"
+                );
+                selection
             }
         };
-        assert_eq!(samples(), [0x00ff_ffff, 0x0099_9999]);
-        state.anchor = Some(DesktopPoint { x: 72, y: 88 });
-        state.cursor = Some(DesktopPoint { x: 104, y: 120 });
-        assert_eq!(samples(), [0x0099_9999, 0x00ff_ffff]);
+        // SAFETY: both windows are owned by this test thread.
+        unsafe { UpdateWindow(other_hwnd) };
+        assert_eq!(
+            samples(hwnd, state.text, state.backdrop),
+            [0x00ff_ffff, 0x0099_9999]
+        );
+
+        (state.text, state.backdrop) = caption_colors("#fafafaff", "#0a0a0aff");
+        // SAFETY: this sends a drag update only to the test's own window.
+        unsafe {
+            SendMessageW(hwnd, WM_MOUSEMOVE, 0, (120 << 16) | 104);
+            assert_ne!(GetUpdateRect(hwnd, ptr::null_mut(), 0), 0);
+            assert_eq!(GetUpdateRect(other_hwnd, ptr::null_mut(), 0), 0);
+        }
+        assert_eq!(
+            samples(hwnd, state.text, state.backdrop),
+            [0x00ff_ffff, 0x00ff_ffff]
+        );
+
+        unsafe { SendMessageW(hwnd, WM_MOUSEMOVE, 0, (120 << 16) | 8) };
+        assert_eq!(
+            samples(hwnd, state.text, state.backdrop),
+            [0x0099_9999, 0x0099_9999]
+        );
     }
 
     // Opt in on a Windows desktop: this creates the real selection surfaces and snapshots.
