@@ -402,13 +402,33 @@ export function QuickTranslatePopup(props: QuickTranslatePopupProps) {
     input.setSelection(end, end);
   });
 
+  const ocrMessage = () => (props.ocrState ? props.ocrState().message : null);
+  const ocrRecognizing = () => (props.ocrState ? props.ocrState().phase === "recognizing" : false);
+  // One bottom-left status slot serves OCR errors, active recognition, and source detection in priority order.
+  const showOcrError = () => ocrMessage() !== null;
+  const showOcrBusy = () => !showOcrError() && ocrRecognizing();
+  const showSourceDetection = () => !showOcrError() && !showOcrBusy() && detectionLabel() !== null;
+
   const renderSourceToolbar = () => (
     <View
       testID="quick-translate-source-toolbar"
-      class="min-h-7 flex-row items-center justify-between gap-2"
+      class="min-h-7 flex-row items-end justify-between gap-2"
     >
-      <View class="min-w-0 flex-1 pl-1.5">
-        <If when={detectionLabel() !== null}>
+      <View
+        class="min-h-7 min-w-0 flex-1 justify-center py-1 pl-1.5"
+        classList={{ "pr-1.5": !hasSourceText() }}
+      >
+        <If when={showOcrError()}>
+          <Text testID="quick-translate-ocr-status" role="alert" class="text-xs text-destructive">
+            {ocrMessage() ?? ""}
+          </Text>
+        </If>
+        <If when={showOcrBusy()}>
+          <Text testID="quick-translate-ocr-busy" class="truncate text-xs text-muted-foreground">
+            {t("quickTranslate.ocrRecognizing")}
+          </Text>
+        </If>
+        <If when={showSourceDetection()}>
           <Text
             testID="quick-translate-source-detection"
             class="truncate text-xs text-muted-foreground"
@@ -418,7 +438,7 @@ export function QuickTranslatePopup(props: QuickTranslatePopupProps) {
         </If>
       </View>
       <If when={hasSourceText()}>
-        <View class="flex-row items-center gap-1">
+        <View class="shrink-0 flex-row items-center gap-1">
           <Button
             testID="quick-translate-collapse-source"
             size="icon-sm"
@@ -462,21 +482,8 @@ export function QuickTranslatePopup(props: QuickTranslatePopupProps) {
     </View>
   );
 
-  const ocrMessage = () => (props.ocrState ? props.ocrState().message : null);
-  const ocrRecognizing = () => (props.ocrState ? props.ocrState().phase === "recognizing" : false);
-
   return (
     <View class="gap-2 p-3">
-      <If when={ocrMessage() !== null}>
-        <Text testID="quick-translate-ocr-status" role="alert" class="text-xs text-destructive">
-          {ocrMessage() ?? ""}
-        </Text>
-      </If>
-      <If when={ocrMessage() === null && ocrRecognizing()}>
-        <Text testID="quick-translate-ocr-busy" class="text-xs text-muted-foreground">
-          {t("quickTranslate.ocrRecognizing")}
-        </Text>
-      </If>
       <If
         when={
           props.session.presetsStatus().kind === "idle" ||

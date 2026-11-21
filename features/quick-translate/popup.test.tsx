@@ -1622,3 +1622,83 @@ test("DeepL card: a DeepL-only action translates without AI models", async () =>
   expect(requestsTo(app, TRANSLATE_URL)).toHaveLength(0);
   expect(requestsTo(app, DETECT_URL)).toHaveLength(0);
 });
+
+test("quick popup: renders OCR status and source detection in one bottom-left toolbar slot by priority", async () => {
+  const app = await open(POPUP_HARNESS, {
+    ...viewport,
+    storage: seedAutoPair([false], "ocr-status"),
+    network: {
+      [TRANSLATE_URL]: { status: 200, body: { choices: [{ message: { content: "译文" } }] } },
+    },
+  });
+
+  await app.waitFor("id:quick-translate-source");
+  expect(app.shows("id:quick-translate-source-toolbar >> id:quick-translate-ocr-status")).toBe(
+    false,
+  );
+  expect(app.shows("id:quick-translate-source-toolbar >> id:quick-translate-ocr-busy")).toBe(false);
+  expect(
+    app.shows("id:quick-translate-source-toolbar >> id:quick-translate-source-detection"),
+  ).toBe(false);
+
+  // 1. Empty input with OCR error shows the alert in the bottom-left toolbar.
+  await app.press("id:harness-ocr-error");
+  await app.waitFor("id:quick-translate-source-toolbar >> id:quick-translate-ocr-status");
+  expect(app.texts()).toContain(t("ocr.failure.malformedAnswer"));
+  expect(app.shows("id:quick-translate-source-toolbar >> id:quick-translate-ocr-busy")).toBe(false);
+  expect(
+    app.shows("id:quick-translate-source-toolbar >> id:quick-translate-source-detection"),
+  ).toBe(false);
+
+  // 2. Clear OCR status, enter source text, and resolve language detection.
+  await app.press("id:harness-ocr-idle");
+  expect(app.shows("id:quick-translate-source-toolbar >> id:quick-translate-ocr-status")).toBe(
+    false,
+  );
+  await app.type("id:quick-translate-source", "Bonjour");
+  await app.keyboard.press("enter");
+  await app.waitUntil(() => app.texts().some((text) => text.includes("detects=1|")));
+  await app.press("id:harness-resolve-language-fr");
+  await app.waitFor("id:quick-translate-source-toolbar >> id:quick-translate-source-detection");
+  expect(app.texts()).toContain(
+    t("quickTranslate.detectedLanguage", { language: getLanguageLabel("fr") }),
+  );
+
+  // 3. Entering OCR recognizing replaces source detection inside the same toolbar.
+  await app.press("id:harness-ocr-recognizing");
+  await app.waitFor("id:quick-translate-source-toolbar >> id:quick-translate-ocr-busy");
+  expect(app.texts()).toContain(t("quickTranslate.ocrRecognizing"));
+  expect(
+    app.shows("id:quick-translate-source-toolbar >> id:quick-translate-source-detection"),
+  ).toBe(false);
+  expect(app.shows("id:quick-translate-source-toolbar >> id:quick-translate-ocr-status")).toBe(
+    false,
+  );
+
+  // 4. Entering OCR error replaces busy and keeps detection hidden.
+  await app.press("id:harness-ocr-error");
+  await app.waitFor("id:quick-translate-source-toolbar >> id:quick-translate-ocr-status");
+  expect(app.texts()).toContain(t("ocr.failure.malformedAnswer"));
+  expect(app.shows("id:quick-translate-source-toolbar >> id:quick-translate-ocr-busy")).toBe(false);
+  expect(
+    app.shows("id:quick-translate-source-toolbar >> id:quick-translate-source-detection"),
+  ).toBe(false);
+
+  // 5. Collapsing the source input keeps the OCR alert visible in the preview card's toolbar.
+  await app.press("id:quick-translate-collapse-source");
+  await app.waitFor("id:quick-translate-source-preview");
+  expect(app.shows("id:quick-translate-source-toolbar >> id:quick-translate-ocr-status")).toBe(
+    true,
+  );
+  expect(app.texts()).toContain(t("ocr.failure.malformedAnswer"));
+
+  // 6. Returning OCR to idle restores the detected-language label in the toolbar.
+  await app.press("id:harness-ocr-idle");
+  await app.waitFor("id:quick-translate-source-toolbar >> id:quick-translate-source-detection");
+  expect(app.shows("id:quick-translate-source-toolbar >> id:quick-translate-ocr-status")).toBe(
+    false,
+  );
+  expect(app.texts()).toContain(
+    t("quickTranslate.detectedLanguage", { language: getLanguageLabel("fr") }),
+  );
+});

@@ -56,7 +56,7 @@ export interface CaptureOverlayTheme {
 export interface QuickTranslateOcrState {
   /** `selecting` covers the native overlay; `recognizing` covers the model request. */
   phase: "idle" | "selecting" | "recognizing";
-  /** Localized alert to show under the toolbar; null hides it. */
+  /** Localized alert to show in the source input's bottom-left toolbar; null hides it. */
   message: string | null;
 }
 

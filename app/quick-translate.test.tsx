@@ -813,7 +813,7 @@ test("quick ocr: a blank answer keeps the draft, shows an alert, and sends no tr
   await app.type("id:quick-translate-source", "kept draft");
 
   await app.press(OCR_BUTTON);
-  await app.waitFor("id:quick-translate-ocr-status");
+  await app.waitFor("id:quick-translate-source-toolbar >> id:quick-translate-ocr-status");
 
   expect(app.texts()).toContain("No text was found in the selected area.");
   expect(app.value("id:quick-translate-source")).toBe("kept draft");
@@ -840,7 +840,7 @@ test("quick ocr: a provider failure keeps the draft and never imports partial te
   await app.type("id:quick-translate-source", "kept draft");
 
   await app.press(OCR_BUTTON);
-  await app.waitFor("id:quick-translate-ocr-status");
+  await app.waitFor("id:quick-translate-source-toolbar >> id:quick-translate-ocr-status");
 
   expect(app.value("id:quick-translate-source")).toBe("kept draft");
   expect(app.requests().filter((request) => request.url.includes("api.openai.com"))).toHaveLength(
@@ -894,17 +894,17 @@ test("quick ocr: a valid double copy ends recognition and translates the copied 
   await app.waitFor("id:quick-translate-source");
   await app.press("id:quick-translate-pin");
   await app.press(OCR_BUTTON);
-  await app.waitFor("id:quick-translate-ocr-busy");
+  await app.waitFor("id:quick-translate-source-toolbar >> id:quick-translate-ocr-busy");
   await app.waitUntil(() =>
     app.requests().some((request) => request.url.includes("vision.example.com")),
   );
 
   await app.press("id:harness-trigger-double-copy-invalid");
-  expect(app.shows("id:quick-translate-ocr-busy")).toBe(true);
+  expect(app.shows("id:quick-translate-source-toolbar >> id:quick-translate-ocr-busy")).toBe(true);
   await app.press("id:harness-trigger-double-copy-valid");
   await app.waitFor("id:quick-translate-source-preview");
   expect(app.texts()).toContain(copied);
-  expect(app.shows("id:quick-translate-ocr-busy")).toBe(false);
+  expect(app.shows("id:quick-translate-source-toolbar >> id:quick-translate-ocr-busy")).toBe(false);
   expect(app.enabled(OCR_BUTTON)).toBe(true);
   await app.waitFor("id:quick-translate-result-text");
   const translations = app.requests().filter((request) => request.url.includes("api.openai.com"));
@@ -1004,7 +1004,7 @@ test("quick ocr: an unsaved service shows recovery and never captures", async ()
   await app.type("id:quick-translate-source", "kept draft");
 
   await app.press(OCR_BUTTON);
-  await app.waitFor("id:quick-translate-ocr-status");
+  await app.waitFor("id:quick-translate-source-toolbar >> id:quick-translate-ocr-status");
 
   expect(app.texts()).toContain(
     "Configure OCR in Settings, or choose another way to get the text.",

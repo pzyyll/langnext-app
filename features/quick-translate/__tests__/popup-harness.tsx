@@ -1,4 +1,13 @@
-import { mount, Scroll, signal, Storage, Text, View, type ClipboardModule } from "nsh";
+import {
+  mount,
+  Scroll,
+  signal,
+  Storage,
+  Text,
+  View,
+  type Accessor,
+  type ClipboardModule,
+} from "nsh";
 import { t } from "nsh/i18n";
 import { initializeAiModules } from "../../../app/ai-setup";
 import { Button } from "../../../components/ui/button";
@@ -25,7 +34,11 @@ import type {
 } from "../translate";
 import { translateWithPreset } from "../translate";
 import { QuickTranslateLanguageMenu } from "../language-menu";
-import { QuickTranslateAddPresetMenu, QuickTranslatePopup } from "../popup";
+import {
+  QuickTranslateAddPresetMenu,
+  QuickTranslatePopup,
+  type QuickTranslateOcrStatus,
+} from "../popup";
 import { createQuickTranslateSession, type QuickTranslateSessionOptions } from "../session";
 
 export type HarnessMode =
@@ -35,6 +48,7 @@ export type HarnessMode =
   | "out-of-order"
   | "late-after-close"
   | "language-resolution"
+  | "ocr-status"
   | "streaming"
   | "multi-card";
 
@@ -55,7 +69,9 @@ function createDeferred<T>(): Deferred<T> {
   return { promise, resolve };
 }
 
-function PopupSessionView(props: QuickTranslateSessionOptions) {
+function PopupSessionView(
+  props: QuickTranslateSessionOptions & { ocrState?: Accessor<QuickTranslateOcrStatus> },
+) {
   const session = createQuickTranslateSession(props);
   return (
     <Card class="min-h-0 flex-1 overflow-hidden p-0">
@@ -74,7 +90,7 @@ function PopupSessionView(props: QuickTranslateSessionOptions) {
         </View>
       </View>
       <Scroll class="min-h-0 flex-1">
-        <QuickTranslatePopup session={session} />
+        <QuickTranslatePopup session={session} ocrState={props.ocrState} />
       </Scroll>
     </Card>
   );
@@ -87,6 +103,7 @@ function PopupHarnessApp(props: {
 }) {
   const popupOpen = signal(true);
   const sourceText = signal("");
+  const ocrState = signal<QuickTranslateOcrStatus>({ phase: "idle", message: null });
   const presetsErrorFail = signal(props.mode === "preset-load-error-then-recover");
   const translateCalls = signal<string[]>([]);
   const abortEvents = signal<string[]>([]);
@@ -106,7 +123,7 @@ function PopupHarnessApp(props: {
     options?.signal?.addEventListener("abort", () => {
       languageAborts.set([...languageAborts(), `aborted-${seq}`]);
     });
-    if (props.mode === "language-resolution") {
+    if (props.mode === "language-resolution" || props.mode === "ocr-status") {
       languageDeferred = createDeferred<ResolveTranslationLanguagesResult>();
       return languageDeferred.promise;
     }
@@ -419,6 +436,42 @@ function PopupHarnessApp(props: {
             />
           </View>
         </If>
+        <If when={props.mode === "ocr-status"}>
+          <View class="flex-row flex-wrap gap-1">
+            <Button
+              testID="harness-ocr-recognizing"
+              size="xs"
+              variant="outline"
+              label="OCR Recognizing"
+              onPress={() => ocrState.set({ phase: "recognizing", message: null })}
+            />
+            <Button
+              testID="harness-ocr-error"
+              size="xs"
+              variant="outline"
+              label="OCR Error"
+              onPress={() =>
+                ocrState.set({ phase: "idle", message: t("ocr.failure.malformedAnswer") })
+              }
+            />
+            <Button
+              testID="harness-ocr-idle"
+              size="xs"
+              variant="outline"
+              label="OCR Idle"
+              onPress={() => ocrState.set({ phase: "idle", message: null })}
+            />
+            <Button
+              testID="harness-resolve-language-fr"
+              size="xs"
+              variant="outline"
+              label="Resolve FR"
+              onPress={() =>
+                languageDeferred?.resolve({ ok: true, sourceLanguage: "fr", targetLanguage: "zh" })
+              }
+            />
+          </View>
+        </If>
         <Text testID="harness-popup-stats">{`calls=${translateCalls().length}|aborts=${abortEvents().join(",")}|detects=${languageCalls().length}|detectAborts=${languageAborts().join(",")}`}</Text>
         <Button
           testID="harness-toggle-prefs-write-fail"
@@ -434,6 +487,7 @@ function PopupHarnessApp(props: {
           sourceText={() => sourceText()}
           onSourceTextChange={(text) => sourceText.set(text)}
           autoTranslate={() => props.prefs.autoTranslate()}
+          ocrState={() => ocrState()}
           presetsStore={store}
           preferences={props.prefs}
           translate={translateStub}
@@ -458,6 +512,7 @@ void Promise.all([
     modeRaw === "out-of-order" ||
     modeRaw === "late-after-close" ||
     modeRaw === "language-resolution" ||
+    modeRaw === "ocr-status" ||
     modeRaw === "streaming" ||
     modeRaw === "multi-card"
       ? modeRaw
