@@ -31,8 +31,10 @@ const TRANSACTION_TIMEOUT_MS: u32 = 250;
 /// An in-flight call cannot be interrupted when this budget ends.
 const READ_BUDGET: Duration = Duration::from_millis(750);
 
-/// Ancestors walked after the focused element. The walk never passes the foreground root.
-const MAX_ANCESTORS: usize = 8;
+/// Chromium can expose more than 20 non-window nodes below the first native handle.
+const MAX_ANCESTORS: usize = 32;
+const EDIT_CONTEXT_CLASS: &str = "native-edit-context";
+const MONACO_EDITOR_CLASS: &str = "monaco-editor";
 
 /// `E_NOINTERFACE`: the element has no TextPattern.
 const E_NOINTERFACE: u32 = 0x8000_4002;
@@ -55,6 +57,18 @@ enum CandidateText {
     Unsupported,
     Empty,
     Text(String),
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum FocusKind {
+    Standard,
+    MonacoEditContext,
+}
+
+impl FocusKind {
+    fn can_copy_empty_range(self, level: usize) -> bool {
+        matches!(self, Self::MonacoEditContext) && level == 0
+    }
 }
 
 /// Keeps this thread in the multithreaded apartment until COM objects from the read are gone.
@@ -177,9 +191,26 @@ fn read_focused_selection(
         return Ok(SelectionTextResult::unavailable());
     }
     let walker = unsafe { automation.RawViewWalker() }.map_err(|_| ReadFailure::Unavailable)?;
-    if !inside_foreground(&automation, &walker, &focused, foreground, started)? {
+    let Some(kind) = foreground_focus_kind(
+        &automation,
+        &walker,
+        &focused,
+        foreground,
+        started,
+        allow_copy_fallback,
+    )?
+    else {
         return Ok(SelectionTextResult::unavailable());
-    }
+    };
+    let try_copy = || {
+        ensure_budget(started)?;
+        copy::read(
+            target,
+            foreground,
+            kind == FocusKind::MonacoEditContext,
+            || Ok(focus_matches(&automation, &focused)? && !is_protected(&focused)?),
+        )
+    };
 
     let mut candidate = clone_element(&focused)?;
     for level in 0..=MAX_ANCESTORS {
@@ -198,6 +229,8 @@ fn read_focused_selection(
         }
         match selection_text(&candidate, started)? {
             CandidateText::Unsupported => {}
+            // Monaco's hidden input has its own range, which does not represent the editor selection.
+            CandidateText::Empty if kind.can_copy_empty_range(level) => return try_copy(),
             CandidateText::Empty => {
                 return confirm_focus(
                     &automation,
@@ -217,10 +250,7 @@ fn read_focused_selection(
         }
         if at_foreground_root(&candidate, foreground)? {
             if allow_copy_fallback {
-                ensure_budget(started)?;
-                return copy::read(target, foreground, || {
-                    Ok(focus_matches(&automation, &focused)? && !is_protected(&focused)?)
-                });
+                return try_copy();
             }
             break;
         }
@@ -228,18 +258,28 @@ fn read_focused_selection(
     Ok(SelectionTextResult::unavailable())
 }
 
-fn inside_foreground(
+fn foreground_focus_kind(
     automation: &IUIAutomation2,
     walker: &IUIAutomationTreeWalker,
     start: &IUIAutomationElement,
     foreground: HWND,
     started: Instant,
-) -> Result<bool, ReadFailure> {
-    let mut current = clone_element(start)?;
+    allow_copy_fallback: bool,
+) -> Result<Option<FocusKind>, ReadFailure> {
+    let identify_editor = allow_copy_fallback && has_class(start, EDIT_CONTEXT_CLASS);
+    let mut kind = FocusKind::Standard;
+    let mut current = start.clone();
     for level in 0..=MAX_ANCESTORS {
         ensure_budget(started)?;
+        if identify_editor
+            && matches!(kind, FocusKind::Standard)
+            && level > 0
+            && has_class(&current, MONACO_EDITOR_CLASS)
+        {
+            kind = FocusKind::MonacoEditContext;
+        }
         if let Some(hwnd) = native_hwnd(&current)? {
-            return Ok(window_root(hwnd) == foreground);
+            return Ok((window_root(hwnd) == foreground).then_some(kind));
         }
         if level == MAX_ANCESTORS {
             break;
@@ -249,7 +289,17 @@ fn inside_foreground(
         };
         current = parent;
     }
-    Ok(false)
+    Ok(None)
+}
+
+fn has_class(element: &IUIAutomationElement, name: &str) -> bool {
+    // SAFETY: reads only the class of this UI Automation element.
+    unsafe { element.CurrentClassName() }.is_ok_and(|classes| {
+        classes
+            .to_string()
+            .split_ascii_whitespace()
+            .any(|class| class == name)
+    })
 }
 
 fn confirm_focus(

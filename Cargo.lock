@@ -661,6 +661,7 @@ version = "0.1.0"
 dependencies = [
  "nsh-core",
  "png",
+ "serde_json",
  "windows",
  "windows-sys 0.61.2",
 ]

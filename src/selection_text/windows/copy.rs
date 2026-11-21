@@ -1,3 +1,5 @@
+mod editor_metadata;
+
 use std::mem::size_of;
 use std::ptr;
 use std::thread;
@@ -26,6 +28,7 @@ const TERMINAL_CLASSES: [&str; 2] = ["ConsoleWindowClass", "CASCADIA_HOSTING_WIN
 pub(super) fn read(
     target: &str,
     foreground: HWND,
+    require_editor_selection: bool,
     focus_matches: impl Fn() -> Result<bool, ReadFailure>,
 ) -> Result<SelectionTextResult, ReadFailure> {
     let pid = window_process(foreground.0);
@@ -60,7 +63,7 @@ pub(super) fn read(
         if clipboard_sequence() != baseline
             && let Some(clipboard) = ClipboardRead::open()
         {
-            let result = clipboard.read_fresh_text(baseline, pid);
+            let result = clipboard.read_fresh_text(baseline, pid, require_editor_selection);
             drop(clipboard);
             if !focus_matches()? || !is_current(target) {
                 return Ok(SelectionTextResult::stale());
@@ -164,38 +167,62 @@ impl ClipboardRead {
         (unsafe { OpenClipboard(ptr::null_mut()) } != 0).then_some(Self)
     }
 
-    fn read_fresh_text(&self, baseline: u32, source_pid: u32) -> Option<String> {
+    fn read_fresh_text(
+        &self,
+        baseline: u32,
+        source_pid: u32,
+        require_editor_selection: bool,
+    ) -> Option<String> {
         let sequence = clipboard_sequence();
-        // SAFETY: these calls query the open clipboard; the data handle remains system-owned.
+        // SAFETY: this queries the owner without retaining its handle.
+        let owner = unsafe { GetClipboardOwner() };
+        if sequence == 0 || sequence == baseline || window_process(owner) != source_pid {
+            return None;
+        }
+        if require_editor_selection
+            && self.with_data(editor_metadata::format(), editor_metadata::has_selection)
+                != Some(true)
+        {
+            return None;
+        }
+        let text = self.with_data(u32::from(CF_UNICODETEXT), |data| {
+            let units = data.as_chunks::<2>().0;
+            let end = units.iter().position(|unit| *unit == [0, 0])?;
+            char::decode_utf16(utf16_units(&units[..end]))
+                .collect::<Result<String, _>>()
+                .ok()
+                .filter(|text| !text.trim().is_empty())
+        })??;
+        (clipboard_sequence() == sequence).then_some(text)
+    }
+
+    fn with_data<R>(&self, format: u32, read: impl FnOnce(&[u8]) -> R) -> Option<R> {
+        if format == 0 {
+            return None;
+        }
+        // SAFETY: both clipboard formats use an HGLOBAL. The buffer stays locked during the read.
         unsafe {
-            if sequence == 0
-                || sequence == baseline
-                || window_process(GetClipboardOwner()) != source_pid
-            {
+            let handle = GetClipboardData(format);
+            if handle.is_null() {
                 return None;
             }
-            let handle = GetClipboardData(u32::from(CF_UNICODETEXT));
-            if handle.is_null() || clipboard_sequence() != sequence {
+            let size = GlobalSize(handle);
+            if size == 0 || size > isize::MAX as usize {
                 return None;
             }
-            let count = GlobalSize(handle) / size_of::<u16>();
-            if count == 0 || count > isize::MAX as usize / size_of::<u16>() {
-                return None;
-            }
-            let buffer = GlobalLock(handle).cast::<u16>();
+            let buffer = GlobalLock(handle).cast::<u8>();
             if buffer.is_null() {
                 return None;
             }
-            let data = std::slice::from_raw_parts(buffer, count);
-            let text = data
-                .iter()
-                .position(|&unit| unit == 0)
-                .and_then(|end| String::from_utf16(&data[..end]).ok())
-                .filter(|text| !text.trim().is_empty());
+            let result = read(std::slice::from_raw_parts(buffer, size));
             GlobalUnlock(handle);
-            text
+            Some(result)
         }
     }
+}
+
+fn utf16_units(units: &[[u8; 2]]) -> impl Iterator<Item = u16> + '_ {
+    units.iter().copied().map(u16::from_le_bytes)
 }
 
 impl Drop for ClipboardRead {
