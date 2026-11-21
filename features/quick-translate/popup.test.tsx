@@ -189,7 +189,7 @@ test("quick popup: renders streamed text while translating and keeps partial tex
 
   await app.waitUntil(() => app.texts().includes("Bon"));
   expect(app.shows("id:quick-translate-result-text")).toBe(true);
-  expect(app.texts()).toContain(t("quickTranslate.translating"));
+  expect(app.texts()).not.toContain(t("quickTranslate.translating"));
   expect(app.shows("id:quick-translate-copy")).toBe(false);
 
   await app.press("id:harness-complete-stream");

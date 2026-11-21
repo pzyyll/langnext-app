@@ -235,10 +235,7 @@ function PresetCardRow(props: PresetCardRowProps) {
         </If>
 
         <If when={props.card().result.status === "streaming"}>
-          <View class="gap-1.5 px-3 pb-3">
-            <Text testID="quick-translate-status" class="text-xs text-muted-foreground">
-              {t("quickTranslate.translating")}
-            </Text>
+          <View class="px-3 pb-3">
             <View selectable>
               <Text
                 testID="quick-translate-result-text"
