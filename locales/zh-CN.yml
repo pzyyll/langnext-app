@@ -36,6 +36,9 @@ settings:
   title: 设置
   navLabel: 设置分类
   resizeLabel: 调整设置栏宽度
+  groups:
+    application: 应用
+    integrations: 集成
   sections:
     general: 通用
     appearance: 外观

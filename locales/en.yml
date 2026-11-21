@@ -36,6 +36,9 @@ settings:
   title: Settings
   navLabel: Settings sections
   resizeLabel: Resize settings panel
+  groups:
+    application: Application
+    integrations: Integrations
   sections:
     general: General
     appearance: Appearance
