@@ -79,6 +79,8 @@ settings:
       storageUnsupportedVersion: 已保存的 OCR 设置版本不受支持。
       storageWriteFailed: 无法保存 OCR 设置，请检查存储后重试。
       modelIdBlank: 请为 OCR 选择模型。
+      baiduKeysRequired: 请同时填写 API Key 和 Secret Key。
+      baiduOperationInvalid: 请选择百度 OCR 模式。
   languageDetection:
     title: 语言检测
     detection: 检测

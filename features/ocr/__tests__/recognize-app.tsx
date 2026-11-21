@@ -42,7 +42,7 @@ function RecognizeHarnessApp() {
       const modelIds =
         params.modelIds && params.modelIds.length > 0
           ? params.modelIds
-          : saved
+          : saved?.kind === "ai"
             ? [saved.modelId]
             : [];
 

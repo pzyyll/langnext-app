@@ -101,6 +101,8 @@ async function resolveOcrService(
   switch (binding.kind) {
     case "ai":
       return resolveSavedModelRequest(binding.modelId, "image");
+    case "baidu":
+      return { ok: false, reason: t("ocr.failure.unconfigured") };
   }
 }
 

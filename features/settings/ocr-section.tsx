@@ -21,7 +21,7 @@ interface OcrSectionProps {
 export function OcrSection(props: OcrSectionProps) {
   const saved = ocrSettingsStore.settings();
   const selectedService = signal<OcrServiceKind>(saved?.kind ?? "ai");
-  const draftModelId = signal<string | null>(saved?.modelId ?? null);
+  const draftModelId = signal<string | null>(saved?.kind === "ai" ? saved.modelId : null);
   const error = signal<string | null>(null);
   const saving = signal(false);
 
@@ -64,6 +64,8 @@ export function OcrSection(props: OcrSectionProps) {
         const modelId = eligibleModelId();
         return modelId === null ? null : { kind, modelId };
       }
+      case "baidu":
+        return null;
     }
   };
 
@@ -78,7 +80,7 @@ export function OcrSection(props: OcrSectionProps) {
         error.set(result.message);
         return;
       }
-      draftModelId.set(result.binding.modelId);
+      if (result.binding.kind === "ai") draftModelId.set(result.binding.modelId);
     } finally {
       saving.set(false);
     }

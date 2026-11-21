@@ -79,6 +79,8 @@ settings:
       storageUnsupportedVersion: The saved OCR settings use an unsupported version.
       storageWriteFailed: Could not save the OCR settings. Check storage and try again.
       modelIdBlank: Choose a model for OCR.
+      baiduKeysRequired: Enter both the API Key and the Secret Key.
+      baiduOperationInvalid: Choose a Baidu OCR mode.
   languageDetection:
     title: Language Detection
     detection: Detection
