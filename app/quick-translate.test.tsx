@@ -890,6 +890,34 @@ test("selection controller: a changed draft or target drops the delayed read", a
   expect(controller.sourceDelivery()?.seq).toBe(1);
 });
 
+test("selection controller: a native stale result never opens or focuses the popup", async () => {
+  let focuses = 0;
+  const controller = createQuickTranslateController({
+    selectionText: {
+      snapshot: () => "same-window-and-control",
+      isCurrent: () => true,
+      // The focused UI Automation element changed inside the same native control.
+      read: async () => ({ status: "stale" }),
+    },
+  });
+  controller.setSourceText("Keep draft");
+
+  await controller.activateSelectionTranslate();
+  const openedWhileClosed = controller.isOpen();
+
+  if (!openedWhileClosed) controller.open();
+  controller.attachWindow({
+    focus() {
+      focuses += 1;
+    },
+  } as WindowRef);
+  await controller.activateSelectionTranslate();
+
+  expect({ openedWhileClosed, focuses }).toEqual({ openedWhileClosed: false, focuses: 0 });
+  expect(controller.sourceText()).toBe("Keep draft");
+  expect(controller.sourceDelivery()).toBeNull();
+});
+
 test("selection controller: only the latest current read delivers", async () => {
   const pendingSelections: Array<{
     target: string;

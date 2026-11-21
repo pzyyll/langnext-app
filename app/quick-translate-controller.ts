@@ -364,7 +364,8 @@ export function createQuickTranslateController(
     draftAtDispatch: number,
   ) => {
     if (gen !== sourceReadGen || draftAtDispatch !== draftGen) return;
-    if (!selectionTargetIsCurrent(target)) return;
+    // UI Automation focus can change within the same native window and control.
+    if (result.status === "stale" || !selectionTargetIsCurrent(target)) return;
     open();
     if (result.status !== "selected" || result.text.trim().length === 0) return;
     // A delivered selection replaces recognition. An empty read leaves it running.
