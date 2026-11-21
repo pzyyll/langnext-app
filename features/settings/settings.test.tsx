@@ -63,7 +63,7 @@ test("settings ui: groups language under General and theme under Appearance in a
   await app.press("id:settings-nav-appearance");
   expect(app.texts()).toContain("外观");
   expect(app.texts()).toContain("主题");
-  expect(app.texts()).toContain("透明标题栏与侧边栏");
+  expect(app.texts()).toContain("透明标题栏");
 });
 
 test("settings ui: resizes the settings split divider and persists width independently", async () => {

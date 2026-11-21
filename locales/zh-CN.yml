@@ -54,7 +54,7 @@ settings:
     system: 跟随系统
     error: 无法保存外观设置。本次选择将在关闭应用前生效。
   transparency:
-    label: 透明标题栏与侧边栏
+    label: 透明标题栏
     error: 无法保存透明度设置。本次选择将在关闭应用前生效。
   language:
     title: 语言

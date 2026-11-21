@@ -1,7 +1,7 @@
 import { expect, open, test } from "nsh/test";
 
 const viewport = { width: 1040, height: 720, platform: "windows" as const };
-const transparencySwitch = "role:switch[Transparent title bar and sidebar]";
+const transparencySwitch = "role:switch[Transparent title bar]";
 const transparencyKey = "settings.transparency";
 
 test("opens Models by default and switches between sidebar destinations", async () => {

@@ -54,7 +54,7 @@ settings:
     system: System
     error: Could not save appearance. Your choice will apply until you close the app.
   transparency:
-    label: Transparent title bar and sidebar
+    label: Transparent title bar
     error: Could not save transparency. Your choice will apply until you close the app.
   language:
     title: Language
