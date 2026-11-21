@@ -286,6 +286,7 @@ async function interpretResponse(
   if ("aborted" in body && body.aborted) return { kind: "aborted" };
   const statusFailure = classifyStatus(response.status);
   if (!body.ok) {
+    if (!("failure" in body)) return { kind: "aborted" };
     if (statusFailure) return { kind: "failure", failure: statusFailure };
     if (phase === "token" && response.status === 400)
       return { kind: "failure", failure: "credentials" };

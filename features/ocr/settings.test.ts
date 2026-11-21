@@ -2,6 +2,7 @@ import { expect, test } from "nsh/test";
 import {
   createOcrSettingsStore,
   OCR_STORAGE_KEY,
+  type BaiduOcrOperation,
   type OcrServiceBinding,
   type OcrSettingsStorage,
 } from "./settings";
@@ -227,7 +228,7 @@ const NEXT_KEYS = { apiKey: "replacement-api-key", secretKey: "replacement-secre
 async function saveBaidu(
   store: ReturnType<typeof createOcrSettingsStore>,
   keys: { apiKey: string; secretKey: string },
-  operation: "accurate" | "general" = "accurate",
+  operation: BaiduOcrOperation = "accurate",
 ) {
   const result = await store.save({
     kind: "baidu",
