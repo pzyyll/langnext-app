@@ -3,7 +3,12 @@ import { ProviderProtocolError } from "../../modules/ai/contracts/errors";
 import type { ImageInput } from "../../modules/ai/contracts/protocol";
 import { aiClient } from "../../modules/ai/runtime/client";
 import { resolveSavedModelRequest, type SavedModelRequestResolution } from "../models/store";
-import type { OcrServiceBinding } from "./settings";
+import {
+  createBaiduOcrClient,
+  type BaiduOcrFailureReason,
+  type BaiduOcrRecognition,
+} from "./baidu";
+import { ocrSettingsStore, type OcrServiceBinding } from "./settings";
 
 /** Largest PNG accepted for one upload; a bigger selection asks for a smaller region. */
 export const OCR_MAX_IMAGE_BYTES = 3 * 1024 * 1024;
@@ -59,12 +64,18 @@ function invalidImage(): OcrRecognitionOutcome {
   return { status: "failed", message: t("ocr.failure.invalidImage") };
 }
 
-/** Validates and encodes one captured PNG, so nothing unreadable reaches a model endpoint. */
-export function encodePngForUpload(bytes: Uint8Array): ImageInput | OcrRecognitionOutcome {
+function rawPngFailure(bytes: Uint8Array): OcrRecognitionOutcome | null {
   if (!hasPngSignature(bytes)) return invalidImage();
   if (bytes.byteLength > OCR_MAX_IMAGE_BYTES) {
     return { status: "failed", message: t("ocr.failure.imageTooLarge") };
   }
+  return null;
+}
+
+/** Validates and encodes one captured PNG, so nothing unreadable reaches a model endpoint. */
+export function encodePngForUpload(bytes: Uint8Array): ImageInput | OcrRecognitionOutcome {
+  const failure = rawPngFailure(bytes);
+  if (failure) return failure;
   return { mimeType: "image/png", base64: Buffer.from(bytes).toString("base64") };
 }
 
@@ -93,17 +104,96 @@ function parseRecognitionAnswer(raw: string): ParsedAnswer {
   return { kind: "text", text };
 }
 
-/** Resolves the saved binding to a route and credential; the only image-purpose seam. */
-async function resolveOcrService(
+/** Resolves an AI binding to a route and credential; the only image-purpose seam. */
+async function resolveAiOcr(
   binding: OcrServiceBinding | null,
 ): Promise<SavedModelRequestResolution> {
-  if (!binding) return { ok: false, reason: t("ocr.failure.unconfigured") };
-  switch (binding.kind) {
-    case "ai":
-      return resolveSavedModelRequest(binding.modelId, "image");
-    case "baidu":
-      return { ok: false, reason: t("ocr.failure.unconfigured") };
+  if (!binding || binding.kind !== "ai")
+    return { ok: false, reason: t("ocr.failure.unconfigured") };
+  return resolveSavedModelRequest(binding.modelId, "image");
+}
+
+function sameBaiduBinding(
+  current: OcrServiceBinding | null,
+  snapshot: Extract<OcrServiceBinding, { kind: "baidu" }>,
+): boolean {
+  return (
+    current?.kind === "baidu" &&
+    current.operation === snapshot.operation &&
+    current.credentialRef === snapshot.credentialRef
+  );
+}
+
+async function baiduReadiness(
+  binding: Extract<OcrServiceBinding, { kind: "baidu" }>,
+): Promise<OcrReadiness> {
+  if (!sameBaiduBinding(ocrSettingsStore.settings(), binding)) {
+    return { ready: false, reason: t("ocr.failure.unconfigured") };
   }
+  const pair = await ocrSettingsStore.readBaiduCredentials(binding.credentialRef);
+  if (!pair) return { ready: false, reason: t("ocr.failure.unconfigured") };
+  return { ready: true, reason: null };
+}
+
+function baiduFailureMessage(failure: BaiduOcrFailureReason): string {
+  switch (failure) {
+    case "invalid_image":
+      return t("ocr.failure.invalidImage");
+    case "image_too_small":
+      return t("ocr.failure.imageTooSmall");
+    case "image_too_large":
+      return t("ocr.failure.imageTooLarge");
+    case "credentials":
+      return t("ocr.failure.baiduCredentials");
+    case "rate_limited":
+      return t("ocr.failure.baiduLater");
+    case "quota":
+      return t("ocr.failure.baiduQuota");
+    case "malformed":
+      return t("ocr.failure.baiduResponse");
+    case "timeout":
+      return t("ocr.failure.timeout");
+    case "service":
+      return t("ocr.failure.failed");
+  }
+}
+
+function mapBaiduResult(result: BaiduOcrRecognition): OcrRecognitionOutcome {
+  switch (result.status) {
+    case "recognized":
+      return { status: "recognized", text: result.text };
+    case "no_text":
+      return { status: "no_text" };
+    case "cancelled":
+      return { status: "cancelled" };
+    case "failed":
+      return { status: "failed", message: baiduFailureMessage(result.failure) };
+  }
+}
+
+async function recognizeWithBaidu(
+  binding: Extract<OcrServiceBinding, { kind: "baidu" }>,
+  png: Uint8Array,
+  options: RecognizeScreenshotOptions,
+): Promise<OcrRecognitionOutcome> {
+  if (options.signal?.aborted) return { status: "cancelled" };
+  const failure = rawPngFailure(png);
+  if (failure) return failure;
+  if (options.signal?.aborted) return { status: "cancelled" };
+  if (!sameBaiduBinding(ocrSettingsStore.settings(), binding)) {
+    return { status: "unavailable", reason: t("ocr.failure.unconfigured") };
+  }
+  const pair = await ocrSettingsStore.readBaiduCredentials(binding.credentialRef);
+  if (options.signal?.aborted) return { status: "cancelled" };
+  if (!pair || !sameBaiduBinding(ocrSettingsStore.settings(), binding)) {
+    return { status: "unavailable", reason: t("ocr.failure.unconfigured") };
+  }
+
+  const result = await createBaiduOcrClient().recognize(
+    { operation: binding.operation, credentials: pair, png },
+    { signal: options.signal, timeoutMs: options.timeoutMs ?? OCR_TIMEOUT_MS },
+  );
+  return mapBaiduResult(result);
 }
 
 /**
@@ -111,7 +201,8 @@ async function resolveOcrService(
  * image-purpose rule the recognition itself runs.
  */
 export async function checkOcrReadiness(binding: OcrServiceBinding | null): Promise<OcrReadiness> {
-  const resolved = await resolveOcrService(binding);
+  if (binding?.kind === "baidu") return baiduReadiness(binding);
+  const resolved = await resolveAiOcr(binding);
   return resolved.ok ? { ready: true, reason: null } : { ready: false, reason: resolved.reason };
 }
 
@@ -125,12 +216,13 @@ export async function recognizeScreenshot(
   options: RecognizeScreenshotOptions = {},
 ): Promise<OcrRecognitionOutcome> {
   if (options.signal?.aborted) return { status: "cancelled" };
+  if (binding?.kind === "baidu") return recognizeWithBaidu(binding, png, options);
 
   const encoded = encodePngForUpload(png);
   if (isRecognitionOutcome(encoded)) return encoded;
 
   // Revalidated here so a model removed or disabled during capture cannot receive the image.
-  const resolved = await resolveOcrService(binding);
+  const resolved = await resolveAiOcr(binding);
   if (options.signal?.aborted) return { status: "cancelled" };
   if (!resolved.ok) return { status: "unavailable", reason: resolved.reason };
 

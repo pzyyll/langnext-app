@@ -115,6 +115,11 @@ ocr:
     unconfigured: 请先在设置中配置 OCR，或换一种方式获取文本。
     invalidImage: 无法读取截取的图片，请重新选择区域。
     imageTooLarge: 所选区域过大，请选择更小的区域。
+    imageTooSmall: 所选区域太小，请选择更大的区域。
+    baiduCredentials: 请检查百度 API Key、Secret Key 和接口权限。
+    baiduLater: 百度 OCR 正忙，请稍后再试。
+    baiduQuota: 请检查百度 OCR 配额。
+    baiduResponse: 百度 OCR 返回了无法读取的结果，请重试。
     noText: 所选区域未发现文字。
     timeout: OCR 超时，请重试。
     malformedAnswer: OCR 模型返回了无法解析的结果，请重试。

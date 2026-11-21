@@ -115,6 +115,11 @@ ocr:
     unconfigured: Configure OCR in Settings, or choose another way to get the text.
     invalidImage: The captured image could not be read. Select the area again.
     imageTooLarge: The selected area is too large. Select a smaller area.
+    imageTooSmall: The selected area is too small. Select a larger area.
+    baiduCredentials: Check the Baidu API Key, Secret Key, and API permissions.
+    baiduLater: Baidu OCR is busy. Try again later.
+    baiduQuota: Check the Baidu OCR quota.
+    baiduResponse: Baidu OCR returned an unreadable response. Try again.
     noText: No text was found in the selected area.
     timeout: OCR timed out. Try again.
     malformedAnswer: The OCR model returned an unreadable answer. Try again.

@@ -2,7 +2,7 @@ import { host, mount, signal, Text, View } from "nsh";
 import { initializeAiModules } from "../../../app/ai-setup";
 import { loadModelsState } from "../../models/store";
 import { loadLanguage } from "../../settings/language";
-import { recognizeScreenshot, type OcrRecognitionOutcome } from "../recognize";
+import { checkOcrReadiness, recognizeScreenshot, type OcrRecognitionOutcome } from "../recognize";
 import { ocrSettingsStore } from "../settings";
 
 initializeAiModules();
@@ -12,6 +12,10 @@ interface HarnessParams {
   pngBase64?: string;
   /** Model IDs to recognize with, in order; the saved OCR binding when absent. */
   modelIds?: string[];
+  /** Report readiness and skip recognition. */
+  readinessOnly?: boolean;
+  /** Replace the loaded binding with this AI model before recognition. */
+  swapToAiModelId?: string;
   timeoutMs?: number;
   abortAfterMs?: number;
 }
@@ -39,6 +43,24 @@ function RecognizeHarnessApp() {
       await ocrSettingsStore.load();
 
       const saved = ocrSettingsStore.settings();
+      if (saved?.kind === "baidu" && !(params.modelIds && params.modelIds.length > 0)) {
+        const readiness = await checkOcrReadiness(saved);
+        if (!params.readinessOnly) {
+          if (params.swapToAiModelId) {
+            await ocrSettingsStore.save({ kind: "ai", modelId: params.swapToAiModelId });
+          }
+          outcomes.push(
+            await recognizeScreenshot(saved, bytes, {
+              signal: controller.signal,
+              ...(params.timeoutMs !== undefined ? { timeoutMs: params.timeoutMs } : {}),
+            }),
+          );
+        }
+        outcomesJson.set(JSON.stringify({ readiness, outcomes }));
+        status.set("done");
+        return;
+      }
+
       const modelIds =
         params.modelIds && params.modelIds.length > 0
           ? params.modelIds

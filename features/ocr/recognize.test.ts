@@ -3,7 +3,7 @@ import { expect, open, test } from "nsh/test";
 import { initializeAiModules } from "../../app/ai-setup";
 import { makeChannel, makeModel, makeSeedStorage } from "../models/__tests__/fixtures";
 import { OCR_MAX_IMAGE_BYTES, recognizeScreenshot } from "./recognize";
-import { OCR_STORAGE_KEY } from "./settings";
+import { baiduCredentialStorageKey, OCR_STORAGE_KEY } from "./settings";
 
 initializeAiModules();
 
@@ -398,4 +398,165 @@ test("ocr recognize: a cancelled request reports cancellation without text", asy
   await app.waitUntil(() => app.texts()[0] !== "running");
   const result = JSON.parse(app.texts()[1]!);
   expect(result.outcomes[0]).toEqual({ status: "cancelled" });
+});
+
+const BAIDU_PNG_BASE64 = "iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAAAAAA6mKC9AAAAAElFTkSuQmCC";
+const BAIDU_REF = "baidu-ref";
+
+function baiduBindingStorage(): Record<string, string> {
+  return {
+    [OCR_STORAGE_KEY]: JSON.stringify({
+      version: 1,
+      kind: "baidu",
+      operation: "accurate",
+      credentialRef: BAIDU_REF,
+    }),
+    [baiduCredentialStorageKey(BAIDU_REF)]: JSON.stringify({
+      apiKey: "synthetic-api-key",
+      secretKey: "synthetic-secret-key",
+    }),
+  };
+}
+
+test("ocr recognize: a saved Baidu binding is ready without requests and returns the lines", async () => {
+  const storage = makeSeedStorage({ extra: baiduBindingStorage() });
+  const ready = await open("./__tests__/recognize-app.tsx", {
+    storage,
+    host: { params: { pngBase64: BAIDU_PNG_BASE64, readinessOnly: true } },
+  });
+  await ready.waitUntil(() => ready.texts()[0] !== "running");
+  const readyResult = JSON.parse(ready.texts()[1]!);
+  expect(readyResult.readiness).toEqual({ ready: true, reason: null });
+  expect(ready.requests()).toHaveLength(0);
+
+  const app = await open("./__tests__/recognize-app.tsx", {
+    storage,
+    host: { params: { pngBase64: BAIDU_PNG_BASE64 } },
+    network: {
+      "POST https://aip.baidubce.com/oauth/2.0/token": {
+        status: 200,
+        body: { access_token: "fixture-token" },
+      },
+      "POST https://aip.baidubce.com/rest/2.0/ocr/v1/accurate?access_token=fixture-token": {
+        status: 200,
+        body: {
+          words_result: [{ words: "First line" }, { words: "\u7b2c\u4e8c\u884c" }],
+          words_result_num: 2,
+        },
+      },
+    },
+  });
+  await app.waitUntil(() => app.texts()[0] !== "running");
+  const result = JSON.parse(app.texts()[1]!);
+  expect(result.outcomes[0]).toEqual({
+    status: "recognized",
+    text: "First line\n\u7b2c\u4e8c\u884c",
+  });
+  const requests = app.requests();
+  expect(requests).toHaveLength(2);
+  expect(requests[0]!.url).toBe("https://aip.baidubce.com/oauth/2.0/token");
+  expect(requests[1]!.url).toContain("/rest/2.0/ocr/v1/accurate");
+  expect(new URLSearchParams(requests[1]!.body ?? "").get("language_type")).toBe("auto_detect");
+});
+
+const BAIDU_TOKEN = "POST https://aip.baidubce.com/oauth/2.0/token";
+const BAIDU_OCR =
+  "POST https://aip.baidubce.com/rest/2.0/ocr/v1/accurate?access_token=fixture-token";
+
+function baiduNetwork(ocrBody: unknown) {
+  return {
+    [BAIDU_TOKEN]: { status: 200, body: { access_token: "fixture-token" } },
+    [BAIDU_OCR]: { status: 200, body: ocrBody },
+  };
+}
+
+test("ocr recognize: Baidu cancellation, empty text, and bad responses stay out of the draft", async () => {
+  const storage = makeSeedStorage({ extra: baiduBindingStorage() });
+  const cancelled = await open("./__tests__/recognize-app.tsx", {
+    storage,
+    host: { params: { pngBase64: BAIDU_PNG_BASE64, abortAfterMs: 20 } },
+    network: {
+      [BAIDU_TOKEN]: { status: 200, body: { access_token: "fixture-token" }, delay: 2_000 },
+    },
+  });
+  await cancelled.waitUntil(() => cancelled.texts()[0] !== "running");
+  expect(JSON.parse(cancelled.texts()[1]!).outcomes[0]).toEqual({ status: "cancelled" });
+
+  const empty = await open("./__tests__/recognize-app.tsx", {
+    storage,
+    host: { params: { pngBase64: BAIDU_PNG_BASE64 } },
+    network: baiduNetwork({ words_result: [{ words: "  " }], words_result_num: 1 }),
+  });
+  await empty.waitUntil(() => empty.texts()[0] !== "running");
+  expect(JSON.parse(empty.texts()[1]!).outcomes[0]).toEqual({ status: "no_text" });
+
+  const malformed = await open("./__tests__/recognize-app.tsx", {
+    storage,
+    host: { params: { pngBase64: BAIDU_PNG_BASE64 } },
+    network: baiduNetwork({ error_msg: "SENTINEL-SECRET", words_result: "Nope" }),
+  });
+  await malformed.waitUntil(() => malformed.texts()[0] !== "running");
+  const malformedResult = JSON.parse(malformed.texts()[1]!).outcomes[0];
+  expect(malformedResult).toEqual({ status: "failed", message: t("ocr.failure.baiduResponse") });
+  expect(JSON.stringify(malformedResult).includes("SENTINEL-SECRET")).toBe(false);
+
+  const credentials = await open("./__tests__/recognize-app.tsx", {
+    storage,
+    host: { params: { pngBase64: BAIDU_PNG_BASE64 } },
+    network: {
+      [BAIDU_TOKEN]: {
+        status: 401,
+        body: { error: "invalid_client", error_description: "SENTINEL-SECRET" },
+      },
+    },
+  });
+  await credentials.waitUntil(() => credentials.texts()[0] !== "running");
+  const credentialResult = JSON.parse(credentials.texts()[1]!).outcomes[0];
+  expect(credentialResult).toEqual({
+    status: "failed",
+    message: t("ocr.failure.baiduCredentials"),
+  });
+  expect(JSON.stringify(credentialResult).includes("SENTINEL-SECRET")).toBe(false);
+  expect(credentials.requests()).toHaveLength(1);
+});
+
+test("ocr recognize: unreadable Baidu keys and a changed binding send nothing", async () => {
+  const broken = makeSeedStorage({
+    extra: {
+      [OCR_STORAGE_KEY]: JSON.stringify({
+        version: 1,
+        kind: "baidu",
+        operation: "accurate",
+        credentialRef: BAIDU_REF,
+      }),
+      [baiduCredentialStorageKey(BAIDU_REF)]: JSON.stringify({ apiKey: 1 }),
+    },
+  });
+  const unreadable = await open("./__tests__/recognize-app.tsx", {
+    storage: broken,
+    host: { params: { pngBase64: BAIDU_PNG_BASE64 } },
+    network: baiduNetwork({ words_result: [{ words: "Nope" }] }),
+  });
+  await unreadable.waitUntil(() => unreadable.texts()[0] !== "running");
+  expect(JSON.parse(unreadable.texts()[1]!).readiness).toEqual({
+    ready: false,
+    reason: t("ocr.failure.unconfigured"),
+  });
+  expect(JSON.parse(unreadable.texts()[1]!).outcomes[0]).toEqual({
+    status: "unavailable",
+    reason: t("ocr.failure.unconfigured"),
+  });
+  expect(unreadable.requests()).toHaveLength(0);
+
+  const swapped = await open("./__tests__/recognize-app.tsx", {
+    storage: makeSeedStorage({ extra: baiduBindingStorage() }),
+    host: { params: { pngBase64: BAIDU_PNG_BASE64, swapToAiModelId: "other-model" } },
+    network: baiduNetwork({ words_result: [{ words: "Nope" }] }),
+  });
+  await swapped.waitUntil(() => swapped.texts()[0] !== "running");
+  expect(JSON.parse(swapped.texts()[1]!).outcomes[0]).toEqual({
+    status: "unavailable",
+    reason: t("ocr.failure.unconfigured"),
+  });
+  expect(swapped.requests()).toHaveLength(0);
 });
