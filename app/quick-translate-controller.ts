@@ -20,6 +20,7 @@ import { checkOcrReadiness, recognizeScreenshot } from "../features/ocr/recogniz
 import { ocrSettingsStore } from "../features/ocr/settings";
 import type { SourceDelivery, SourceDeliveryKind } from "../features/quick-translate/session";
 import type { ScreenCaptureOverlayConfig, ScreenCapturePort } from "../platform/screen-capture";
+import type { SelectionTextPort, SelectionTextRead } from "../platform/selection-text";
 import {
   boundsContainPoint,
   resolveAnchoredDisplayPoint,
@@ -68,6 +69,8 @@ export interface QuickTranslateControllerOptions {
   captureRegion?: ScreenCapturePort["capture"];
   /** Theme colors for the native overlay; the desktop entry point supplies the tokens. */
   captureOverlayTheme?: () => CaptureOverlayTheme;
+  /** Foreground selection boundary; the production port is native, and the test harness injects one. */
+  selectionText?: SelectionTextPort;
 }
 
 export interface QuickTranslateController {
@@ -88,6 +91,7 @@ export interface QuickTranslateController {
   open: () => void;
   close: () => void;
   activateDoubleCopy: (event: DoubleCopyActivationEvent) => Promise<void>;
+  activateSelectionTranslate: () => Promise<void>;
   startOcr: () => Promise<void>;
   setPinned: (pinned: boolean) => void;
   togglePinned: () => void;
@@ -123,6 +127,7 @@ export function createQuickTranslateController(
   const isDoubleCopyEnabledFn = options.isDoubleCopyActive ?? (() => false);
   const onPointerPress = options.onPointerPress ?? (() => () => {});
   const captureRegion = options.captureRegion;
+  const selectionText = options.selectionText;
   const captureOverlayTheme =
     options.captureOverlayTheme ??
     ((): CaptureOverlayTheme => ({
@@ -318,6 +323,38 @@ export function createQuickTranslateController(
     // Only an actual clipboard delivery replaces the OCR result in flight.
     cancelOcr();
     deliverSource(copiedText, "clipboard");
+  };
+
+  const readSelection = async (target: string): Promise<SelectionTextRead> => {
+    try {
+      return await selectionText!.read(target);
+    } catch {
+      return { status: "unavailable" };
+    }
+  };
+
+  /** Reads the foreground selection before the popup takes focus, then translates it once. */
+  const activateSelectionTranslate = async (): Promise<void> => {
+    if (!selectionText) return;
+    let target: string | null;
+    try {
+      target = selectionText.snapshot();
+    } catch {
+      target = null;
+    }
+    if (target === null) return;
+
+    const result = await readSelection(target);
+    let current = false;
+    try {
+      current = selectionText.isCurrent(target);
+    } catch {
+      current = false;
+    }
+    if (!current || result.status !== "selected" || result.text.trim().length === 0) return;
+
+    open();
+    deliverSource(result.text, "selection");
   };
 
   const waitForHidden = async (win: WindowRef, signal: AbortSignal): Promise<boolean> => {
@@ -544,6 +581,7 @@ export function createQuickTranslateController(
     open,
     close,
     activateDoubleCopy,
+    activateSelectionTranslate,
     startOcr,
     setPinned: (pinned: boolean) => pinnedSignal.set(pinned),
     togglePinned: () => pinnedSignal.set(!pinnedSignal()),

@@ -356,9 +356,11 @@ export function QuickTranslatePopup(props: QuickTranslatePopupProps) {
   const sourceText = () => props.session.sourceText();
   const hasSourceText = () => sourceText().length > 0;
   // Collapse is a view-only mode: an empty field always shows the editor for the next input.
-  // A clipboard delivery arrives collapsed: the user asked to translate, not to edit.
+  // Clipboard and selection arrive collapsed: the user asked to translate, not to edit.
   const delivery = () => props.session.sourceDelivery();
-  const sourceCollapsed = signal(delivery()?.kind === "clipboard" && hasSourceText());
+  const sourceCollapsed = signal(
+    (delivery()?.kind === "clipboard" || delivery()?.kind === "selection") && hasSourceText(),
+  );
   const isSourceCollapsed = () => sourceCollapsed() && hasSourceText();
   const sourceFirstLine = () => sourceText().split(/\r?\n/, 1)[0] ?? "";
   const sourceHasMultipleLines = () => /\r?\n/.test(sourceText());

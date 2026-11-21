@@ -39,7 +39,7 @@ const COPY_FEEDBACK_DURATION_MS = 1500;
 /** Coalesces streamed text updates so a fast provider does not re-render each token. */
 const STREAM_FLUSH_INTERVAL_MS = 50;
 
-export type SourceDeliveryKind = "clipboard" | "ocr";
+export type SourceDeliveryKind = "clipboard" | "ocr" | "selection";
 
 /** Text that replaced the draft as a whole, with one increasing sequence per delivery. */
 export interface SourceDelivery {
@@ -171,7 +171,7 @@ function createSharedLanguageRun(
 
 export interface QuickTranslateSessionOptions {
   sourceText: Accessor<string>;
-  /** The newest text that arrived as a whole (clipboard copy or OCR), with its kind. */
+  /** The newest text that arrived as a whole (clipboard, selection, or OCR), with its kind. */
   sourceDelivery?: Accessor<SourceDelivery | null>;
   onSourceTextChange: (text: string) => void;
   autoTranslate?: Accessor<boolean>;

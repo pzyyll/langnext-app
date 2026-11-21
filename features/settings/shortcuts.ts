@@ -5,6 +5,8 @@ export const DEFAULT_QUICK_TRANSLATE_SHORTCUT = "alt+shift+d";
 export const QUICK_TRANSLATE_SHORTCUT_STORAGE_KEY = "settings.shortcuts.quickTranslate";
 export const DEFAULT_SCREENSHOT_TRANSLATE_SHORTCUT = "alt+shift+s";
 export const SCREENSHOT_TRANSLATE_SHORTCUT_STORAGE_KEY = "settings.shortcuts.screenshotTranslate";
+export const DEFAULT_SELECTION_TRANSLATE_SHORTCUT = "alt+d";
+export const SELECTION_TRANSLATE_SHORTCUT_STORAGE_KEY = "settings.shortcuts.selectionTranslate";
 const UNASSIGNED_SHORTCUT = "";
 
 export const TRANSLATION_SHORTCUTS = {
@@ -17,6 +19,11 @@ export const TRANSLATION_SHORTCUTS = {
     defaultChord: DEFAULT_SCREENSHOT_TRANSLATE_SHORTCUT,
     storageKey: SCREENSHOT_TRANSLATE_SHORTCUT_STORAGE_KEY,
     labelKey: "settings.shortcuts.screenshotTranslate",
+  },
+  "selection-translate": {
+    defaultChord: DEFAULT_SELECTION_TRANSLATE_SHORTCUT,
+    storageKey: SELECTION_TRANSLATE_SHORTCUT_STORAGE_KEY,
+    labelKey: "settings.shortcuts.selectionTranslate",
   },
 } as const;
 

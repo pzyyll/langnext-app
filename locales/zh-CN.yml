@@ -65,6 +65,7 @@ settings:
   shortcuts:
     quickTranslate: 打开快速翻译
     screenshotTranslate: 截图翻译
+    selectionTranslate: 划词翻译
     edit: 修改「%{action}」快捷键
     pressShortcut: 请按下组合键
     recordingHint: 按 Esc 取消。

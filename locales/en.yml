@@ -65,6 +65,7 @@ settings:
   shortcuts:
     quickTranslate: Open Quick Translate
     screenshotTranslate: Screenshot Translate
+    selectionTranslate: Translate Selection
     edit: Edit shortcut for %{action}
     pressShortcut: Press a shortcut
     recordingHint: Press Esc to cancel.

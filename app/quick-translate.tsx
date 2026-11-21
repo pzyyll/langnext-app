@@ -34,6 +34,7 @@ import {
   type TranslationShortcutId,
 } from "../features/settings/shortcuts";
 import { canCaptureScreen, ScreenCapture } from "../platform/screen-capture";
+import { canReadSelectionText, SelectionText } from "../platform/selection-text";
 import { canMonitorPointerPress, type DoubleCopyBinding } from "../platform/quick-translate";
 import {
   nativeDoubleCopyBinding,
@@ -75,17 +76,19 @@ export function createQuickTranslateController(
       textColor: token("foreground"),
       backdropColor: token("background"),
     }),
+    selectionText: canReadSelectionText(platform.os) ? SelectionText : undefined,
     ...options,
   });
 }
 
-/** Registers both Windows shortcuts and releases them with the shell. */
+/** Registers the Windows translation shortcuts and releases them with the shell. */
 export function registerTranslationShortcuts(
   controller: QuickTranslateController,
   binding: TranslationShortcutBinding = GlobalShortcut,
   currentOs: string = platform.os,
 ) {
-  if (!canCaptureScreen(currentOs)) return undefined;
+  // Selection does not depend on screen capture. All three actions are Windows-only.
+  if (currentOs !== "windows") return undefined;
 
   const claimed = new Set<string>();
   const isRecordingInForeground = (): boolean =>
@@ -96,6 +99,9 @@ export function registerTranslationShortcuts(
   const settings = {
     "quick-translate": createSetting("quick-translate", controller.open),
     "screenshot-translate": createSetting("screenshot-translate", () => void controller.startOcr()),
+    "selection-translate": createSetting("selection-translate", () => {
+      void controller.activateSelectionTranslate();
+    }),
   };
   const entries = Object.values(settings);
   let released = false;
@@ -120,6 +126,7 @@ export function registerTranslationShortcuts(
       }
     });
     void settings["screenshot-translate"].start();
+    void settings["selection-translate"].start();
   });
 
   return { settings, isRecordingInForeground };

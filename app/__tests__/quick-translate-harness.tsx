@@ -16,6 +16,7 @@ import {
 import { loadTransparency } from "../../features/settings/transparency";
 import type { DoubleCopyActivationEvent } from "../../platform/quick-translate";
 import type { ScreenCaptureOutcome } from "../../platform/screen-capture";
+import type { SelectionTextRead } from "../../platform/selection-text";
 import { initializeAiModules } from "../ai-setup";
 import { AppShell } from "../shell";
 
@@ -76,9 +77,14 @@ function QuickTranslateHarness(config: {
     entry?.onSelect?.();
   };
 
+  let finishSelection: ((result: SelectionTextRead) => void) | undefined;
+  const selectionReadCount = signal(0);
+  const selectionText = "Selected line one\nSelected line two";
+
   for (const chord of [
     DEFAULT_QUICK_TRANSLATE_SHORTCUT,
     DEFAULT_SCREENSHOT_TRANSLATE_SHORTCUT,
+    "alt+d",
     "ctrl+shift+y",
   ]) {
     keymap.bind(chord, () => registeredShortcuts.get(chord)?.(), { when: "always" });
@@ -121,6 +127,16 @@ function QuickTranslateHarness(config: {
               return () => {
                 pointerPressStopCount.set(pointerPressStopCount() + 1);
               };
+            },
+            selectionText: {
+              snapshot: () => "target-1",
+              isCurrent: () => true,
+              read: () => {
+                selectionReadCount.set(selectionReadCount() + 1);
+                return new Promise<SelectionTextRead>((resolve) => {
+                  finishSelection = resolve;
+                });
+              },
             },
           }}
           doubleCopy={{
@@ -219,6 +235,16 @@ function QuickTranslateHarness(config: {
           onPress={() => shellMounted.set(false)}
         />
         <Button
+          testID="harness-finish-selection"
+          label="Finish Selection"
+          size="sm"
+          onPress={() => {
+            const resolve = finishSelection;
+            finishSelection = undefined;
+            resolve?.({ status: "selected", text: selectionText });
+          }}
+        />
+        <Button
           testID="harness-trigger-double-copy-valid"
           label="Harness Double Copy Valid"
           size="sm"
@@ -253,7 +279,7 @@ function QuickTranslateHarness(config: {
           })()}
         </Text>
         <Text testID="harness-metrics">
-          {`ocrCap=${ocrCaptureCount()}|ocrCaption=${ocrCaptureCaption()}|reg=${registerCount()}|unreg=${unregisterCount()}|dcReg=${doubleCopyRegisterCount()}|dcStop=${doubleCopyStopCount()}|dcReads=${clipboardReadCount()}|ppReg=${pointerPressRegisterCount()}|ppStop=${pointerPressStopCount()}|shortcuts=${shortcutList()}|tray=${trayMenuLabels()}|mainHidden=${mainHidden()}`}
+          {`ocrCap=${ocrCaptureCount()}|ocrCaption=${ocrCaptureCaption()}|reg=${registerCount()}|unreg=${unregisterCount()}|dcReg=${doubleCopyRegisterCount()}|dcStop=${doubleCopyStopCount()}|dcReads=${clipboardReadCount()}|ppReg=${pointerPressRegisterCount()}|ppStop=${pointerPressStopCount()}|selReads=${selectionReadCount()}|shortcuts=${shortcutList()}|tray=${trayMenuLabels()}|mainHidden=${mainHidden()}`}
         </Text>
       </View>
     </View>
