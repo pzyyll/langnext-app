@@ -628,6 +628,25 @@ Quick Translate runs inside a separate floating NSH window (`id="quick-translate
 - **DeepL cards**: A DeepL card joins the same shared resolver as an AI card and sends the resolved pair with the preset's stored key to the Free or Pro host. It shows the `text-muted-foreground` translating status and then the complete translation in one state swap, with no streamed chunks, per-token animation, or shimmer. The template selector is hidden and any stale template override is ignored; Copy, Retry, and cancellation behave like AI cards.
 - **Streamed results**: A card shows the `text-muted-foreground` translating status, then replaces it with the growing translation as chunks arrive. The partial text is selectable and shows no per-token animation; Copy and Retry appear only after the stream ends. A stream that stops early keeps the partial text above the `text-destructive` error and its Retry action, and no partial text is ever copyable. Language detection stays a buffered, single-response request so a card never waits on a streamed detector.
 
+### Windows selection acceptance
+
+Tested My Translator 0.1.0 at `5cb0c2d`. These results apply to the tested surfaces, not to all pages or app versions.
+
+| App version | Surface | Result with `Alt+D` |
+| --- | --- | --- |
+| Notepad 11.2609.11.0 | Document text | Translated the full selection once. |
+| Chrome 157.0.8103.79 | Google Search results | Translated the full selection once. |
+| Word 16.0.20527.20196 | Document body | Opened Quick Translate and translated the selection. |
+| Chrome 157.0.8103.79 | X page | Opened Quick Translate without changing the draft or results. No translation started. |
+| VS Code 1.146.0 | Editor | Same as the X page. |
+| Adobe Acrobat DC 21.001.20155 | PDF text | Same as the X page. |
+| Windows Terminal 1.25.261109001 | Terminal output | Same as the X page. |
+
+- **Live checks**: Notepad and Chrome translated with both Auto-translate and double-copy off. A fast focus change did not open a stale popup. Holding the shortcut did not repeat the translation. Pin state and clipboard contents did not change. The tray opened Quick Translate. Clearing `Alt+D` restored address-bar focus in Edge 157.0.4341.60 and File Explorer.
+- **Windows settings**: Inspected four combinations of light, dark, `en`, and `zh-CN` at `1040 × 720` and `720 × 520` points. No label clipping was visible. Hover feedback and keyboard focus were visible. Recording and Escape worked, including at the compact size with reduced motion. The native shortcut test also covered saving, clearing, and resetting.
+- **Automated checks**: `mise run verify` passed (436 passed, 6 skipped; build succeeded). The four interactive UI Automation tests passed, including the caret and password cases. Double-copy passed its headless and Win32 worker checks. Screenshot Translate passed its headless and native overlay checks; no live OCR provider request was sent.
+- **Desktop suite**: Native cursor and shortcut tests passed. `mise run test-desktop` stopped at `App.test.tsx` (3 passed, 16 failed). The baseline `ffe4677` reproduced the same failures. With English set in an isolated test fixture, 18 of 19 cases passed. The remaining assertion still found the page after the window reported that it was hidden. This does not count as a passing desktop run.
+
 ### Temporary Windows line-height workaround
 
 [NSH #2655](https://github.com/longbridge/nsh/issues/2655) makes the gap below the last line grow with every line in a
