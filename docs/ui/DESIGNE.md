@@ -253,7 +253,9 @@ The tray draws `assets/logos/icon.svg`, the mark without the tile. NSH paints
 an SVG tray icon through its alpha in the taskbar's or menu bar's text colour, so
 the rounded tile would collapse into a solid square; the bare mark stays readable
 in light and dark. Its menu holds one item, `Exit`; a primary press brings the
-main window back.
+main window back. Closing the main window stays in the background: its close
+button, Alt+F4, the taskbar and the window menu hide it, the app keeps running
+behind the tray icon, and only `Exit` quits.
 
 ## Models workspace
 

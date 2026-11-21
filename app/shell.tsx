@@ -68,14 +68,11 @@ export function AppShell(props: AppShellProps = {}) {
 
   const win = currentWindow();
   effect(() => win.set({ backdrop: transparency() ? "popover" : "none" }));
+  // Every way of closing the main window keeps the app in the background: the
+  // close button, Alt+F4, the taskbar and the window menu hide it. Only the
+  // tray's Exit quits, and the tray icon brings the window back.
   win.set({ closeOnPress: false });
-  win.on("closePress", ({ reason }) => {
-    if (reason === "closeButton" || reason === "shortcut") {
-      win.hide();
-      return;
-    }
-    Application.quit();
-  });
+  win.on("closePress", () => win.hide());
 
   const page = signal<SidebarPage>("models");
   let activeLeaveGuard: NavigationLeaveGuard | null = null;

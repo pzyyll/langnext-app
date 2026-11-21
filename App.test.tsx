@@ -310,3 +310,19 @@ test("page surface: keeps work-area background opaque across destination switche
   await app.waitFor("id:models-page");
   expect(app.viewStyle("id:models-page")).toEqual(modelsSurface);
 });
+
+test("keeps the app running in the background when the main window closes", async () => {
+  const app = await open("./App.tsx", viewport);
+  const main = app.window("main");
+  expect(main.state()?.visible).toBe(true);
+
+  await main.pressClose();
+  await app.waitUntil(() => main.state()?.visible === false);
+
+  // Still open behind the tray icon: hiding is not closing, and the app goes on.
+  expect(main.state()).not.toBeNull();
+  expect(app.shows("id:models-page")).toBe(false);
+
+  await main.pressClose();
+  expect(main.state()?.visible).toBe(false);
+});
