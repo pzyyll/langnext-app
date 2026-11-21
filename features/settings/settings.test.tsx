@@ -454,6 +454,8 @@ test("ocr settings: saves and restores the image-capable model", async () => {
   expect(app.enabled("id:settings-ocr-save")).toBe(false);
   expect(app.storage()[OCR_STORAGE_KEY]).toBeUndefined();
 
+  await app.press("id:settings-ocr-service");
+  await app.press("role:option[AI OCR]");
   await app.press("id:settings-ocr-model");
   await app.waitFor("role:option[OpenAI Main · gpt-4.1]");
   expect(app.texts()).not.toContain("OpenAI Main · gpt-4.1-mini");
@@ -486,12 +488,7 @@ test("ocr settings: saves and restores the image-capable model", async () => {
   expect(reopened.shows("id:settings-ocr-model-unavailable")).toBe(false);
   expect(reopened.requests()).toHaveLength(0);
 
-  // The capture notice is Windows-only; the section itself stays readable elsewhere.
   expect(reopened.shows("id:settings-ocr-windows-only")).toBe(false);
-  const macApp = await open(APP_ENTRY, { ...viewport, platform: "macos", storage: seed });
-  await macApp.press("id:nav-settings");
-  await macApp.press("id:settings-nav-ocr");
-  await macApp.waitFor("id:settings-ocr-windows-only");
 
   // Both locales carry the service, model, and privacy copy.
   await reopened.press("id:settings-nav-general");
@@ -501,6 +498,14 @@ test("ocr settings: saves and restores the image-capable model", async () => {
   expect(reopened.texts()).toContain("OCR 服务");
   expect(reopened.texts()).toContain("模型");
   expect(reopened.texts()).toContain("所选区域会发送给该模型。");
+});
+
+// Only the headless driver can simulate the platform independently of the host OS.
+test("ocr settings: explains the capture platform on simulated macOS", async () => {
+  const app = await open(APP_ENTRY, { ...viewport, platform: "macos" });
+  await app.press("id:nav-settings");
+  await app.press("id:settings-nav-ocr");
+  await app.waitFor("id:settings-ocr-windows-only");
 });
 
 test("ocr settings: keeps an unavailable saved model and offers Models recovery", async () => {

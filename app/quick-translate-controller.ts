@@ -20,11 +20,7 @@ import {
 import { checkOcrReadiness, recognizeScreenshot } from "../features/ocr/recognize";
 import { ocrSettingsStore } from "../features/ocr/settings";
 import type { SourceDelivery, SourceDeliveryKind } from "../features/quick-translate/session";
-import {
-  ScreenCapture,
-  type ScreenCaptureOverlayConfig,
-  type ScreenCapturePort,
-} from "../platform/screen-capture";
+import type { ScreenCaptureOverlayConfig, ScreenCapturePort } from "../platform/screen-capture";
 import {
   boundsContainPoint,
   resolveAnchoredDisplayPoint,
@@ -135,7 +131,7 @@ export function createQuickTranslateController(
   const readClipboard = options.readClipboardText ?? (async () => "");
   const isDoubleCopyEnabledFn = options.isDoubleCopyActive ?? (() => false);
   const onPointerPress = options.onPointerPress ?? (() => () => {});
-  const captureRegion = options.captureRegion ?? ScreenCapture.capture;
+  const captureRegion = options.captureRegion;
   const captureOverlayTheme =
     options.captureOverlayTheme ??
     ((): CaptureOverlayTheme => ({
@@ -166,6 +162,7 @@ export function createQuickTranslateController(
   let expectingOwnSetBounds = false;
   let openGen = 0;
   let draftGen = 0;
+  let clipboardReadGen = 0;
   let lastDeliverySeq = 0;
   let ocrRunGen = 0;
   let ocrActive = false;
@@ -187,6 +184,7 @@ export function createQuickTranslateController(
     ocrAbort?.abort();
     ocrAbort = null;
     ocrActive = false;
+    ocrStateSignal.set(IDLE_OCR_STATE);
   };
 
   const close = () => {
@@ -206,7 +204,6 @@ export function createQuickTranslateController(
     pinnedSignal.set(false);
     sourceSignal.set("");
     sourceDeliverySignal.set(null);
-    ocrStateSignal.set(IDLE_OCR_STATE);
     openMenusSignal.set({});
     windowRef = null;
     attachedWindowSignal.set(null);
@@ -301,8 +298,8 @@ export function createQuickTranslateController(
     }
     open();
     const capturedOpenGen = openGen;
-    draftGen += 1;
     const capturedDraftGen = draftGen;
+    const readGen = ++clipboardReadGen;
 
     if (!event.hasValidCopy) {
       return;
@@ -315,13 +312,20 @@ export function createQuickTranslateController(
       return;
     }
 
-    if (capturedOpenGen !== openGen || capturedDraftGen !== draftGen) {
+    if (
+      readGen !== clipboardReadGen ||
+      capturedOpenGen !== openGen ||
+      capturedDraftGen !== draftGen ||
+      isSelecting()
+    ) {
       return;
     }
     if (typeof copiedText !== "string" || copiedText.trim().length === 0) {
       return;
     }
 
+    // Only an actual clipboard delivery replaces the OCR result in flight.
+    cancelOcr();
     deliverSource(copiedText, "clipboard");
   };
 
@@ -348,7 +352,7 @@ export function createQuickTranslateController(
    * the image leaves the machine.
    */
   const startOcr = async () => {
-    if (!openSignal() || ocrActive) {
+    if (!openSignal() || ocrActive || !captureRegion) {
       return;
     }
     ocrActive = true;
@@ -552,9 +556,8 @@ export function createQuickTranslateController(
         return;
       }
       // A user edit or clear supersedes a running read of the screen.
-      if (ocrStateSignal().phase !== "idle" || ocrStateSignal().message !== null) {
+      if (ocrActive || ocrStateSignal().message !== null) {
         cancelOcr();
-        ocrStateSignal.set(IDLE_OCR_STATE);
       }
       draftGen += 1;
       sourceSignal.set(text);

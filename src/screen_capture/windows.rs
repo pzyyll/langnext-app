@@ -1,6 +1,5 @@
 //! Win32 screen capture: in-memory display snapshots and one selection surface per display.
 
-use std::cell::Cell;
 use std::ffi::c_void;
 use std::mem::{MaybeUninit, size_of};
 use std::ptr;
@@ -49,6 +48,8 @@ const CAPTION_MIN_WIDTH: i32 = 240;
 
 /// Request posted to the capture worker's queue when TSX cancels the session.
 const WM_APP_CANCEL: u32 = WM_APP + 1;
+/// A capture key queued by the low-level keyboard hook.
+const WM_APP_CAPTURE_KEY: u32 = WM_APP + 2;
 
 /// One in-flight request, so at most one selection session runs at a time.
 struct ActiveRequest {
@@ -58,11 +59,6 @@ struct ActiveRequest {
 }
 
 static ACTIVE: Mutex<Option<ActiveRequest>> = Mutex::new(None);
-
-thread_local! {
-    /// The session the keyboard hook mutates; set while one message loop runs on this thread.
-    static HOOK_STATE: Cell<*mut CaptureState> = const { Cell::new(ptr::null_mut()) };
-}
 
 /// Starts one capture session on a blocking thread and resolves with its outcome.
 pub async fn capture(request_id: u64, overlay: ScreenCaptureOverlay) -> ScreenCaptureResult {
@@ -637,7 +633,7 @@ unsafe extern "system" fn capture_wnd_proc(
             0
         }
         WM_KEYDOWN => {
-            // The hook already applied this key when it runs; this path covers a hook failure.
+            // The hook consumes keys it queues; this path covers a missing or failed hook.
             handle_key(state, wparam as u16);
             0
         }
@@ -663,22 +659,14 @@ unsafe extern "system" fn capture_keyboard_hook(
         // SAFETY: the hook always receives a `KBDLLHOOKSTRUCT` in `lparam`.
         let key = unsafe { &*(lparam as *const KBDLLHOOKSTRUCT) };
         let vk = key.vkCode as u16;
-        if is_capture_key(vk) {
-            let handled = HOOK_STATE.with(|cell| {
-                let state = cell.get();
-                if state.is_null() {
-                    return false;
-                }
-                // SAFETY: the pointer is set by the message loop on this same thread and
-                // cleared before the state is dropped.
-                unsafe {
-                    handle_key(&mut *state, vk);
-                }
-                true
-            });
-            if handled {
-                return 1;
-            }
+        // The hook runs inside GetMessageW. Post a message so the loop wakes even if no
+        // other input arrives. In particular, crop encoding must not run inside the hook.
+        // SAFETY: the hook runs on the installing thread, which owns this message queue.
+        if is_capture_key(vk)
+            && unsafe { PostThreadMessageW(GetCurrentThreadId(), WM_APP_CAPTURE_KEY, vk.into(), 0) }
+                != 0
+        {
+            return 1;
         }
     }
     // SAFETY: chains to the next hook; no hook was skipped for the keys handled above.
@@ -880,7 +868,6 @@ fn run_session(
             0,
         )
     };
-    HOOK_STATE.with(|cell| cell.set(ptr::from_mut(&mut state)));
     focus_active(&state);
     for display in &state.displays {
         // SAFETY: repaints a surface shown by `create_windows` on this worker thread.
@@ -903,23 +890,23 @@ fn run_session(
         // SAFETY: `GetMessageW` returned a message, so the value is initialized.
         let message = unsafe { message.assume_init() };
         if message.hwnd.is_null() {
-            if message.message == WM_APP_CANCEL {
-                state.outcome = Some(ScreenCaptureResult::cancelled());
-                break;
+            match message.message {
+                WM_APP_CANCEL => state.outcome = Some(ScreenCaptureResult::cancelled()),
+                WM_APP_CAPTURE_KEY => handle_key(&mut state, message.wParam as u16),
+                _ => {}
             }
-            continue;
-        }
-        // SAFETY: standard dispatch of this thread's messages to its windows.
-        unsafe {
-            TranslateMessage(&message);
-            DispatchMessageW(&message);
+        } else {
+            // SAFETY: standard dispatch of this thread's messages to its windows.
+            unsafe {
+                TranslateMessage(&message);
+                DispatchMessageW(&message);
+            }
         }
         if state.outcome.is_some() {
             break;
         }
     }
 
-    HOOK_STATE.with(|cell| cell.set(ptr::null_mut()));
     // SAFETY: releases this thread's hook and any pointer capture before the state drops.
     unsafe {
         if !hook.is_null() {
@@ -932,4 +919,136 @@ fn run_session(
         .outcome
         .take()
         .unwrap_or_else(ScreenCaptureResult::cancelled)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::mpsc;
+    use std::thread;
+    use std::time::{Duration, Instant};
+    use windows_sys::Win32::UI::WindowsAndMessaging::{
+        EnumThreadWindows, IsWindowVisible, PM_REMOVE, PeekMessageW,
+    };
+
+    #[test]
+    fn terminal_capture_keys_post_a_message_without_other_input() {
+        let mut message = MaybeUninit::<MSG>::zeroed();
+        // SAFETY: this starts the test thread's message queue without real input.
+        unsafe {
+            PeekMessageW(message.as_mut_ptr(), ptr::null_mut(), 0, 0, PM_REMOVE);
+        }
+
+        for key in [VK_ESCAPE, VK_RETURN] {
+            let event = KBDLLHOOKSTRUCT {
+                vkCode: key.into(),
+                ..Default::default()
+            };
+            // SAFETY: the hook receives a valid keyboard event for the duration of the call.
+            let handled = unsafe {
+                capture_keyboard_hook(
+                    HC_ACTION as i32,
+                    WM_KEYDOWN as usize,
+                    &event as *const _ as LPARAM,
+                )
+            };
+            assert_eq!(handled, 1);
+            // SAFETY: reads the posted key from this test thread's queue.
+            let received = unsafe {
+                PeekMessageW(
+                    message.as_mut_ptr(),
+                    ptr::null_mut(),
+                    WM_APP_CAPTURE_KEY,
+                    WM_APP_CAPTURE_KEY,
+                    PM_REMOVE,
+                )
+            };
+            assert_ne!(received, 0);
+            let posted = unsafe { message.assume_init_read() };
+            assert_eq!(posted.wParam, usize::from(key));
+        }
+    }
+
+    // Opt in on a Windows desktop: this creates the real selection surfaces and snapshots.
+    // Send keys only to this capture worker, not to the global input stream.
+    #[test]
+    #[ignore = "requires an interactive Windows desktop"]
+    fn desktop_overlay_confirms_and_cancels_on_keyboard_messages() {
+        use super::super::ScreenCaptureStatus;
+
+        let captured = run_desktop_selection(&[VK_RIGHT, VK_SPACE, VK_RIGHT, VK_DOWN, VK_RETURN]);
+        assert_eq!(captured.status, ScreenCaptureStatus::Captured);
+        let png = captured.png.expect("keyboard confirmation returns a crop");
+        let decoded = png::Decoder::new(std::io::Cursor::new(png))
+            .read_info()
+            .expect("the crop is a PNG");
+        assert_eq!(decoded.info().width, KEYBOARD_STEP as u32);
+        assert_eq!(decoded.info().height, KEYBOARD_STEP as u32);
+
+        let cancelled = run_desktop_selection(&[VK_ESCAPE]);
+        assert_eq!(cancelled.status, ScreenCaptureStatus::Cancelled);
+        assert!(cancelled.png.is_none());
+    }
+
+    fn run_desktop_selection(keys: &[u16]) -> ScreenCaptureResult {
+        unsafe extern "system" fn find_visible(hwnd: HWND, data: LPARAM) -> i32 {
+            if unsafe { IsWindowVisible(hwnd) } != 0 {
+                // SAFETY: EnumThreadWindows uses this pointer only during the call.
+                unsafe { *(data as *mut bool) = true };
+                return 0;
+            }
+            1
+        }
+
+        let thread_id = unsafe { GetCurrentThreadId() };
+        let cancelled = Arc::new(AtomicBool::new(false));
+        let (finished, done) = mpsc::channel();
+        let timeout = Duration::from_secs(3);
+        thread::scope(|scope| {
+            let cancelled_by_timeout = cancelled.clone();
+            let sender = scope.spawn(move || {
+                let deadline = Instant::now() + timeout;
+                while Instant::now() < deadline {
+                    let mut ready = false;
+                    // SAFETY: this test's capture worker has no windows other than its overlays.
+                    unsafe {
+                        EnumThreadWindows(
+                            thread_id,
+                            Some(find_visible),
+                            ptr::addr_of_mut!(ready) as LPARAM,
+                        )
+                    };
+                    if ready {
+                        let sent = keys.iter().all(|&key| unsafe {
+                            PostThreadMessageW(thread_id, WM_APP_CAPTURE_KEY, key.into(), 0) != 0
+                        });
+                        if sent && done.recv_timeout(timeout).is_ok() {
+                            return true;
+                        }
+                        break;
+                    }
+                    thread::sleep(Duration::from_millis(15));
+                }
+                cancelled_by_timeout.store(true, Ordering::Release);
+                unsafe { PostThreadMessageW(thread_id, WM_APP_CANCEL, 0, 0) };
+                false
+            });
+            let result = run_session(
+                0,
+                cancelled.clone(),
+                ScreenCaptureOverlay {
+                    caption: "Test: OCR region selection".into(),
+                    accent_color: "#ffffff".into(),
+                    text_color: "#ffffff".into(),
+                    backdrop_color: "#000000".into(),
+                },
+            );
+            let _ = finished.send(());
+            assert!(
+                sender.join().unwrap(),
+                "desktop selection did not complete from the queued keys"
+            );
+            result
+        })
+    }
 }

@@ -98,7 +98,10 @@ async function resolveOcrService(
   binding: OcrServiceBinding | null,
 ): Promise<SavedModelRequestResolution> {
   if (!binding) return { ok: false, reason: t("ocr.failure.unconfigured") };
-  return resolveSavedModelRequest(binding.modelId, "image");
+  switch (binding.kind) {
+    case "ai":
+      return resolveSavedModelRequest(binding.modelId, "image");
+  }
 }
 
 /**

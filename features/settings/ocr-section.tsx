@@ -6,7 +6,7 @@ import { Select, type SelectItem } from "../../components/ui/select";
 import { FormField } from "../../modules/ai/ui/form-field";
 import { modelsStore } from "../models/store";
 import { readAvailableModelChoices, resolveModelBindingInfo } from "../presets/model-choices";
-import { ocrSettingsStore, type OcrServiceKind } from "../ocr/settings";
+import { ocrSettingsStore, type OcrServiceBinding, type OcrServiceKind } from "../ocr/settings";
 
 /** OCR services in display order; AI is the only service in this release. */
 const SERVICE_CHOICES: readonly OcrServiceKind[] = ["ai"];
@@ -20,6 +20,7 @@ interface OcrSectionProps {
 /** Settings section for the saved OCR service and its image-capable model. */
 export function OcrSection(props: OcrSectionProps) {
   const saved = ocrSettingsStore.settings();
+  const selectedService = signal<OcrServiceKind>(saved?.kind ?? "ai");
   const draftModelId = signal<string | null>(saved?.modelId ?? null);
   const error = signal<string | null>(null);
   const saving = signal(false);
@@ -40,6 +41,13 @@ export function OcrSection(props: OcrSectionProps) {
   const serviceItems = (): SelectItem[] =>
     SERVICE_CHOICES.map((kind) => ({ value: kind, title: t(`settings.ocr.${kind}`) }));
 
+  const selectService = (value: string | null) => {
+    const kind = SERVICE_CHOICES.find((choice) => choice === value);
+    if (!kind || saving()) return;
+    error.set(null);
+    selectedService.set(kind);
+  };
+
   const modelItems = (): SelectItem[] =>
     modelChoices().map((choice) => ({ value: choice.id, title: choice.label }));
 
@@ -49,13 +57,23 @@ export function OcrSection(props: OcrSectionProps) {
     draftModelId.set(modelId);
   };
 
+  const draftBinding = (): OcrServiceBinding | null => {
+    const kind = selectedService();
+    switch (kind) {
+      case "ai": {
+        const modelId = eligibleModelId();
+        return modelId === null ? null : { kind, modelId };
+      }
+    }
+  };
+
   const handleSave = async () => {
-    const modelId = draftModelId();
-    if (saving() || modelId === null) return;
+    const binding = draftBinding();
+    if (saving() || binding === null) return;
     error.set(null);
     saving.set(true);
     try {
-      const result = await ocrSettingsStore.save({ kind: "ai", modelId });
+      const result = await ocrSettingsStore.save(binding);
       if (!result.ok) {
         error.set(result.message);
         return;
@@ -94,10 +112,10 @@ export function OcrSection(props: OcrSectionProps) {
         <Select
           testID="settings-ocr-service"
           items={serviceItems()}
-          value="ai"
+          value={selectedService()}
           disabled={saving()}
           accessibilityLabel={t("settings.ocr.service")}
-          onChange={() => undefined}
+          onChange={selectService}
         />
       </FormField>
 
@@ -131,22 +149,28 @@ export function OcrSection(props: OcrSectionProps) {
         </View>
       </If>
 
-      <FormField label={t("settings.ocr.model")}>
-        <Select
-          testID="settings-ocr-model"
-          items={modelItems()}
-          value={eligibleModelId()}
-          placeholder={t("presets.model.selectPlaceholder")}
-          disabled={saving() || modelItems().length === 0}
-          accessibilityLabel={t("settings.ocr.model")}
-          onChange={selectModel}
-        />
-        <If when={bindingUnavailable()}>
-          <Text testID="settings-ocr-model-unavailable" class="text-xs text-warning">
-            {binding()?.reason}
-          </Text>
-        </If>
-      </FormField>
+      <Each of={[selectedService()]} key={(kind) => kind}>
+        {(kind) => (
+          <If when={kind() === "ai"}>
+            <FormField label={t("settings.ocr.model")}>
+              <Select
+                testID="settings-ocr-model"
+                items={modelItems()}
+                value={eligibleModelId()}
+                placeholder={t("presets.model.selectPlaceholder")}
+                disabled={saving() || modelItems().length === 0}
+                accessibilityLabel={t("settings.ocr.model")}
+                onChange={selectModel}
+              />
+              <If when={bindingUnavailable()}>
+                <Text testID="settings-ocr-model-unavailable" class="text-xs text-warning">
+                  {binding()?.reason}
+                </Text>
+              </If>
+            </FormField>
+          </If>
+        )}
+      </Each>
 
       <Text testID="settings-ocr-privacy" class="text-xs text-muted-foreground">
         {t("settings.ocr.privacy")}
@@ -170,7 +194,7 @@ export function OcrSection(props: OcrSectionProps) {
           variant="primary"
           size="sm"
           label={saving() ? t("common.saving") : t("common.save")}
-          disabled={saving() || eligibleModelId() === null}
+          disabled={saving() || draftBinding() === null}
           onPress={() => void handleSave()}
         />
       </View>

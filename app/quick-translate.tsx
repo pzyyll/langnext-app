@@ -27,7 +27,7 @@ import {
   saveQuickTranslatePopupState,
 } from "../features/quick-translate/preferences";
 import { createQuickTranslateSession } from "../features/quick-translate/session";
-import { canCaptureScreen } from "../platform/screen-capture";
+import { canCaptureScreen, ScreenCapture } from "../platform/screen-capture";
 import { canMonitorPointerPress, type DoubleCopyBinding } from "../platform/quick-translate";
 import {
   nativeDoubleCopyBinding,
@@ -69,6 +69,7 @@ export function createQuickTranslateController(
     onToggleAutoTranslate: () => {
       void saveQuickTranslatePopupState({ autoTranslate: !autoTranslatePreference() });
     },
+    captureRegion: ScreenCapture.capture,
     captureOverlayTheme: () => ({
       accentColor: token("accent"),
       textColor: token("foreground"),

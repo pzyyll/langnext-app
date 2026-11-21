@@ -876,6 +876,45 @@ test("quick ocr: typing during recognition wins over the late answer, and repeat
   );
 });
 
+test("quick ocr: a valid double copy ends recognition and translates the copied text", async () => {
+  const copied = "copied while recognizing";
+  const app = await open(HARNESS_ENTRY, {
+    ...viewport,
+    storage: ocrSeed({
+      "quickTranslate.preferences.v1": popupPreferences({
+        doubleCopyEnabled: true,
+        cards: [{ id: "card-1", presetId: "preset-1", templateId: null, collapsed: false }],
+      }),
+      "__test.qt.doubleCopyClipboard": copied,
+    }),
+    network: ocrRoutes(JSON.stringify({ text: OCR_TEXT }), 10_000),
+  });
+
+  await app.press("id:harness-tray-quick-translate");
+  await app.waitFor("id:quick-translate-source");
+  await app.press("id:quick-translate-pin");
+  await app.press(OCR_BUTTON);
+  await app.waitFor("id:quick-translate-ocr-busy");
+  await app.waitUntil(() =>
+    app.requests().some((request) => request.url.includes("vision.example.com")),
+  );
+
+  await app.press("id:harness-trigger-double-copy-invalid");
+  expect(app.shows("id:quick-translate-ocr-busy")).toBe(true);
+  await app.press("id:harness-trigger-double-copy-valid");
+  await app.waitFor("id:quick-translate-source-preview");
+  expect(app.texts()).toContain(copied);
+  expect(app.shows("id:quick-translate-ocr-busy")).toBe(false);
+  expect(app.enabled(OCR_BUTTON)).toBe(true);
+  await app.waitFor("id:quick-translate-result-text");
+  const translations = app.requests().filter((request) => request.url.includes("api.openai.com"));
+  expect(translations).toHaveLength(1);
+  expect(JSON.parse(translations[0]!.body!).messages).toContainEqual({
+    role: "user",
+    content: copied,
+  });
+});
+
 test("quick ocr: closing and reopening before the old result keeps the new draft", async () => {
   const app = await open(HARNESS_ENTRY, {
     ...viewport,
