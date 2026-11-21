@@ -2,6 +2,7 @@ import type { WindowRef, WindowState } from "nsh/desktop";
 import { t } from "nsh/i18n";
 import { expect, open, test } from "nsh/test";
 import { makeChannel, makeModel, makeSeedStorage } from "../features/models/__tests__/fixtures";
+import { baiduCredentialStorageKey } from "../features/ocr/settings";
 import { PRESETS_STORAGE_KEY } from "../features/presets/store";
 import type { TranslationPreset } from "../features/presets/types";
 import { createQuickTranslateController, POPUP_MIN_SIZE } from "./quick-translate-controller";
@@ -1025,4 +1026,131 @@ test("quick ocr: no OCR action outside Windows", async () => {
   await app.press("id:harness-tray-quick-translate");
   await app.waitFor("id:quick-translate-source");
   expect(app.shows(OCR_BUTTON)).toBe(false);
+});
+
+const BAIDU_REF = "qt-baidu-ref";
+const BAIDU_TOKEN = "POST https://aip.baidubce.com/oauth/2.0/token";
+const BAIDU_OCR_URL =
+  "POST https://aip.baidubce.com/rest/2.0/ocr/v1/accurate?access_token=fixture-token";
+
+function baiduOcrSeed(extra: Record<string, string> = {}) {
+  return ocrSeed({
+    [OCR_STORAGE_KEY]: JSON.stringify({
+      version: 1,
+      kind: "baidu",
+      operation: "accurate",
+      credentialRef: BAIDU_REF,
+    }),
+    [baiduCredentialStorageKey(BAIDU_REF)]: JSON.stringify({
+      apiKey: "synthetic-api-key",
+      secretKey: "synthetic-secret-key",
+    }),
+    ...extra,
+  });
+}
+
+function baiduOcrRoutes(options: { words?: string[]; delay?: number; quota?: boolean } = {}) {
+  const words = options.words ?? ["Screen line one", "第二行"];
+  return {
+    [BAIDU_TOKEN]: {
+      status: 200,
+      body: { access_token: "fixture-token" },
+      ...(options.delay === undefined ? {} : { delay: options.delay }),
+    },
+    [BAIDU_OCR_URL]: options.quota
+      ? { status: 200, body: { error_code: 17, error_msg: "SENTINEL-SECRET" } }
+      : {
+          status: 200,
+          body: { words_result: words.map((words) => ({ words })), words_result_num: words.length },
+        },
+    "POST https://api.openai.com/v1/chat/completions": {
+      status: 200,
+      body: { choices: [{ message: { content: "翻译结果" } }] },
+    },
+  };
+}
+
+test("quick ocr: Baidu replaces the draft and translates the text once", async () => {
+  const app = await open(HARNESS_ENTRY, {
+    ...viewport,
+    storage: baiduOcrSeed(),
+    network: baiduOcrRoutes(),
+  });
+
+  await app.press("id:harness-tray-quick-translate");
+  await app.waitFor("id:quick-translate-source");
+  await app.press("id:quick-translate-pin");
+  await app.type("id:quick-translate-source", "old draft");
+
+  await app.press(OCR_BUTTON);
+  await app.waitUntil(() => app.value("id:quick-translate-source") === OCR_TEXT);
+
+  const token = app.requests().filter((request) => request.url.includes("/oauth/2.0/token"));
+  const uploads = app.requests().filter((request) => request.url.includes("/ocr/v1/accurate"));
+  expect(token).toHaveLength(1);
+  expect(uploads).toHaveLength(1);
+  expect(uploads[0]!.body ?? "").not.toContain("synthetic-api-key");
+  expect(uploads[0]!.body ?? "").not.toContain("synthetic-secret-key");
+
+  await app.waitUntil(() =>
+    app.requests().some((request) => request.url.includes("api.openai.com")),
+  );
+  const translations = app.requests().filter((request) => request.url.includes("api.openai.com"));
+  expect(translations).toHaveLength(1);
+  const translation = translations[0]!.body ?? "";
+  expect(JSON.parse(translation).messages[1].content).toBe(OCR_TEXT);
+  expect(translation.includes("synthetic-api-key")).toBe(false);
+  expect(translation.includes("fixture-token")).toBe(false);
+  expect(translation.includes("iVBORw0KGgo")).toBe(false);
+  expect(app.texts()).toContain("翻译结果");
+});
+
+test("quick ocr: Baidu cancellation, a late result, and a quota error keep the draft", async () => {
+  const cancelled = await open(HARNESS_ENTRY, {
+    ...viewport,
+    storage: baiduOcrSeed({ [HARNESS_OCR_CAPTURE_KEY]: "cancel" }),
+    network: baiduOcrRoutes(),
+  });
+  await cancelled.press("id:harness-tray-quick-translate");
+  await cancelled.waitFor("id:quick-translate-source");
+  await cancelled.type("id:quick-translate-source", "kept draft");
+  await cancelled.press(OCR_BUTTON);
+  await cancelled.waitUntil(() => cancelled.texts().some((line) => line.includes("ocrCap=1")));
+  await cancelled.waitUntil(() => cancelled.window("quick-translate").state()?.visible === true);
+  expect(cancelled.value("id:quick-translate-source")).toBe("kept draft");
+  expect(cancelled.requests()).toHaveLength(0);
+
+  const late = await open(HARNESS_ENTRY, {
+    ...viewport,
+    storage: baiduOcrSeed(),
+    network: baiduOcrRoutes({ delay: 1_200 }),
+  });
+  await late.press("id:harness-tray-quick-translate");
+  await late.waitFor("id:quick-translate-source");
+  await late.press(OCR_BUTTON);
+  await late.waitUntil(() => late.texts().some((line) => line.includes("ocrCap=1")));
+  await late.waitFor("id:quick-translate-source");
+  await late.type("id:quick-translate-source", "typed instead");
+  await late.wait(1_400);
+  expect(late.value("id:quick-translate-source")).toBe("typed instead");
+  expect(late.requests().filter((request) => request.url.includes("api.openai.com"))).toHaveLength(
+    0,
+  );
+
+  const quota = await open(HARNESS_ENTRY, {
+    ...viewport,
+    storage: baiduOcrSeed(),
+    network: baiduOcrRoutes({ quota: true }),
+  });
+  await quota.press("id:harness-tray-quick-translate");
+  await quota.waitFor("id:quick-translate-source");
+  await quota.type("id:quick-translate-source", "kept draft");
+  await quota.press(OCR_BUTTON);
+  await quota.waitFor("id:quick-translate-source-toolbar >> id:quick-translate-ocr-status");
+  expect(quota.texts()).toContain(t("ocr.failure.baiduQuota"));
+  expect(quota.texts().some((line) => line.includes("SENTINEL-SECRET"))).toBe(false);
+  expect(quota.value("id:quick-translate-source")).toBe("kept draft");
+  expect(quota.requests().filter((request) => request.url.includes("api.openai.com"))).toHaveLength(
+    0,
+  );
 });

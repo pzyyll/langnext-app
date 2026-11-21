@@ -23,9 +23,8 @@ export const HARNESS_DOUBLE_COPY_MODE_KEY = "__test.qt.doubleCopyMode";
 export const HARNESS_DOUBLE_COPY_CLIPBOARD_KEY = "__test.qt.doubleCopyClipboard";
 export const HARNESS_OCR_CAPTURE_KEY = "__test.qt.ocrCapture";
 
-/** Smallest valid PNG: what the OS capture boundary returns for a confirmed selection. */
-const HARNESS_PNG_BASE64 =
-  "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8DwHwAFAAH/q842iQAAAABJRU5ErkJggg==";
+/** 16×16 PNG: large enough for Baidu's minimum side, still a valid AI crop. */
+const HARNESS_PNG_BASE64 = "iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAAAAAA6mKC9AAAAAElFTkSuQmCC";
 
 type HarnessCaptureMode = "png" | "cancel" | "tooLarge" | "fail";
 
