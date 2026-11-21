@@ -19,6 +19,8 @@ test("settings ui: groups language under General and theme under Appearance in a
   expect(app.shows("id:settings-detail")).toBe(true);
   expect(app.shows("id:settings-nav-general")).toBe(true);
   expect(app.shows("id:settings-nav-appearance")).toBe(true);
+  expect(app.shows("role:button[General]")).toBe(true);
+  expect(app.shows("role:button[Appearance]")).toBe(true);
 
   // Rail categories belong to two groups: Application and Integrations.
   expect(app.shows("id:settings-group-application")).toBe(true);
@@ -50,6 +52,8 @@ test("settings ui: groups language under General and theme under Appearance in a
   // Switching back to General restores Language and verifies zh-CN labels across both categories.
   await app.press("id:settings-nav-general");
   await app.press("id:language-zh-CN");
+  expect(app.shows("role:button[通用]")).toBe(true);
+  expect(app.shows("role:button[外观]")).toBe(true);
   expect(app.texts()).toContain("通用");
   expect(app.texts()).toContain("语言");
   expect(app.texts()).toContain("应用");

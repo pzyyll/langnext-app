@@ -201,53 +201,36 @@ export function SettingsPage(props: { platformOs?: string; onNavigateToModels?: 
             <View
               role="navigation"
               accessibilityLabel={t("settings.navLabel")}
-              class="gap-4 px-2 pb-2 pt-1"
+              class="gap-5 px-2 pb-4 pt-1"
             >
               <Each of={SETTINGS_GROUPS} key={(group) => group.id}>
                 {(group) => (
-                  <View class="gap-1">
+                  <View class="gap-1.5">
                     <Text
                       testID={`settings-group-${group().id}`}
                       role="header"
-                      class="px-2.5 text-xs font-medium text-muted-foreground"
+                      class="min-w-0 truncate px-2 text-xs font-medium text-muted-foreground"
                     >
                       {t(group().labelKey)}
                     </Text>
-                    <Each of={group().sections} key={(item) => item.id}>
-                      {(item) => {
-                        const isSelected = () => selectedSection() === item().id;
-                        return (
-                          <View
-                            class={`rounded-lg border ${motion.navigationFeedback}`}
-                            classList={{
-                              "border-border bg-accent": isSelected(),
-                              "border-transparent hover:bg-accent/50 active:bg-accent":
-                                !isSelected(),
-                            }}
-                          >
+                    <View class="gap-0.5">
+                      <Each of={group().sections} key={(item) => item.id}>
+                        {(item) => {
+                          const isSelected = () => selectedSection() === item().id;
+                          return (
                             <Button
                               testID={`settings-nav-${item().id}`}
-                              variant="ghost"
-                              size="row"
+                              variant="nav"
+                              size="nav"
                               selected={isSelected()}
-                              accessibilityLabel={t(item().labelKey)}
+                              label={t(item().labelKey)}
                               onPress={() => selectedSection.set(item().id)}
-                              class="w-full min-w-0 flex-1 hover:bg-transparent active:bg-transparent"
-                            >
-                              <Text
-                                class={
-                                  isSelected()
-                                    ? "min-w-0 flex-1 truncate text-sm font-medium text-accent-foreground"
-                                    : "min-w-0 flex-1 truncate text-sm font-medium text-foreground"
-                                }
-                              >
-                                {t(item().labelKey)}
-                              </Text>
-                            </Button>
-                          </View>
-                        );
-                      }}
-                    </Each>
+                              class="w-full"
+                            />
+                          );
+                        }}
+                      </Each>
+                    </View>
                   </View>
                 )}
               </Each>
