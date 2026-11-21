@@ -158,7 +158,14 @@ export function createQuickTranslateController(
   let expectingOwnSetBounds = false;
   let openGen = 0;
   let draftGen = 0;
-  let clipboardReadGen = 0;
+  let sourceReadGen = 0;
+  let selectionReading = false;
+  let queuedSelection: {
+    target: string;
+    gen: number;
+    draftAtDispatch: number;
+    done: () => void;
+  } | null = null;
   let lastDeliverySeq = 0;
   let ocrRunGen = 0;
   let ocrActive = false;
@@ -183,7 +190,16 @@ export function createQuickTranslateController(
     ocrStateSignal.set(IDLE_OCR_STATE);
   };
 
+  const releaseQueuedSelection = () => {
+    const pending = queuedSelection;
+    queuedSelection = null;
+    pending?.done();
+  };
+
   const close = () => {
+    // A selection read can still be in flight before the popup exists.
+    sourceReadGen += 1;
+    releaseQueuedSelection();
     const hadState =
       openSignal() ||
       pinnedSignal() ||
@@ -295,7 +311,7 @@ export function createQuickTranslateController(
     open();
     const capturedOpenGen = openGen;
     const capturedDraftGen = draftGen;
-    const readGen = ++clipboardReadGen;
+    const readGen = ++sourceReadGen;
 
     if (!event.hasValidCopy) {
       return;
@@ -309,7 +325,7 @@ export function createQuickTranslateController(
     }
 
     if (
-      readGen !== clipboardReadGen ||
+      readGen !== sourceReadGen ||
       capturedOpenGen !== openGen ||
       capturedDraftGen !== draftGen ||
       isSelecting()
@@ -333,9 +349,58 @@ export function createQuickTranslateController(
     }
   };
 
+  const selectionTargetIsCurrent = (target: string): boolean => {
+    try {
+      return selectionText!.isCurrent(target);
+    } catch {
+      return false;
+    }
+  };
+
+  const applySelectionResult = (
+    target: string,
+    result: SelectionTextRead,
+    gen: number,
+    draftAtDispatch: number,
+  ) => {
+    if (gen !== sourceReadGen || draftAtDispatch !== draftGen) return;
+    if (!selectionTargetIsCurrent(target)) return;
+    open();
+    if (result.status !== "selected" || result.text.trim().length === 0) return;
+    // A delivered selection replaces recognition. An empty read leaves it running.
+    cancelOcr();
+    deliverSource(result.text, "selection");
+  };
+
+  /** One UI Automation read at a time. A newer press replaces the single queued target. */
+  const runSelectionRead = async (target: string, gen: number, draftAtDispatch: number) => {
+    selectionReading = true;
+    try {
+      const result = await readSelection(target);
+      applySelectionResult(target, result, gen, draftAtDispatch);
+    } finally {
+      selectionReading = false;
+    }
+
+    const next = queuedSelection;
+    queuedSelection = null;
+    if (!next) return;
+    if (
+      next.gen !== sourceReadGen ||
+      next.draftAtDispatch !== draftGen ||
+      !selectionTargetIsCurrent(next.target)
+    ) {
+      next.done();
+      return;
+    }
+    void runSelectionRead(next.target, next.gen, next.draftAtDispatch).finally(next.done);
+  };
+
   /** Reads the foreground selection before the popup takes focus, then translates it once. */
   const activateSelectionTranslate = async (): Promise<void> => {
     if (!selectionText) return;
+    // The native region overlay owns the screen until the user confirms or cancels it.
+    if (isSelecting()) return;
     let target: string | null;
     try {
       target = selectionText.snapshot();
@@ -344,17 +409,16 @@ export function createQuickTranslateController(
     }
     if (target === null) return;
 
-    const result = await readSelection(target);
-    let current = false;
-    try {
-      current = selectionText.isCurrent(target);
-    } catch {
-      current = false;
+    const gen = ++sourceReadGen;
+    const draftAtDispatch = draftGen;
+    if (selectionReading) {
+      queuedSelection?.done();
+      await new Promise<void>((resolve) => {
+        queuedSelection = { target, gen, draftAtDispatch, done: resolve };
+      });
+      return;
     }
-    if (!current || result.status !== "selected" || result.text.trim().length === 0) return;
-
-    open();
-    deliverSource(result.text, "selection");
+    await runSelectionRead(target, gen, draftAtDispatch);
   };
 
   const waitForHidden = async (win: WindowRef, signal: AbortSignal): Promise<boolean> => {
@@ -380,6 +444,9 @@ export function createQuickTranslateController(
    */
   const startOcr = async () => {
     if (ocrActive || !captureRegion) return;
+    // The overlay replaces any selection read that has not delivered yet.
+    sourceReadGen += 1;
+    releaseQueuedSelection();
     const hadPopup = openSignal();
     ocrActive = true;
     ocrStateSignal.set({ phase: "selecting", message: null });

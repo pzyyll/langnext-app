@@ -739,6 +739,308 @@ test("double copy: controller reads clipboard once, skips when disabled or empty
   expect(controller.sourceDelivery()?.kind).toBe("clipboard");
 });
 
+test("selection controller: close while reading does not reopen a closed popup", async () => {
+  const pendingReads: Array<{
+    resolve: (result: {
+      status: "selected";
+      text: string;
+    }) => void;
+  }> = [];
+  const controller = createQuickTranslateController({
+    selectionText: {
+      snapshot: () => "target-1",
+      isCurrent: () => true,
+      read: () =>
+        new Promise((resolve) => {
+          pendingReads.push({ resolve });
+        }),
+    },
+  });
+
+  const activation = controller.activateSelectionTranslate();
+  expect(pendingReads).toHaveLength(1);
+  expect(controller.isOpen()).toBe(false);
+  expect(controller.sourceText()).toBe("");
+  expect(controller.sourceDelivery()).toBeNull();
+
+  controller.close();
+  pendingReads[0]!.resolve({ status: "selected", text: "Late selection" });
+  await activation;
+
+  expect(controller.isOpen()).toBe(false);
+  expect(controller.sourceText()).toBe("");
+  expect(controller.sourceDelivery()).toBeNull();
+});
+
+test("selection controller: a changed draft or target drops the delayed read", async () => {
+  const pendingReads: Array<{
+    resolve: (result: { status: "selected"; text: string }) => void;
+  }> = [];
+  let currentTarget = "target-1";
+  let clipboard = "Copied phrase";
+  const controller = createQuickTranslateController({
+    isDoubleCopyActive: () => true,
+    readClipboardText: async () => clipboard,
+    selectionText: {
+      snapshot: () => currentTarget,
+      isCurrent: (target) => target === currentTarget,
+      read: () =>
+        new Promise((resolve) => {
+          pendingReads.push({ resolve });
+        }),
+    },
+  });
+
+  const edited = controller.activateSelectionTranslate();
+  controller.setSourceText("Manual edit");
+  pendingReads.shift()!.resolve({ status: "selected", text: "Late selection" });
+  await edited;
+  expect(controller.isOpen()).toBe(false);
+  expect(controller.sourceText()).toBe("Manual edit");
+  expect(controller.sourceDelivery()).toBeNull();
+
+  controller.open();
+  const cleared = controller.activateSelectionTranslate();
+  controller.setSourceText("");
+  pendingReads.shift()!.resolve({ status: "selected", text: "After clear" });
+  await cleared;
+  expect(controller.isOpen()).toBe(true);
+  expect(controller.sourceText()).toBe("");
+  expect(controller.sourceDelivery()).toBeNull();
+
+  const replaced = controller.activateSelectionTranslate();
+  await controller.activateDoubleCopy({ hasValidCopy: true });
+  pendingReads.shift()!.resolve({ status: "selected", text: "After copy" });
+  await replaced;
+  expect(controller.sourceText()).toBe("Copied phrase");
+  expect(controller.sourceDelivery()?.kind).toBe("clipboard");
+  expect(controller.sourceDelivery()?.seq).toBe(1);
+
+  currentTarget = "target-2";
+  const stale = controller.activateSelectionTranslate();
+  currentTarget = "target-3";
+  pendingReads.shift()!.resolve({ status: "selected", text: "Stale target" });
+  await stale;
+  expect(controller.isOpen()).toBe(true);
+  expect(controller.sourceText()).toBe("Copied phrase");
+  expect(controller.sourceDelivery()?.seq).toBe(1);
+});
+
+test("selection controller: only the latest current read delivers", async () => {
+  const pendingSelections: Array<{
+    target: string;
+    resolve: (result: { status: "selected"; text: string }) => void;
+  }> = [];
+  const pendingCopies: Array<{ resolve: (text: string) => void }> = [];
+  let currentTarget = "idle";
+  const controller = createQuickTranslateController({
+    isDoubleCopyActive: () => true,
+    readClipboardText: () =>
+      new Promise((resolve) => {
+        pendingCopies.push({ resolve });
+      }),
+    selectionText: {
+      snapshot: () => currentTarget,
+      isCurrent: (target) => target === currentTarget,
+      read: (target) =>
+        new Promise((resolve) => {
+          pendingSelections.push({ target, resolve });
+        }),
+    },
+  });
+
+  currentTarget = "t1";
+  const first = controller.activateSelectionTranslate();
+  currentTarget = "t2";
+  const second = controller.activateSelectionTranslate();
+  currentTarget = "t3";
+  const third = controller.activateSelectionTranslate();
+  expect(pendingSelections.map((read) => read.target)).toEqual(["t1"]);
+
+  await second;
+  expect(controller.sourceDelivery()).toBeNull();
+  pendingSelections.shift()!.resolve({ status: "selected", text: "First" });
+  await first;
+  expect(pendingSelections.map((read) => read.target)).toEqual(["t3"]);
+  expect(controller.sourceText()).toBe("");
+
+  pendingSelections.shift()!.resolve({ status: "selected", text: "Third" });
+  await third;
+  expect(controller.isOpen()).toBe(true);
+  expect(controller.sourceText()).toBe("Third");
+  expect(controller.sourceDelivery()?.kind).toBe("selection");
+  expect(controller.sourceDelivery()?.seq).toBe(1);
+
+  currentTarget = "q1";
+  const running = controller.activateSelectionTranslate();
+  currentTarget = "q2";
+  const queued = controller.activateSelectionTranslate();
+  currentTarget = "q3";
+  pendingSelections.shift()!.resolve({ status: "selected", text: "Queued gone" });
+  await running;
+  await queued;
+  expect(pendingSelections).toHaveLength(0);
+  expect(controller.sourceText()).toBe("Third");
+  expect(controller.sourceDelivery()?.seq).toBe(1);
+
+  currentTarget = "c1";
+  const closing = controller.activateSelectionTranslate();
+  currentTarget = "c2";
+  const cancelled = controller.activateSelectionTranslate();
+  controller.close();
+  pendingSelections.shift()!.resolve({ status: "selected", text: "Closed" });
+  await closing;
+  await cancelled;
+  expect(pendingSelections).toHaveLength(0);
+  expect(controller.isOpen()).toBe(false);
+  expect(controller.sourceText()).toBe("");
+  expect(controller.sourceDelivery()).toBeNull();
+
+  currentTarget = "s1";
+  const oldSelection = controller.activateSelectionTranslate();
+  const newerCopy = controller.activateDoubleCopy({ hasValidCopy: true });
+  pendingSelections.shift()!.resolve({ status: "selected", text: "Old selection" });
+  await oldSelection;
+  pendingCopies.shift()!.resolve("Newer copy");
+  await newerCopy;
+  expect(controller.sourceText()).toBe("Newer copy");
+  expect(controller.sourceDelivery()?.kind).toBe("clipboard");
+
+  const oldCopy = controller.activateDoubleCopy({ hasValidCopy: true });
+  currentTarget = "s2";
+  const newerSelection = controller.activateSelectionTranslate();
+  pendingSelections.shift()!.resolve({ status: "selected", text: "Newer selection" });
+  await newerSelection;
+  pendingCopies.shift()!.resolve("Old copy");
+  await oldCopy;
+  expect(controller.sourceText()).toBe("Newer selection");
+  expect(controller.sourceDelivery()?.kind).toBe("selection");
+  expect(controller.sourceDelivery()?.seq).toBe(3);
+});
+
+test("selection controller: an empty or failed read opens without changing the draft", async () => {
+  const pendingReads: Array<{
+    resolve: (
+      result:
+        | { status: "selected"; text: string }
+        | { status: "noSelection" }
+        | { status: "unavailable" },
+    ) => void;
+  }> = [];
+  let rejectRead = false;
+  let currentTarget = "target";
+  let focuses = 0;
+  const controller = createQuickTranslateController({
+    selectionText: {
+      snapshot: () => currentTarget,
+      isCurrent: (target) => target === currentTarget,
+      read: () => {
+        if (rejectRead) return Promise.reject(new Error("port down"));
+        return new Promise((resolve) => {
+          pendingReads.push({ resolve });
+        });
+      },
+    },
+  });
+
+  const closed = controller.activateSelectionTranslate();
+  pendingReads.shift()!.resolve({ status: "noSelection" });
+  await closed;
+  expect(controller.isOpen()).toBe(true);
+  expect(controller.sourceText()).toBe("");
+  expect(controller.sourceDelivery()).toBeNull();
+
+  controller.close();
+  const unavailable = controller.activateSelectionTranslate();
+  pendingReads.shift()!.resolve({ status: "unavailable" });
+  await unavailable;
+  expect(controller.isOpen()).toBe(true);
+  expect(controller.sourceText()).toBe("");
+  expect(controller.sourceDelivery()).toBeNull();
+
+  controller.close();
+  const blank = controller.activateSelectionTranslate();
+  pendingReads.shift()!.resolve({ status: "selected", text: "  \n" });
+  await blank;
+  expect(controller.isOpen()).toBe(true);
+  expect(controller.sourceText()).toBe("");
+  expect(controller.sourceDelivery()).toBeNull();
+
+  controller.close();
+  rejectRead = true;
+  await controller.activateSelectionTranslate();
+  rejectRead = false;
+  expect(controller.isOpen()).toBe(true);
+  expect(controller.sourceDelivery()).toBeNull();
+
+  const delivered = controller.activateSelectionTranslate();
+  pendingReads.shift()!.resolve({ status: "selected", text: "Keep draft" });
+  await delivered;
+  controller.setPinned(true);
+  controller.attachWindow({
+    focus() {
+      focuses += 1;
+    },
+  } as WindowRef);
+  const failed = controller.activateSelectionTranslate();
+  pendingReads.shift()!.resolve({ status: "noSelection" });
+  await failed;
+  expect(controller.isOpen()).toBe(true);
+  expect(controller.isPinned()).toBe(true);
+  expect(controller.sourceText()).toBe("Keep draft");
+  expect(controller.sourceDelivery()?.seq).toBe(1);
+  expect(focuses).toBe(1);
+
+  controller.close();
+  currentTarget = "gone";
+  const stale = controller.activateSelectionTranslate();
+  currentTarget = "elsewhere";
+  pendingReads.shift()!.resolve({ status: "noSelection" });
+  await stale;
+  expect(controller.isOpen()).toBe(false);
+  expect(controller.sourceText()).toBe("");
+  expect(controller.sourceDelivery()).toBeNull();
+});
+
+test("selection controller: OCR overlay ignores a shortcut and drops a pending read", async () => {
+  const pendingReads: Array<{
+    resolve: (result: { status: "selected"; text: string }) => void;
+  }> = [];
+  const selectionText = {
+    snapshot: () => "target-1",
+    isCurrent: () => true,
+    read: () =>
+      new Promise((resolve: (result: { status: "selected"; text: string }) => void) => {
+        pendingReads.push({ resolve });
+      }),
+  };
+
+  const overlay = createQuickTranslateController({
+    captureRegion: () => new Promise(() => {}),
+    selectionText,
+  });
+  const ocr = overlay.startOcr();
+  expect(overlay.ocrState().phase).toBe("selecting");
+  const ignored = overlay.activateSelectionTranslate();
+  expect(pendingReads).toHaveLength(0);
+  await ignored;
+  await ocr;
+
+  pendingReads.length = 0;
+  const controller = createQuickTranslateController({
+    captureRegion: () => new Promise(() => {}),
+    selectionText,
+  });
+  const pending = controller.activateSelectionTranslate();
+  expect(pendingReads).toHaveLength(1);
+  const started = controller.startOcr();
+  pendingReads[0]!.resolve({ status: "selected", text: "Late selection" });
+  await pending;
+  expect(controller.sourceText()).toBe("");
+  expect(controller.sourceDelivery()).toBeNull();
+  await started;
+});
+
 test("double copy: shell seam delivers copied text to a newly mounted popup, translates with Auto-translate off, keeps typing opt-in, and handles worker failure", async () => {
   const seeded = makeSeedStorage({
     channels: [makeChannel({ adapterId: "openai-compatible", enabled: true })],
@@ -919,6 +1221,81 @@ test("selection translate: waits for the selection, then translates once with Au
   await app.waitUntil(() => app.requests().length === 1);
   expect(JSON.parse(app.requests()[0]!.body!).messages[1].content).toBe(selected);
   expect(app.texts().join(" ")).toContain("dcReads=0|");
+});
+
+test("selection controller: recognition keeps the first delivery", async () => {
+  const selected = "Selected line one\nSelected line two";
+  const app = await open(HARNESS_ENTRY, {
+    ...viewport,
+    storage: ocrSeed(),
+    network: ocrRoutes(JSON.stringify({ text: OCR_TEXT }), 10_000),
+  });
+
+  await app.press("id:harness-tray-quick-translate");
+  await app.waitFor("id:quick-translate-source");
+  await app.press(OCR_BUTTON);
+  await app.waitFor("id:quick-translate-source-toolbar >> id:quick-translate-ocr-busy");
+  await app.keyboard.press("alt+d");
+  await app.waitUntil(() => app.texts().some((text) => text.includes("selReads=1|")));
+  await app.press("id:harness-finish-selection");
+  await app.waitFor("id:quick-translate-source-preview");
+  expect(app.texts()).toContain("Selected line one");
+  expect(app.shows("id:quick-translate-source-toolbar >> id:quick-translate-ocr-busy")).toBe(
+    false,
+  );
+  expect(app.texts().join("\n")).not.toContain(OCR_TEXT);
+  await app.waitUntil(
+    () => app.requests().filter((request) => request.url.includes("api.openai.com")).length === 1,
+  );
+  const delivered = app
+    .requests()
+    .filter((request) => request.url.includes("api.openai.com"))[0]!;
+  expect(JSON.parse(delivered.body!).messages[1].content).toBe(selected);
+
+  const lateSelection = await open(HARNESS_ENTRY, {
+    ...viewport,
+    storage: ocrSeed(),
+    network: ocrRoutes(JSON.stringify({ text: OCR_TEXT }), 300),
+  });
+  await lateSelection.press("id:harness-tray-quick-translate");
+  await lateSelection.waitFor("id:quick-translate-source");
+  await lateSelection.press("id:quick-translate-pin");
+  await lateSelection.press(OCR_BUTTON);
+  await lateSelection.waitFor("id:quick-translate-source-toolbar >> id:quick-translate-ocr-busy");
+  await lateSelection.keyboard.press("alt+d");
+  await lateSelection.waitUntil(() =>
+    lateSelection.texts().some((text) => text.includes("selReads=1|")),
+  );
+  await lateSelection.waitUntil(() =>
+    lateSelection.texts().some((text) => text.includes("Screen line one")),
+  );
+  await lateSelection.press("id:harness-finish-selection");
+  await lateSelection.wait(50);
+  expect(lateSelection.value("id:quick-translate-source")).toBe(OCR_TEXT);
+  expect(lateSelection.texts().join("\n")).not.toContain(selected);
+
+  const emptySelection = await open(HARNESS_ENTRY, {
+    ...viewport,
+    storage: ocrSeed(),
+    network: ocrRoutes(JSON.stringify({ text: OCR_TEXT }), 400),
+  });
+  await emptySelection.press("id:harness-tray-quick-translate");
+  await emptySelection.waitFor("id:quick-translate-source");
+  await emptySelection.press("id:quick-translate-pin");
+  await emptySelection.press(OCR_BUTTON);
+  await emptySelection.waitFor("id:quick-translate-source-toolbar >> id:quick-translate-ocr-busy");
+  await emptySelection.keyboard.press("alt+d");
+  await emptySelection.waitUntil(() =>
+    emptySelection.texts().some((text) => text.includes("selReads=1|")),
+  );
+  await emptySelection.press("id:harness-finish-selection-empty");
+  expect(
+    emptySelection.shows("id:quick-translate-source-toolbar >> id:quick-translate-ocr-busy"),
+  ).toBe(true);
+  await emptySelection.waitUntil(() =>
+    emptySelection.texts().some((text) => text.includes(OCR_TEXT)),
+  );
+  expect(emptySelection.value("id:quick-translate-source")).toBe(OCR_TEXT);
 });
 
 test("screenshot shortcut: selects first, then opens Quick Translate and translates once", async () => {

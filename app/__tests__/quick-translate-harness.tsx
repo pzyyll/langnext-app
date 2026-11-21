@@ -245,6 +245,16 @@ function QuickTranslateHarness(config: {
           }}
         />
         <Button
+          testID="harness-finish-selection-empty"
+          label="Finish Empty Selection"
+          size="sm"
+          onPress={() => {
+            const resolve = finishSelection;
+            finishSelection = undefined;
+            resolve?.({ status: "noSelection" });
+          }}
+        />
+        <Button
           testID="harness-trigger-double-copy-valid"
           label="Harness Double Copy Valid"
           size="sm"
