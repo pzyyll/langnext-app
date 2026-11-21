@@ -86,7 +86,11 @@ export function registerQuickTranslateShortcut(
 ) {
   if (currentOs !== "windows") return undefined;
 
-  const setting = createQuickTranslateShortcutSetting(binding, () => controller.open());
+  const setting = createQuickTranslateShortcutSetting(
+    binding,
+    () => controller.open(),
+    () => Window.get("main")?.state()?.focused === true,
+  );
   let released = false;
   const release = () => {
     if (released) return;
@@ -116,10 +120,14 @@ export function registerQuickTranslateDoubleCopy(
   controller: QuickTranslateController,
   binding: DoubleCopyBinding = nativeDoubleCopyBinding,
   currentOs: string = platform.os,
+  ignoreActivation: () => boolean = () => false,
 ): () => void {
   const stopRuntime = registerDoubleCopyRuntime({
     os: currentOs,
-    start: () => binding.onDoubleCopy((event) => void controller.activateDoubleCopy(event)),
+    start: () =>
+      binding.onDoubleCopy((event) => {
+        if (!ignoreActivation()) void controller.activateDoubleCopy(event);
+      }),
     onStartupError: (message) => toast.error(message),
   });
 

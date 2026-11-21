@@ -63,7 +63,12 @@ export function AppShell(props: AppShellProps = {}) {
     props.globalShortcut,
     currentOs,
   );
-  registerQuickTranslateDoubleCopy(quickTranslate, props.doubleCopy, currentOs);
+  registerQuickTranslateDoubleCopy(
+    quickTranslate,
+    props.doubleCopy,
+    currentOs,
+    quickTranslateShortcut?.isRecordingInForeground,
+  );
 
   const win = currentWindow();
   effect(() => win.set({ backdrop: transparency() ? "popover" : "none" }));

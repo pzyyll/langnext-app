@@ -64,6 +64,9 @@ settings:
     error: 无法保存语言设置。本次选择将在关闭应用前生效。
   shortcuts:
     quickTranslate: 打开快速翻译
+    record: 录制
+    recordLabel: 录制快速翻译快捷键
+    recordingHint: 请按下组合键，按 Esc 取消。
     format: 请输入快捷键，例如 %{example}。
     invalid: 请用 Ctrl、Alt 或 Win（可加 Shift）搭配字母、数字或 F1–F11。Ctrl+C 保留用于复制。
     unavailable: 此快捷键不可用，请试试其他组合。

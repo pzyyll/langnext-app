@@ -1,6 +1,6 @@
-import { signal, Text, View } from "nsh";
+import { cleanup, signal, Text, View, type ViewRef } from "nsh";
 import { t } from "nsh/i18n";
-import { Button } from "../../components/ui/button";
+import { Button, KeyboardButton } from "../../components/ui/button";
 import { Card, SectionHeading } from "../../components/ui/card";
 import { Input } from "../../components/ui/input";
 import { Switch } from "../../components/ui/switch";
@@ -13,8 +13,11 @@ import {
 import {
   DEFAULT_QUICK_TRANSLATE_SHORTCUT,
   formatShortcut,
+  recordQuickTranslateShortcut,
   type QuickTranslateShortcutSetting,
 } from "./shortcuts";
+
+const RECORDING_CAPTURE_KEYS = ["escape"] as const;
 
 function QuickTranslateShortcutCard(props: {
   compact: boolean;
@@ -23,8 +26,13 @@ function QuickTranslateShortcutCard(props: {
   const draft = signal<string | null>(null);
   const error = signal<Awaited<ReturnType<QuickTranslateShortcutSetting["save"]>>>(null);
   const savedValue = () => formatShortcut(props.setting.shortcut());
+  let recordButton: ViewRef | undefined;
+  const recording = () => props.setting.recording();
+  const stopRecording = () => props.setting.setRecording(false);
+  cleanup(stopRecording);
   const canSave = () =>
     !props.setting.busy() &&
+    !recording() &&
     (props.setting.unavailable() || (draft() !== null && draft() !== savedValue()));
   const save = async () => {
     if (!canSave()) return;
@@ -55,6 +63,46 @@ function QuickTranslateShortcutCard(props: {
           }}
           onSubmit={() => void save()}
         />
+        <KeyboardButton
+          testID="settings-quick-translate-shortcut-record"
+          class="min-w-20 shrink-0"
+          ref={(node) => {
+            recordButton = node;
+          }}
+          label={recording() ? t("common.cancel") : t("settings.shortcuts.record")}
+          accessibilityLabel={
+            recording() ? t("common.cancel") : t("settings.shortcuts.recordLabel")
+          }
+          selected={recording()}
+          disabled={props.setting.busy()}
+          captureKeys={recording() ? RECORDING_CAPTURE_KEYS : "none"}
+          onPress={() => {
+            if (recording()) {
+              stopRecording();
+            } else {
+              error.set(null);
+              props.setting.setRecording(true);
+              recordButton?.focus();
+            }
+          }}
+          onBlur={stopRecording}
+          onKeyUp={(event) => {
+            // NSH can route Escape down to its navigation command before raw key handlers.
+            if (recording() && event.key === "Escape") stopRecording();
+          }}
+          onKeyDown={(event) => {
+            if (!recording() || event.key === "Escape") return;
+            const chord = recordQuickTranslateShortcut(event);
+            if (chord === undefined) return;
+            if (chord === null) {
+              error.set("invalid");
+              return;
+            }
+            draft.set(formatShortcut(chord));
+            error.set(null);
+            stopRecording();
+          }}
+        />
         <Button
           testID="settings-quick-translate-shortcut-save"
           label={t("common.save")}
@@ -64,9 +112,11 @@ function QuickTranslateShortcutCard(props: {
         />
       </View>
       <Text class="text-xs text-muted-foreground">
-        {t("settings.shortcuts.format", {
-          example: formatShortcut(DEFAULT_QUICK_TRANSLATE_SHORTCUT),
-        })}
+        {recording()
+          ? t("settings.shortcuts.recordingHint")
+          : t("settings.shortcuts.format", {
+              example: formatShortcut(DEFAULT_QUICK_TRANSLATE_SHORTCUT),
+            })}
       </Text>
       <If when={alert() !== null}>
         <Text

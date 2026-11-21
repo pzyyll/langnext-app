@@ -1,4 +1,4 @@
-import { Text, type JSX, type ViewRef } from "nsh";
+import { Text, View, type JSX, type KeyEvent, type ViewRef } from "nsh";
 import { Button as BaseButton } from "nsh/base";
 import { motion } from "../motion";
 import { buildTooltip } from "./tooltip";
@@ -117,5 +117,35 @@ export function Button(props: ButtonProps) {
       </If>
       {props.children}
     </BaseButton>
+  );
+}
+
+interface KeyboardButtonProps extends Omit<ButtonProps, "children" | "tooltip"> {
+  label: string;
+  onBlur?: () => void;
+  captureKeys?: "none" | readonly string[];
+  onKeyDown: (event: KeyEvent) => void;
+  onKeyUp?: (event: KeyEvent) => void;
+}
+
+/** Button with raw key events on its native focus stop, which BaseButton does not expose. */
+export function KeyboardButton(props: KeyboardButtonProps) {
+  return (
+    <View
+      role="button"
+      testID={props.testID}
+      ref={(node) => props.ref?.(node)}
+      accessibilityLabel={props.accessibilityLabel ?? props.label}
+      accessibilityState={{ selected: props.selected }}
+      disabled={props.disabled}
+      onPress={() => props.onPress?.()}
+      onBlur={props.onBlur}
+      captureKeys={props.captureKeys}
+      onKeyDown={props.onKeyDown}
+      onKeyUp={props.onKeyUp}
+      class={resolveButtonClass(props.variant, props.size, props.class)}
+    >
+      <Text class={resolveTextClass(props.variant, props.size)}>{props.label}</Text>
+    </View>
   );
 }

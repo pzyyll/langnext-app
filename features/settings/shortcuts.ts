@@ -1,4 +1,4 @@
-import { signal, Storage } from "nsh";
+import { signal, Storage, type KeyEvent } from "nsh";
 import type { GlobalShortcutModule } from "nsh/desktop";
 
 export const DEFAULT_QUICK_TRANSLATE_SHORTCUT = "ctrl+shift+t";
@@ -33,6 +33,28 @@ export function parseQuickTranslateShortcut(value: string): string | null {
   return chord === "ctrl+c" ? null : chord;
 }
 
+/** Ignores modifier-only transitions, navigation keys, and auto-repeat while recording. */
+export function recordQuickTranslateShortcut(event: KeyEvent): string | null | undefined {
+  const { key, code, modifiers, repeat } = event;
+  if (repeat || ["Control", "Alt", "Shift", "Meta", "Tab", "Enter", " "].includes(key)) {
+    return undefined;
+  }
+
+  // Shift can report a symbol (e.g. "!" for Digit1). Retain the underlying digit.
+  const digit = /^Digit([0-9])$/.exec(code)?.[1];
+  return parseQuickTranslateShortcut(
+    [
+      modifiers.control && "ctrl",
+      modifiers.alt && "alt",
+      modifiers.shift && "shift",
+      modifiers.platform && "win",
+      digit ?? key,
+    ]
+      .filter(Boolean)
+      .join("+"),
+  );
+}
+
 export type QuickTranslateShortcutBinding = Pick<GlobalShortcutModule, "register" | "unregister">;
 type ShortcutSaveError = "invalid" | "unavailable" | "saveError";
 
@@ -40,10 +62,12 @@ type ShortcutSaveError = "invalid" | "unavailable" | "saveError";
 export function createQuickTranslateShortcutSetting(
   binding: QuickTranslateShortcutBinding,
   onPress: () => void,
+  isMainWindowFocused: () => boolean,
 ) {
   const shortcut = signal(DEFAULT_QUICK_TRANSLATE_SHORTCUT);
   const busy = signal(true);
   const unavailable = signal(false);
+  const recording = signal(false);
   let active: string | null = null;
   let pending: string | null = null;
   let disposed = false;
@@ -61,7 +85,7 @@ export function createQuickTranslateShortcutSetting(
     pending = chord;
     try {
       return await binding.register(chord, () => {
-        if (!disposed && active === chord) onPress();
+        if (!disposed && active === chord && !isRecordingInForeground()) onPress();
       });
     } catch {
       return false;
@@ -130,10 +154,24 @@ export function createQuickTranslateShortcutSetting(
     unregister(active);
   }
 
-  return { shortcut, busy, unavailable, start, save, dispose };
+  function isRecordingInForeground() {
+    return recording() && isMainWindowFocused();
+  }
+
+  return {
+    shortcut,
+    busy,
+    unavailable,
+    start,
+    save,
+    dispose,
+    recording,
+    isRecordingInForeground,
+    setRecording: (value: boolean) => recording.set(value),
+  };
 }
 
 export type QuickTranslateShortcutSetting = Pick<
   ReturnType<typeof createQuickTranslateShortcutSetting>,
-  "shortcut" | "busy" | "unavailable" | "save"
+  "shortcut" | "busy" | "unavailable" | "save" | "recording" | "setRecording"
 >;
