@@ -70,8 +70,21 @@ settings:
     title: OCR
     service: OCR 服务
     ai: AI OCR
+    baidu: 百度 OCR
     model: 模型
+    mode: 模式
+    apiKey: API Key
+    secretKey: Secret Key
     privacy: 所选区域会发送给该模型。
+    privacyBaidu: 所选区域会发送给百度。
+    keepKeys: 两个输入框都留空会保留已保存的密钥。要更换密钥，请同时填写两项。
+    keysUnreadable: 无法读取已保存的百度密钥。请同时填写两项。
+    switchToAi: 保存 AI OCR 会移除已保存的百度密钥。
+    operation:
+      general_basic: 标准版
+      accurate_basic: 高精度版
+      general: 标准含位置版
+      accurate: 高精度含位置版
     windowsOnly: 屏幕截取仅支持 Windows。
     error:
       storageReadFailed: 无法读取已保存的 OCR 设置。

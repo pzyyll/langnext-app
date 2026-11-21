@@ -2,7 +2,7 @@ import { expect, open, test } from "nsh/test";
 import { SPLIT_RAIL_STORAGE_KEYS } from "../../components/layout/split-rail";
 import { LANGUAGE_DETECTION_STORAGE_KEY } from "../language-detection/settings";
 import { makeChannel, makeModel, makeSeedStorage } from "../models/__tests__/fixtures";
-import { OCR_STORAGE_KEY } from "../ocr/settings";
+import { baiduCredentialStorageKey, OCR_STORAGE_KEY } from "../ocr/settings";
 
 const APP_ENTRY = "../../App.tsx";
 const viewport = { width: 1040, height: 720, platform: "windows" as const };
@@ -646,4 +646,174 @@ test("ocr settings: an empty catalog or a failed write keeps the active binding"
   );
   expect(failingWrite.texts()).toContain("OpenAI Main · gpt-4o");
   expect(JSON.parse(failingWrite.storage()[OCR_STORAGE_KEY]!).modelId).toBe("m-vision");
+});
+
+test("ocr settings: saves Baidu keys and restores a blank form", async () => {
+  const app = await open(APP_ENTRY, { ...viewport, storage: makeSeedStorage({}) });
+  await app.press("id:nav-settings");
+  await app.press("id:settings-nav-ocr");
+  await app.waitFor("id:settings-ocr-card");
+
+  await app.press("id:settings-ocr-service");
+  await app.waitFor("role:option[Baidu OCR]");
+  await app.press("role:option[Baidu OCR]");
+
+  expect(app.texts()).toContain("Accurate with Location");
+  expect(app.shows("id:settings-ocr-model")).toBe(false);
+  expect(app.shows("id:settings-ocr-models-recovery")).toBe(false);
+  expect(app.shows("id:settings-ocr-manage-models")).toBe(false);
+  expect(app.enabled("id:settings-ocr-save")).toBe(false);
+  expect(app.texts()).toContain("The selected area is sent to Baidu.");
+
+  await app.type("id:settings-ocr-baidu-api-key", "synthetic-api-key");
+  expect(app.enabled("id:settings-ocr-save")).toBe(false);
+  await app.type("id:settings-ocr-baidu-secret-key", "synthetic-secret-key");
+  expect(app.enabled("id:settings-ocr-save")).toBe(true);
+
+  await app.press("id:settings-ocr-save");
+  await app.waitUntil(() => Boolean(app.storage()[OCR_STORAGE_KEY]));
+  const saved = JSON.parse(app.storage()[OCR_STORAGE_KEY]!) as {
+    version: number;
+    kind: string;
+    operation: string;
+    credentialRef: string;
+  };
+  expect(saved.version).toBe(1);
+  expect(saved.kind).toBe("baidu");
+  expect(saved.operation).toBe("accurate");
+  expect(JSON.stringify(saved).includes("synthetic")).toBe(false);
+  expect(JSON.parse(app.storage()[baiduCredentialStorageKey(saved.credentialRef)]!)).toEqual({
+    apiKey: "synthetic-api-key",
+    secretKey: "synthetic-secret-key",
+  });
+  expect(app.value("id:settings-ocr-baidu-api-key")).toBe("");
+  expect(app.value("id:settings-ocr-baidu-secret-key")).toBe("");
+  expect(app.requests()).toHaveLength(0);
+
+  const reopened = await open(APP_ENTRY, { ...viewport, storage: app.storage() });
+  await reopened.press("id:nav-settings");
+  await reopened.press("id:settings-nav-ocr");
+  await reopened.waitFor("id:settings-ocr-card");
+  expect(reopened.texts()).toContain("Baidu OCR");
+  expect(reopened.texts()).toContain("Accurate with Location");
+  expect(reopened.value("id:settings-ocr-baidu-api-key")).toBe("");
+  expect(reopened.value("id:settings-ocr-baidu-secret-key")).toBe("");
+  expect(reopened.requests()).toHaveLength(0);
+
+  await reopened.press("id:settings-nav-general");
+  await reopened.press("id:language-zh-CN");
+  await reopened.press("id:settings-nav-ocr");
+  await reopened.waitFor("id:settings-ocr-card");
+  expect(reopened.texts()).toContain("百度 OCR");
+  expect(reopened.texts()).toContain("模式");
+  expect(reopened.texts()).toContain("高精度含位置版");
+  expect(reopened.texts()).toContain("所选区域会发送给百度。");
+});
+
+test("ocr settings: a Baidu draft does not change keys until a successful save", async () => {
+  const ref = "saved-baidu-ref";
+  const seed = makeSeedStorage({
+    channels: [makeChannel({ id: "ch-openai", displayName: "OpenAI Main", enabled: true })],
+    models: [
+      makeModel({
+        id: "m-vision",
+        providerId: "ch-openai",
+        modelKey: "gpt-4.1",
+        enabled: true,
+        capabilities: { text: true, image: true, pdf: false, video: false },
+      }),
+    ],
+    extra: {
+      [OCR_STORAGE_KEY]: JSON.stringify({
+        version: 1,
+        kind: "baidu",
+        operation: "accurate",
+        credentialRef: ref,
+      }),
+      [baiduCredentialStorageKey(ref)]: JSON.stringify({
+        apiKey: "saved-api-key",
+        secretKey: "saved-secret-key",
+      }),
+    },
+  });
+  const app = await open(APP_ENTRY, { ...viewport, storage: seed });
+  await app.press("id:nav-settings");
+  await app.press("id:settings-nav-ocr");
+  await app.waitUntil(() =>
+    app
+      .texts()
+      .includes("Leave both fields blank to keep the saved keys. Enter both to replace them."),
+  );
+  expect(app.value("id:settings-ocr-baidu-api-key")).toBe("");
+  expect(app.value("id:settings-ocr-baidu-secret-key")).toBe("");
+
+  await app.press("id:settings-ocr-service");
+  await app.press("role:option[AI OCR]");
+  expect(app.texts()).toContain("Saving AI OCR removes the saved Baidu keys.");
+  expect(app.storage()[baiduCredentialStorageKey(ref)]).toBe(
+    JSON.stringify({ apiKey: "saved-api-key", secretKey: "saved-secret-key" }),
+  );
+  expect(JSON.parse(app.storage()[OCR_STORAGE_KEY]!).kind).toBe("baidu");
+
+  await app.press("id:settings-ocr-service");
+  await app.press("role:option[Baidu OCR]");
+  await app.type("id:settings-ocr-baidu-api-key", "only-one");
+  expect(app.enabled("id:settings-ocr-save")).toBe(false);
+  expect(JSON.parse(app.storage()[baiduCredentialStorageKey(ref)]!).apiKey).toBe("saved-api-key");
+
+  await app.press("id:settings-ocr-service");
+  await app.press("role:option[AI OCR]");
+  await app.press("id:settings-ocr-model");
+  await app.press("role:option[OpenAI Main · gpt-4.1]");
+  await app.press("id:settings-ocr-save");
+  await app.waitUntil(() => JSON.parse(app.storage()[OCR_STORAGE_KEY]!).kind === "ai");
+  expect(app.storage()[baiduCredentialStorageKey(ref)]).toBeUndefined();
+  expect(app.requests()).toHaveLength(0);
+});
+
+test("ocr settings: unreadable Baidu keys and a failed write leave the binding", async () => {
+  const ref = "broken-baidu-ref";
+  const broken = makeSeedStorage({
+    extra: {
+      [OCR_STORAGE_KEY]: JSON.stringify({
+        version: 1,
+        kind: "baidu",
+        operation: "general",
+        credentialRef: ref,
+      }),
+      [baiduCredentialStorageKey(ref)]: JSON.stringify({ apiKey: 1 }),
+    },
+  });
+  const app = await open(APP_ENTRY, { ...viewport, storage: broken });
+  await app.press("id:nav-settings");
+  await app.press("id:settings-nav-ocr");
+  await app.waitFor("id:settings-ocr-baidu-keys-missing");
+  expect(app.enabled("id:settings-ocr-save")).toBe(false);
+  await app.type("id:settings-ocr-baidu-api-key", "replacement-api-key");
+  expect(app.enabled("id:settings-ocr-save")).toBe(false);
+  await app.type("id:settings-ocr-baidu-secret-key", "replacement-secret-key");
+  expect(app.enabled("id:settings-ocr-save")).toBe(true);
+
+  const failing = await open(APP_ENTRY, {
+    ...viewport,
+    storage: broken,
+    modules: {
+      nsh: {
+        "Storage.setItem": async (key: string) => {
+          if (key === OCR_STORAGE_KEY) throw new Error("Simulated write failure");
+        },
+      },
+    },
+  });
+  await failing.press("id:nav-settings");
+  await failing.press("id:settings-nav-ocr");
+  await failing.waitFor("id:settings-ocr-baidu-keys-missing");
+  await failing.type("id:settings-ocr-baidu-api-key", "replacement-api-key");
+  await failing.type("id:settings-ocr-baidu-secret-key", "replacement-secret-key");
+  await failing.press("id:settings-ocr-save");
+  await failing.waitFor("id:settings-ocr-error");
+  expect(JSON.parse(failing.storage()[OCR_STORAGE_KEY]!).credentialRef).toBe(ref);
+  expect(failing.value("id:settings-ocr-baidu-api-key")).toBe("replacement-api-key");
+  expect(failing.value("id:settings-ocr-baidu-secret-key")).toBe("replacement-secret-key");
+  expect(failing.requests()).toHaveLength(0);
 });
