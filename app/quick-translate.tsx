@@ -28,9 +28,10 @@ import {
 } from "../features/quick-translate/preferences";
 import { createQuickTranslateSession } from "../features/quick-translate/session";
 import {
-  createQuickTranslateShortcutSetting,
+  createTranslationShortcutSetting,
   formatShortcut,
-  type QuickTranslateShortcutBinding,
+  type TranslationShortcutBinding,
+  type TranslationShortcutId,
 } from "../features/settings/shortcuts";
 import { canCaptureScreen, ScreenCapture } from "../platform/screen-capture";
 import { canMonitorPointerPress, type DoubleCopyBinding } from "../platform/quick-translate";
@@ -78,42 +79,50 @@ export function createQuickTranslateController(
   });
 }
 
-/** Registers the saved Windows shortcut and releases it on shell disposal or quit. */
-export function registerQuickTranslateShortcut(
+/** Registers both Windows shortcuts and releases them with the shell. */
+export function registerTranslationShortcuts(
   controller: QuickTranslateController,
-  binding: QuickTranslateShortcutBinding = GlobalShortcut,
+  binding: TranslationShortcutBinding = GlobalShortcut,
   currentOs: string = platform.os,
 ) {
-  if (currentOs !== "windows") return undefined;
+  if (!canCaptureScreen(currentOs)) return undefined;
 
-  const setting = createQuickTranslateShortcutSetting(
-    binding,
-    () => controller.open(),
-    () => Window.get("main")?.state()?.focused === true,
-  );
+  const claimed = new Set<string>();
+  const isRecordingInForeground = (): boolean =>
+    Window.get("main")?.state()?.focused === true &&
+    Object.values(settings).some((setting) => setting.recording());
+  const createSetting = (id: TranslationShortcutId, onPress: () => void) =>
+    createTranslationShortcutSetting(id, binding, onPress, isRecordingInForeground, claimed);
+  const settings = {
+    "quick-translate": createSetting("quick-translate", controller.open),
+    "screenshot-translate": createSetting("screenshot-translate", () => void controller.startOcr()),
+  };
+  const entries = Object.values(settings);
   let released = false;
   const release = () => {
     if (released) return;
     released = true;
     stopQuitListener();
-    setting.dispose();
+    for (const setting of entries) setting.dispose();
   };
 
   const stopQuitListener = Application.on("quit", release);
   cleanup(release);
 
-  void setting.start().then(() => {
-    const chord = setting.shortcut();
-    if (!released && chord !== null && setting.unavailable()) {
-      toast.warning(
-        t("quickTranslate.shortcutUnavailable", {
-          shortcut: formatShortcut(chord),
-        }),
-      );
-    }
+  // In case a saved Quick Translate chord matches the new screenshot default, keep the
+  // existing shortcut. Each start claims its chord before awaiting native registration.
+  void Promise.all(entries.map((setting) => setting.load())).then(() => {
+    void settings["quick-translate"].start().then(() => {
+      const setting = settings["quick-translate"];
+      const chord = setting.shortcut();
+      if (!released && chord !== null && setting.unavailable()) {
+        toast.warning(t("quickTranslate.shortcutUnavailable", { shortcut: formatShortcut(chord) }));
+      }
+    });
+    void settings["screenshot-translate"].start();
   });
 
-  return setting;
+  return { settings, isRecordingInForeground };
 }
 
 /** Coordinates the Windows Raw Input double-copy listener with persisted opt-in preferences. */

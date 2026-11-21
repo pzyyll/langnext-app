@@ -185,7 +185,7 @@ export function createQuickTranslateController(
       sourceSignal() !== "" ||
       sourceDeliverySignal() !== null ||
       Object.keys(openMenusSignal()).length > 0;
-    if (!hadState && windowRef === null) {
+    if (!hadState && windowRef === null && !ocrActive) {
       return;
     }
     cancelOcr();
@@ -338,15 +338,14 @@ export function createQuickTranslateController(
   /**
    * Reads the selected screen region and replaces the source with its text.
    *
-   * The popup keeps its draft and its window: it hides for the selection, restores with the same
-   * pin state, discards its late results by generation, and revalidates the saved model before
-   * the image leaves the machine.
+   * An open popup hides during selection and keeps its draft and pin. When invoked directly,
+   * the native selection starts without a popup; a confirmed crop opens it for recognition.
    */
   const startOcr = async () => {
-    if (!openSignal() || ocrActive || !captureRegion) {
-      return;
-    }
+    if (ocrActive || !captureRegion) return;
+    const hadPopup = openSignal();
     ocrActive = true;
+    ocrStateSignal.set({ phase: "selecting", message: null });
     const runGen = ++ocrRunGen;
     const draftAtStart = draftGen;
     const closeAtStart = openGen;
@@ -368,6 +367,16 @@ export function createQuickTranslateController(
       win.focus();
     };
 
+    const revealWindow = () => {
+      if (hadPopup) restoreWindow();
+      else if (!openSignal()) open();
+    };
+
+    const reportFailure = (message: string) => {
+      setOcrMessage(message);
+      revealWindow();
+    };
+
     const isCurrent = () => runGen === ocrRunGen;
     const isStillWanted = () =>
       isCurrent() && draftGen === draftAtStart && openGen === closeAtStart;
@@ -377,31 +386,28 @@ export function createQuickTranslateController(
       const readiness = await checkOcrReadiness(binding);
       if (!isCurrent()) return;
       if (!readiness.ready) {
-        setOcrMessage(readiness.reason ?? t("ocr.failure.unconfigured"));
+        reportFailure(readiness.reason ?? t("ocr.failure.unconfigured"));
         return;
       }
 
-      const win = windowRef ?? Window.get(QUICK_TRANSLATE_WINDOW_ID);
-      if (!win) {
-        setOcrMessage(t("ocr.failure.failed"));
-        return;
+      if (hadPopup) {
+        const win = windowRef ?? Window.get(QUICK_TRANSLATE_WINDOW_ID);
+        if (!win) {
+          reportFailure(t("ocr.failure.failed"));
+          return;
+        }
+        hiddenWindow = win;
+        win.hide();
+        if (!(await waitForHidden(win, controller.signal))) {
+          if (isCurrent()) reportFailure(t("ocr.failure.failed"));
+          return;
+        }
       }
-
-      ocrStateSignal.set({ phase: "selecting", message: null });
-      win.hide();
-      if (!(await waitForHidden(win, controller.signal))) {
-        setOcrMessage(t("ocr.failure.failed"));
-        return;
-      }
-      hiddenWindow = win;
 
       const captured = await captureRegion({
         signal: controller.signal,
         overlay: captureOverlay(),
       });
-      // The selection is over: the popup returns before the model is asked, so the user can
-      // read its status, edit the draft, or close the window while recognition runs.
-      restoreWindow();
       if (!isStillWanted()) return;
 
       if (captured.status === "cancelled" || captured.status === "unavailable") {
@@ -410,16 +416,18 @@ export function createQuickTranslateController(
       }
       if (captured.status === "tooLarge") {
         shouldRestoreFocus = true;
-        setOcrMessage(t("ocr.failure.imageTooLarge"));
+        reportFailure(t("ocr.failure.imageTooLarge"));
         return;
       }
       if (captured.status === "failed") {
         shouldRestoreFocus = true;
-        setOcrMessage(t("ocr.failure.failed"));
+        reportFailure(t("ocr.failure.failed"));
         return;
       }
 
+      // Show the popup before asking the model, so the user can see the recognition status.
       ocrStateSignal.set({ phase: "recognizing", message: null });
+      revealWindow();
       const outcome = await recognizeScreenshot(binding, captured.png, {
         signal: controller.signal,
       });
@@ -448,7 +456,7 @@ export function createQuickTranslateController(
     } catch {
       if (isCurrent()) {
         shouldRestoreFocus = true;
-        setOcrMessage(t("ocr.failure.failed"));
+        reportFailure(t("ocr.failure.failed"));
       }
     } finally {
       if (runGen === ocrRunGen) {

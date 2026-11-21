@@ -64,12 +64,13 @@ settings:
     error: Could not save language. Your choice will apply until you close the app.
   shortcuts:
     quickTranslate: Open Quick Translate
-    edit: Edit Quick Translate shortcut
+    screenshotTranslate: Screenshot Translate
+    edit: Edit shortcut for %{action}
     pressShortcut: Press a shortcut
     recordingHint: Press Esc to cancel.
     unassigned: Unassigned
-    clear: Clear Quick Translate shortcut
-    reset: Restore default Quick Translate shortcut
+    clear: Clear shortcut for %{action}
+    reset: Restore default shortcut for %{action}
     invalid: Use Ctrl, Alt, or Win (with optional Shift) and a letter, digit, or F1–F11. Ctrl+C is reserved for copying.
     unavailable: This shortcut is unavailable. Try another combination.
     inactive: This shortcut is inactive. Record another combination.

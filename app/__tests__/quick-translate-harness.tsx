@@ -9,10 +9,14 @@ import { presetsStore } from "../../features/presets/store";
 import { loadQuickTranslatePreferences } from "../../features/quick-translate/preferences";
 import { loadAppearance } from "../../features/settings/appearance";
 import { loadLanguage } from "../../features/settings/language";
+import {
+  DEFAULT_QUICK_TRANSLATE_SHORTCUT,
+  DEFAULT_SCREENSHOT_TRANSLATE_SHORTCUT,
+} from "../../features/settings/shortcuts";
 import { loadTransparency } from "../../features/settings/transparency";
 import type { DoubleCopyActivationEvent } from "../../platform/quick-translate";
+import type { ScreenCaptureOutcome } from "../../platform/screen-capture";
 import { initializeAiModules } from "../ai-setup";
-import { DEFAULT_QUICK_TRANSLATE_SHORTCUT } from "../../features/settings/shortcuts";
 import { AppShell } from "../shell";
 
 initializeAiModules();
@@ -26,7 +30,11 @@ export const HARNESS_OCR_CAPTURE_KEY = "__test.qt.ocrCapture";
 /** 16×16 PNG: large enough for Baidu's minimum side, still a valid AI crop. */
 const HARNESS_PNG_BASE64 = "iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAAAAAA6mKC9AAAAAElFTkSuQmCC";
 
-type HarnessCaptureMode = "png" | "cancel" | "tooLarge" | "fail";
+type HarnessCaptureMode = "png" | "cancel" | "tooLarge" | "fail" | "wait";
+
+function harnessScreenshot(): ScreenCaptureOutcome {
+  return { status: "captured", png: Uint8Array.from(Buffer.from(HARNESS_PNG_BASE64, "base64")) };
+}
 
 type ActionMenuItem = Exclude<MenuItem, { type: "separator" }>;
 
@@ -54,7 +62,9 @@ function QuickTranslateHarness(config: {
   const pointerPressStopCount = signal(0);
   const clipboardReadCount = signal(0);
   const trayMenuLabels = signal("");
-  const lastRegisteredShortcut = signal("");
+  const shortcutList = signal("");
+  const syncShortcutList = () => shortcutList.set([...registeredShortcuts.keys()].join(","));
+  let finishCapture: (() => void) | undefined;
   const ocrCaptureCount = signal(0);
   const ocrCaptureCaption = signal("");
   const mainHidden = signal(false);
@@ -66,7 +76,11 @@ function QuickTranslateHarness(config: {
     entry?.onSelect?.();
   };
 
-  for (const chord of [DEFAULT_QUICK_TRANSLATE_SHORTCUT, "ctrl+shift+y"]) {
+  for (const chord of [
+    DEFAULT_QUICK_TRANSLATE_SHORTCUT,
+    DEFAULT_SCREENSHOT_TRANSLATE_SHORTCUT,
+    "ctrl+shift+y",
+  ]) {
     keymap.bind(chord, () => registeredShortcuts.get(chord)?.(), { when: "always" });
   }
 
@@ -80,16 +94,27 @@ function QuickTranslateHarness(config: {
               clipboardReadCount.set(clipboardReadCount() + 1);
               return nextClipboardText;
             },
-            captureRegion: async ({ overlay }) => {
+            captureRegion: async ({ overlay, signal }) => {
               ocrCaptureCount.set(ocrCaptureCount() + 1);
               ocrCaptureCaption.set(overlay.caption);
               if (config.ocrCapture === "cancel") return { status: "cancelled" };
               if (config.ocrCapture === "tooLarge") return { status: "tooLarge" };
               if (config.ocrCapture === "fail") return { status: "failed" };
-              return {
-                status: "captured",
-                png: Uint8Array.from(Buffer.from(HARNESS_PNG_BASE64, "base64")),
-              };
+              if (config.ocrCapture === "wait") {
+                return new Promise<ScreenCaptureOutcome>((resolve) => {
+                  const abort = () => {
+                    finishCapture = undefined;
+                    resolve({ status: "cancelled" });
+                  };
+                  finishCapture = () => {
+                    finishCapture = undefined;
+                    signal?.removeEventListener("abort", abort);
+                    resolve(harnessScreenshot());
+                  };
+                  signal?.addEventListener("abort", abort, { once: true });
+                });
+              }
+              return harnessScreenshot();
             },
             onPointerPress() {
               pointerPressRegisterCount.set(pointerPressRegisterCount() + 1);
@@ -129,7 +154,6 @@ function QuickTranslateHarness(config: {
           globalShortcut={{
             async register(shortcut, onPress) {
               registerCount.set(registerCount() + 1);
-              lastRegisteredShortcut.set(shortcut);
               if (
                 config.shortcutMode === "false" ||
                 (config.shortcutMode === "conflict" &&
@@ -141,16 +165,26 @@ function QuickTranslateHarness(config: {
                 throw new Error("shortcut conflict");
               }
               registeredShortcuts.set(shortcut, onPress);
+              syncShortcutList();
               return true;
             },
             unregister(shortcut) {
               registeredShortcuts.delete(shortcut);
+              syncShortcutList();
               unregisterCount.set(unregisterCount() + 1);
             },
           }}
         />
       </If>
       <View class="flex-row flex-wrap gap-2 px-4 py-1">
+        <If when={config.ocrCapture === "wait"}>
+          <Button
+            testID="harness-finish-capture"
+            label="Confirm Region"
+            size="sm"
+            onPress={() => finishCapture?.()}
+          />
+        </If>
         <Button
           testID="harness-tray-quick-translate"
           label="Harness Tray QT"
@@ -219,7 +253,7 @@ function QuickTranslateHarness(config: {
           })()}
         </Text>
         <Text testID="harness-metrics">
-          {`ocrCap=${ocrCaptureCount()}|ocrCaption=${ocrCaptureCaption()}|reg=${registerCount()}|unreg=${unregisterCount()}|dcReg=${doubleCopyRegisterCount()}|dcStop=${doubleCopyStopCount()}|dcReads=${clipboardReadCount()}|ppReg=${pointerPressRegisterCount()}|ppStop=${pointerPressStopCount()}|shortcut=${lastRegisteredShortcut()}|tray=${trayMenuLabels()}|mainHidden=${mainHidden()}`}
+          {`ocrCap=${ocrCaptureCount()}|ocrCaption=${ocrCaptureCaption()}|reg=${registerCount()}|unreg=${unregisterCount()}|dcReg=${doubleCopyRegisterCount()}|dcStop=${doubleCopyStopCount()}|dcReads=${clipboardReadCount()}|ppReg=${pointerPressRegisterCount()}|ppStop=${pointerPressStopCount()}|shortcuts=${shortcutList()}|tray=${trayMenuLabels()}|mainHidden=${mainHidden()}`}
         </Text>
       </View>
     </View>
@@ -247,7 +281,10 @@ void Promise.all([
   const initialClipboard = dcClipboardRaw ?? "";
   const platformOs = osRaw || undefined;
   const ocrCapture: HarnessCaptureMode =
-    ocrCaptureRaw === "cancel" || ocrCaptureRaw === "tooLarge" || ocrCaptureRaw === "fail"
+    ocrCaptureRaw === "cancel" ||
+    ocrCaptureRaw === "tooLarge" ||
+    ocrCaptureRaw === "fail" ||
+    ocrCaptureRaw === "wait"
       ? ocrCaptureRaw
       : "png";
   mount(() => (

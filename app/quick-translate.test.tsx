@@ -7,8 +7,10 @@ import { PRESETS_STORAGE_KEY } from "../features/presets/store";
 import type { TranslationPreset } from "../features/presets/types";
 import {
   DEFAULT_QUICK_TRANSLATE_SHORTCUT,
+  DEFAULT_SCREENSHOT_TRANSLATE_SHORTCUT,
   formatShortcut,
   QUICK_TRANSLATE_SHORTCUT_STORAGE_KEY,
+  SCREENSHOT_TRANSLATE_SHORTCUT_STORAGE_KEY,
 } from "../features/settings/shortcuts";
 import { createQuickTranslateController, POPUP_MIN_SIZE } from "./quick-translate-controller";
 
@@ -301,21 +303,27 @@ test("desktop: quick window Language menu overlay does not trigger blur dismissa
   await app.waitUntil(() => app.window("quick-translate").state() === null);
 });
 
-test("desktop: quick window remains available while main window is hidden and registers Windows shortcut once across locale changes", async () => {
+test("desktop: quick window remains available while main window is hidden and registers both Windows shortcuts once across locale changes", async () => {
   const app = await open(HARNESS_ENTRY, {
     ...viewport,
     storage: { "settings.language": "en" },
   });
 
   await app.waitUntil(() =>
-    app.texts().some((text) => text.includes("shortcut=ctrl+shift+t|tray=Quick Translate,Exit")),
+    app
+      .texts()
+      .some((text) =>
+        text.includes(
+          `shortcuts=${DEFAULT_QUICK_TRANSLATE_SHORTCUT},${DEFAULT_SCREENSHOT_TRANSLATE_SHORTCUT}|tray=Quick Translate,Exit`,
+        ),
+      ),
   );
-  expect(app.texts().join(" ")).toContain("reg=1|");
+  expect(app.texts().join(" ")).toContain("|reg=2|");
 
   await app.press("id:nav-settings");
   await app.press("id:language-zh-CN");
   await app.waitUntil(() => app.texts().some((text) => text.includes("tray=快速翻译,退出")));
-  expect(app.texts().join(" ")).toContain("reg=1|");
+  expect(app.texts().join(" ")).toContain("|reg=2|");
 
   await app.press("id:harness-hide-main-tray-flow");
   await app.waitUntil(
@@ -368,7 +376,12 @@ test("shortcut settings: restores custom bindings, persists removal, and resets 
   await reopened.press("id:nav-settings");
   await reopened.press("id:settings-nav-shortcuts");
   await reopened.waitFor(UNASSIGNED);
-  expect(reopened.texts().join(" ")).toContain("reg=0|");
+  await reopened.waitUntil(() =>
+    reopened
+      .texts()
+      .some((text) => text.includes(`shortcuts=${DEFAULT_SCREENSHOT_TRANSLATE_SHORTCUT}|`)),
+  );
+  expect(reopened.texts().join(" ")).toContain("|reg=1|");
   await reopened.press(SHORTCUT_RESET);
   await reopened.waitUntil(() => reopened.texts().includes("Ctrl+Shift+T"));
   expect(reopened.storage()[QUICK_TRANSLATE_SHORTCUT_STORAGE_KEY]).toBe(
@@ -417,14 +430,38 @@ test("shortcut settings: keeps the old binding if reset cannot register or remov
   }
 });
 
-test("desktop: quick window unregisters global shortcut on shell disposal", async () => {
+test("shortcut settings: the new screenshot default does not take over an existing binding", async () => {
+  const app = await open(HARNESS_ENTRY, {
+    ...viewport,
+    storage: {
+      "settings.language": "en",
+      [QUICK_TRANSLATE_SHORTCUT_STORAGE_KEY]: DEFAULT_SCREENSHOT_TRANSLATE_SHORTCUT,
+    },
+  });
+  await app.press("id:nav-settings");
+  await app.press("id:settings-nav-shortcuts");
+  const screenshot = "id:settings-screenshot-translate-shortcut";
+  await app.waitFor(`${screenshot}-error`);
+  expect(app.texts().join(" ")).toContain("|reg=1|unreg=0|");
+
+  await app.press(`${screenshot}-clear`);
+  await app.waitFor(`${screenshot}-unassigned`);
+  await app.press(`${screenshot}-reset`);
+  await app.waitFor(`${screenshot}-error`);
+  expect(app.storage()[SCREENSHOT_TRANSLATE_SHORTCUT_STORAGE_KEY]).toBe("");
+  await app.keyboard.press(DEFAULT_SCREENSHOT_TRANSLATE_SHORTCUT);
+  await app.waitFor("id:quick-translate-source");
+  expect(app.texts().join(" ")).toContain("ocrCap=0|");
+});
+
+test("desktop: quick window unregisters both global shortcuts on shell disposal", async () => {
   const app = await open(HARNESS_ENTRY, {
     ...viewport,
     storage: { "settings.language": "en" },
   });
-  await app.waitFor("id:harness-metrics");
+  await app.waitUntil(() => app.texts().some((text) => text.includes("|reg=2|")));
   await app.press("id:harness-dispose-shell");
-  await app.waitUntil(() => app.texts().some((text) => text.includes("unreg=1|")));
+  await app.waitUntil(() => app.texts().some((text) => text.includes("|unreg=2|")));
 });
 
 test("desktop: quick window warns and keeps tray fallback when global shortcut returns false or rejects, and skips non-Windows", async () => {
@@ -839,6 +876,65 @@ const ocrRoutes = (answer: string, delay?: number) => ({
     status: 200,
     body: { choices: [{ message: { content: "翻译结果" } }] },
   },
+});
+
+test("screenshot shortcut: selects first, then opens Quick Translate and translates once", async () => {
+  const app = await open(HARNESS_ENTRY, {
+    ...viewport,
+    storage: ocrSeed({ [HARNESS_OCR_CAPTURE_KEY]: "wait" }),
+    network: ocrRoutes(JSON.stringify({ text: OCR_TEXT }), 500),
+  });
+  await app.waitUntil(() =>
+    app.texts().some((text) => text.includes(`,${DEFAULT_SCREENSHOT_TRANSLATE_SHORTCUT}|`)),
+  );
+  await app.keyboard.press(DEFAULT_SCREENSHOT_TRANSLATE_SHORTCUT);
+  await app.waitUntil(() => app.texts().some((text) => text.includes("ocrCap=1|")));
+  expect(app.window("quick-translate").state()).toBeNull();
+  expect(app.requests()).toHaveLength(0);
+  await app.keyboard.press(DEFAULT_SCREENSHOT_TRANSLATE_SHORTCUT);
+  await app.keyboard.press(DEFAULT_QUICK_TRANSLATE_SHORTCUT);
+  expect(app.window("quick-translate").state()).toBeNull();
+  expect(app.texts().some((text) => text.includes("ocrCap=1|"))).toBe(true);
+
+  await app.press("id:harness-finish-capture");
+  await app.waitFor("id:quick-translate-ocr-busy");
+  expect(app.window("quick-translate").state()?.visible).toBe(true);
+  await app.waitUntil(() => app.value("id:quick-translate-source") === OCR_TEXT);
+  await app.waitFor("翻译结果");
+  const requests = app.requests();
+  expect(requests.map((request) => request.url)).toEqual([
+    "https://vision.example.com/v1/responses",
+    "https://api.openai.com/v1/chat/completions",
+  ]);
+  expect(JSON.parse(requests[1]!.body!).messages[1].content).toBe(OCR_TEXT);
+});
+
+test("screenshot shortcut: cancellation without a popup stays on the desktop", async () => {
+  const app = await open(HARNESS_ENTRY, {
+    ...viewport,
+    storage: ocrSeed({ [HARNESS_OCR_CAPTURE_KEY]: "cancel" }),
+  });
+  await app.waitUntil(() =>
+    app.texts().some((text) => text.includes(`,${DEFAULT_SCREENSHOT_TRANSLATE_SHORTCUT}|`)),
+  );
+  await app.keyboard.press(DEFAULT_SCREENSHOT_TRANSLATE_SHORTCUT);
+  await app.waitUntil(() => app.texts().some((text) => text.includes("ocrCap=1|")));
+  expect(app.window("quick-translate").state()).toBeNull();
+  expect(app.requests()).toHaveLength(0);
+});
+
+test("screenshot shortcut: missing OCR setup shows recovery without capturing", async () => {
+  const app = await open(HARNESS_ENTRY, { ...viewport, storage: { "settings.language": "en" } });
+  await app.waitUntil(() =>
+    app.texts().some((text) => text.includes(`,${DEFAULT_SCREENSHOT_TRANSLATE_SHORTCUT}|`)),
+  );
+  await app.keyboard.press(DEFAULT_SCREENSHOT_TRANSLATE_SHORTCUT);
+  await app.waitFor("id:quick-translate-ocr-status");
+  expect(app.texts()).toContain(
+    "Configure OCR in Settings, or choose another way to get the text.",
+  );
+  expect(app.texts().some((text) => text.includes("ocrCap=0|"))).toBe(true);
+  expect(app.requests()).toHaveLength(0);
 });
 
 test("quick ocr: replaces the draft with the recognized text and translates once", async () => {

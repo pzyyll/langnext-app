@@ -10,23 +10,23 @@ import { ToastViewport } from "../components/ui/toast";
 import { ModelsPage } from "../features/models/page";
 import { PresetsPage } from "../features/presets/page";
 import { SettingsPage } from "../features/settings/page";
+import type { TranslationShortcutBinding } from "../features/settings/shortcuts";
 import { transparency } from "../features/settings/transparency";
 import type { DoubleCopyBinding } from "../platform/quick-translate";
 import {
   createQuickTranslateController,
   QuickTranslateWindow,
   registerQuickTranslateDoubleCopy,
-  registerQuickTranslateShortcut,
+  registerTranslationShortcuts,
   type QuickTranslateControllerOptions,
 } from "./quick-translate";
-import type { QuickTranslateShortcutBinding } from "../features/settings/shortcuts";
 
 /** The app bar's height, which the platform centers the system's window
  * controls in: the same value as `window.titleBar.height` in nsh.json. */
 const TITLE_BAR_HEIGHT = 42;
 
 export interface AppShellProps {
-  globalShortcut?: QuickTranslateShortcutBinding;
+  globalShortcut?: TranslationShortcutBinding;
   doubleCopy?: DoubleCopyBinding;
   trayModule?: Pick<typeof Tray, "set">;
   platformOs?: string;
@@ -58,16 +58,12 @@ export function AppShell(props: AppShellProps = {}) {
   });
 
   const currentOs = props.platformOs ?? platform.os;
-  const quickTranslateShortcut = registerQuickTranslateShortcut(
-    quickTranslate,
-    props.globalShortcut,
-    currentOs,
-  );
+  const shortcuts = registerTranslationShortcuts(quickTranslate, props.globalShortcut, currentOs);
   registerQuickTranslateDoubleCopy(
     quickTranslate,
     props.doubleCopy,
     currentOs,
-    quickTranslateShortcut?.isRecordingInForeground,
+    shortcuts?.isRecordingInForeground,
   );
 
   const win = currentWindow();
@@ -148,7 +144,7 @@ export function AppShell(props: AppShellProps = {}) {
             <SettingsPage
               platformOs={currentOs}
               onNavigateToModels={selectModels}
-              quickTranslateShortcut={quickTranslateShortcut}
+              shortcuts={shortcuts?.settings}
             />
           </PageSurface>
         </If>

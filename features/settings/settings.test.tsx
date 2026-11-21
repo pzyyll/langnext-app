@@ -121,10 +121,21 @@ test("settings ui: renders cleanly at the minimum viewport in dark mode with red
   expect(app.shows("id:settings-transparency-card")).toBe(true);
 
   await app.press("id:settings-nav-shortcuts");
-  await app.waitFor("id:settings-quick-translate-shortcut-card");
+  await app.waitFor("id:settings-translation-shortcuts-card");
+  await app.waitFor(
+    "id:settings-translation-shortcuts-card >> id:settings-quick-translate-shortcut-row",
+  );
   expect(app.shows("id:settings-double-copy-card")).toBe(true);
   expect(app.texts()).toContain("打开快速翻译");
   expect(app.texts()).toContain("Ctrl+Shift+T");
+  expect(
+    app.shows(
+      "id:settings-translation-shortcuts-card >> id:settings-screenshot-translate-shortcut-row",
+    ),
+  ).toBe(true);
+  expect(app.texts()).toContain("截图翻译");
+  expect(app.texts()).toContain("Alt+Shift+S");
+  expect(app.shows("id:settings-screenshot-translate-shortcut-reset")).toBe(false);
   expect(app.shows("id:settings-quick-translate-shortcut-reset")).toBe(false);
   expect(app.shows("id:settings-double-copy-switch")).toBe(true);
 });
@@ -140,6 +151,7 @@ test("double copy: shows Windows-only opt-in off by default, hides outside Windo
   await macApp.waitFor("id:settings-shortcuts-windows-only");
   expect(macApp.shows("id:settings-double-copy-card")).toBe(false);
   expect(macApp.shows("id:settings-quick-translate-shortcut")).toBe(false);
+  expect(macApp.shows("id:settings-translation-shortcuts-card")).toBe(false);
 
   const winApp = await open(APP_ENTRY, {
     ...viewport,

@@ -11,7 +11,7 @@ import { language, languageError, selectLanguage, type LanguagePreference } from
 import { LanguageDetectionSection } from "./language-detection-section";
 import { OcrSection } from "./ocr-section";
 import { ShortcutsSection } from "./shortcuts-section";
-import type { QuickTranslateShortcutSetting } from "./shortcuts";
+import type { TranslationShortcutId, TranslationShortcutSetting } from "./shortcuts";
 import { selectTransparency, transparency, transparencyError } from "./transparency";
 
 export type SettingsSection = "general" | "appearance" | "shortcuts" | "language-detection" | "ocr";
@@ -156,7 +156,7 @@ function AppearanceSection(props: { compact: boolean }) {
 export function SettingsPage(props: {
   platformOs?: string;
   onNavigateToModels?: () => void;
-  quickTranslateShortcut?: QuickTranslateShortcutSetting;
+  shortcuts?: Record<TranslationShortcutId, TranslationShortcutSetting>;
 }) {
   const compact = () => windowSize().width < 860;
   const currentOs = () => props.platformOs ?? platform.os;
@@ -239,7 +239,7 @@ export function SettingsPage(props: {
                 <ShortcutsSection
                   compact={compact()}
                   platformOs={currentOs()}
-                  quickTranslateShortcut={props.quickTranslateShortcut}
+                  shortcuts={props.shortcuts}
                 />
               </If>
               <If when={selectedSection() === "language-detection"}>

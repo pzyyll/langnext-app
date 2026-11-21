@@ -3,7 +3,24 @@ import type { GlobalShortcutModule } from "nsh/desktop";
 
 export const DEFAULT_QUICK_TRANSLATE_SHORTCUT = "ctrl+shift+t";
 export const QUICK_TRANSLATE_SHORTCUT_STORAGE_KEY = "settings.shortcuts.quickTranslate";
+export const DEFAULT_SCREENSHOT_TRANSLATE_SHORTCUT = "alt+shift+s";
+export const SCREENSHOT_TRANSLATE_SHORTCUT_STORAGE_KEY = "settings.shortcuts.screenshotTranslate";
 const UNASSIGNED_SHORTCUT = "";
+
+export const TRANSLATION_SHORTCUTS = {
+  "quick-translate": {
+    defaultChord: DEFAULT_QUICK_TRANSLATE_SHORTCUT,
+    storageKey: QUICK_TRANSLATE_SHORTCUT_STORAGE_KEY,
+    labelKey: "settings.shortcuts.quickTranslate",
+  },
+  "screenshot-translate": {
+    defaultChord: DEFAULT_SCREENSHOT_TRANSLATE_SHORTCUT,
+    storageKey: SCREENSHOT_TRANSLATE_SHORTCUT_STORAGE_KEY,
+    labelKey: "settings.shortcuts.screenshotTranslate",
+  },
+} as const;
+
+export type TranslationShortcutId = keyof typeof TRANSLATION_SHORTCUTS;
 
 const MODIFIERS = { ctrl: "Ctrl", alt: "Alt", shift: "Shift", win: "Win" } as const;
 const MODIFIER_ORDER = Object.keys(MODIFIERS) as (keyof typeof MODIFIERS)[];
@@ -56,16 +73,19 @@ export function recordQuickTranslateShortcut(event: KeyEvent): string | null | u
   );
 }
 
-export type QuickTranslateShortcutBinding = Pick<GlobalShortcutModule, "register" | "unregister">;
+export type TranslationShortcutBinding = Pick<GlobalShortcutModule, "register" | "unregister">;
 type ShortcutSaveError = "invalid" | "unavailable" | "saveError";
 
-/** Owns the chosen chord and its native registration for the lifetime of the app shell. */
-export function createQuickTranslateShortcutSetting(
-  binding: QuickTranslateShortcutBinding,
+/** Owns the chosen chord and its native registration for one action. */
+export function createTranslationShortcutSetting(
+  id: TranslationShortcutId,
+  binding: TranslationShortcutBinding,
   onPress: () => void,
-  isMainWindowFocused: () => boolean,
+  shouldSuppress: () => boolean,
+  claimed: Set<string>,
 ) {
-  const shortcut = signal<string | null>(DEFAULT_QUICK_TRANSLATE_SHORTCUT);
+  const { defaultChord, storageKey } = TRANSLATION_SHORTCUTS[id];
+  const shortcut = signal<string | null>(defaultChord);
   const busy = signal(true);
   const unavailable = signal(false);
   const recording = signal(false);
@@ -79,33 +99,41 @@ export function createQuickTranslateShortcutSetting(
       binding.unregister(chord);
     } catch {
       // A native window may already be closing. Its stale callback cannot activate the popup.
+    } finally {
+      claimed.delete(chord);
     }
   }
 
   async function register(chord: string): Promise<boolean> {
+    // NSH replaces the callback if this application registers the same chord twice.
+    if (claimed.has(chord)) return false;
+    claimed.add(chord);
     pending = chord;
     try {
       return await binding.register(chord, () => {
-        if (!disposed && active === chord && !isRecordingInForeground()) onPress();
+        if (!disposed && active === chord && !shouldSuppress()) onPress();
       });
     } catch {
       return false;
     }
   }
 
-  async function start(): Promise<void> {
+  async function load(): Promise<void> {
     try {
-      const saved = await Storage.getItem(QUICK_TRANSLATE_SHORTCUT_STORAGE_KEY);
+      const saved = await Storage.getItem(storageKey);
       if (!disposed && saved !== null) {
         shortcut.set(
           saved === UNASSIGNED_SHORTCUT
             ? null
-            : (parseQuickTranslateShortcut(saved) ?? DEFAULT_QUICK_TRANSLATE_SHORTCUT),
+            : (parseQuickTranslateShortcut(saved) ?? defaultChord),
         );
       }
     } catch {
       // Use the default if storage is not readable at startup.
     }
+  }
+
+  async function start(): Promise<void> {
     if (disposed) return;
     const chord = shortcut();
     if (chord === null) {
@@ -114,9 +142,9 @@ export function createQuickTranslateShortcutSetting(
     }
     const accepted = await register(chord);
     if (disposed) return;
-    pending = null;
     if (accepted) active = chord;
-    else unregister(chord);
+    else unregister(pending);
+    pending = null;
     unavailable.set(!accepted);
     busy.set(false);
   }
@@ -133,7 +161,7 @@ export function createQuickTranslateShortcutSetting(
       if (disposed) return null;
       if (shortcut() !== chord) {
         try {
-          await Storage.setItem(QUICK_TRANSLATE_SHORTCUT_STORAGE_KEY, chord ?? UNASSIGNED_SHORTCUT);
+          await Storage.setItem(storageKey, chord ?? UNASSIGNED_SHORTCUT);
         } catch {
           return "saveError";
         }
@@ -164,24 +192,20 @@ export function createQuickTranslateShortcutSetting(
     unregister(active);
   }
 
-  function isRecordingInForeground() {
-    return recording() && isMainWindowFocused();
-  }
-
   return {
     shortcut,
     busy,
     unavailable,
+    load,
     start,
     save,
     dispose,
     recording,
-    isRecordingInForeground,
     setRecording: (value: boolean) => recording.set(value),
   };
 }
 
-export type QuickTranslateShortcutSetting = Pick<
-  ReturnType<typeof createQuickTranslateShortcutSetting>,
+export type TranslationShortcutSetting = Pick<
+  ReturnType<typeof createTranslationShortcutSetting>,
   "shortcut" | "busy" | "unavailable" | "save" | "recording" | "setRecording"
 >;

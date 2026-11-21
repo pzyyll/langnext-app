@@ -64,12 +64,13 @@ settings:
     error: 无法保存语言设置。本次选择将在关闭应用前生效。
   shortcuts:
     quickTranslate: 打开快速翻译
-    edit: 修改快速翻译快捷键
+    screenshotTranslate: 截图翻译
+    edit: 修改「%{action}」快捷键
     pressShortcut: 请按下组合键
     recordingHint: 按 Esc 取消。
     unassigned: 未分配
-    clear: 删除快速翻译快捷键
-    reset: 恢复快速翻译默认快捷键
+    clear: 删除「%{action}」快捷键
+    reset: 恢复「%{action}」默认快捷键
     invalid: 请用 Ctrl、Alt 或 Win（可加 Shift）搭配字母、数字或 F1–F11。Ctrl+C 保留用于复制。
     unavailable: 此快捷键不可用，请试试其他组合。
     inactive: 此快捷键未生效，请录制其他组合。

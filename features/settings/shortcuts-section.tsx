@@ -12,21 +12,26 @@ import {
   selectDoubleCopy,
 } from "../quick-translate/preferences";
 import {
-  DEFAULT_QUICK_TRANSLATE_SHORTCUT,
   formatShortcut,
   recordQuickTranslateShortcut,
-  type QuickTranslateShortcutSetting,
+  TRANSLATION_SHORTCUTS,
+  type TranslationShortcutId,
+  type TranslationShortcutSetting,
 } from "./shortcuts";
 
 const RECORDING_CAPTURE_KEYS = ["escape"] as const;
+const SHORTCUT_IDS = Object.keys(TRANSLATION_SHORTCUTS) as TranslationShortcutId[];
 
-function QuickTranslateShortcutRow(props: { setting: QuickTranslateShortcutSetting }) {
-  const error = signal<Awaited<ReturnType<QuickTranslateShortcutSetting["save"]>>>(null);
+function ShortcutRow(props: { id: TranslationShortcutId; setting: TranslationShortcutSetting }) {
+  const error = signal<Awaited<ReturnType<TranslationShortcutSetting["save"]>>>(null);
   const recording = () => props.setting.recording();
   const chord = () => props.setting.shortcut();
-  const editLabel = () => t("settings.shortcuts.edit");
-  const clearLabel = () => t("settings.shortcuts.clear");
-  const resetLabel = () => t("settings.shortcuts.reset");
+  const definition = () => TRANSLATION_SHORTCUTS[props.id];
+  const label = () => t(definition().labelKey);
+  const testID = () => `settings-${props.id}-shortcut`;
+  const editLabel = () => t("settings.shortcuts.edit", { action: label() });
+  const clearLabel = () => t("settings.shortcuts.clear", { action: label() });
+  const resetLabel = () => t("settings.shortcuts.reset", { action: label() });
   let editButton: ViewRef | undefined;
 
   const cancelRecording = () => {
@@ -46,25 +51,22 @@ function QuickTranslateShortcutRow(props: { setting: QuickTranslateShortcutSetti
   const alert = () => error() ?? (props.setting.unavailable() ? "inactive" : null);
 
   return (
-    <View class="gap-2">
+    <View class="gap-2" testID={`${testID()}-row`}>
       <View class="flex-row flex-wrap items-center justify-between gap-x-3 gap-y-2">
-        <SectionHeading title={t("settings.shortcuts.quickTranslate")} class="w-1/3 min-w-32" />
+        <SectionHeading title={label()} class="w-1/3 min-w-32" />
         <View class="flex-1 basis-36 flex-row flex-wrap items-center gap-1">
           <If when={!recording()}>
             <If when={chord() !== null}>
-              <Badge testID="settings-quick-translate-shortcut" label={formatShortcut(chord()!)} />
+              <Badge testID={testID()} label={formatShortcut(chord()!)} />
             </If>
             <If when={chord() === null}>
-              <Text
-                testID="settings-quick-translate-shortcut-unassigned"
-                class="text-sm text-muted-foreground"
-              >
+              <Text testID={`${testID()}-unassigned`} class="text-sm text-muted-foreground">
                 {t("settings.shortcuts.unassigned")}
               </Text>
             </If>
           </If>
           <KeyboardButton
-            testID="settings-quick-translate-shortcut-record"
+            testID={`${testID()}-record`}
             ref={(node) => {
               editButton = node;
             }}
@@ -101,7 +103,7 @@ function QuickTranslateShortcutRow(props: { setting: QuickTranslateShortcutSetti
           <If when={recording()}>
             {/* Esc cancels from the recorder. Tab must skip this transient pointer action. */}
             <KeyboardButton
-              testID="settings-quick-translate-shortcut-cancel"
+              testID={`${testID()}-cancel`}
               focusable={false}
               size="sm"
               variant="ghost"
@@ -117,7 +119,7 @@ function QuickTranslateShortcutRow(props: { setting: QuickTranslateShortcutSetti
           <View class="w-16 shrink-0 flex-row items-center justify-end gap-1">
             <If when={chord() !== null}>
               <Button
-                testID="settings-quick-translate-shortcut-clear"
+                testID={`${testID()}-clear`}
                 size="icon-sm"
                 variant="ghost"
                 accessibilityLabel={clearLabel()}
@@ -128,15 +130,15 @@ function QuickTranslateShortcutRow(props: { setting: QuickTranslateShortcutSetti
                 <Icon name="delete" tone="muted-foreground" />
               </Button>
             </If>
-            <If when={chord() !== DEFAULT_QUICK_TRANSLATE_SHORTCUT}>
+            <If when={chord() !== definition().defaultChord}>
               <Button
-                testID="settings-quick-translate-shortcut-reset"
+                testID={`${testID()}-reset`}
                 size="icon-sm"
                 variant="ghost"
                 accessibilityLabel={resetLabel()}
                 tooltip={resetLabel()}
                 disabled={props.setting.busy()}
-                onPress={() => void save(DEFAULT_QUICK_TRANSLATE_SHORTCUT, true)}
+                onPress={() => void save(definition().defaultChord, true)}
               >
                 <Icon name="refresh" tone="muted-foreground" />
               </Button>
@@ -148,11 +150,7 @@ function QuickTranslateShortcutRow(props: { setting: QuickTranslateShortcutSetti
         <Text class="text-xs text-muted-foreground">{t("settings.shortcuts.recordingHint")}</Text>
       </If>
       <If when={alert() !== null}>
-        <Text
-          testID="settings-quick-translate-shortcut-error"
-          role="alert"
-          class="text-sm text-destructive"
-        >
+        <Text testID={`${testID()}-error`} role="alert" class="text-sm text-destructive">
           {t(`settings.shortcuts.${alert()}`)}
         </Text>
       </If>
@@ -163,13 +161,25 @@ function QuickTranslateShortcutRow(props: { setting: QuickTranslateShortcutSetti
 export function ShortcutsSection(props: {
   compact: boolean;
   platformOs: string;
-  quickTranslateShortcut?: QuickTranslateShortcutSetting;
+  shortcuts?: Record<TranslationShortcutId, TranslationShortcutSetting>;
 }) {
   return (
     <>
-      <If when={props.quickTranslateShortcut !== undefined}>
-        <Card testID="settings-quick-translate-shortcut-card" class={props.compact ? "p-5" : "p-6"}>
-          <QuickTranslateShortcutRow setting={props.quickTranslateShortcut!} />
+      <If when={props.shortcuts !== undefined}>
+        <Card
+          testID="settings-translation-shortcuts-card"
+          class={props.compact ? "gap-3 p-5" : "gap-4 p-6"}
+        >
+          <Each of={SHORTCUT_IDS} key={(id) => id}>
+            {(id, index) => (
+              <>
+                <If when={index() > 0}>
+                  <View class="h-px bg-border" />
+                </If>
+                <ShortcutRow id={id()} setting={props.shortcuts![id()]} />
+              </>
+            )}
+          </Each>
         </Card>
       </If>
       <If when={canUseDoubleCopy(props.platformOs)}>
