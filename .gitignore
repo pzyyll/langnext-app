@@ -1,4 +1,5 @@
 .nsh/
+.stitch/
 target/
 node_modules/
 .mise.local.toml
