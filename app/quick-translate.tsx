@@ -10,7 +10,7 @@ import {
   View,
   type ViewRef,
 } from "nsh";
-import { Application, GlobalShortcut, titleBar, Window } from "nsh/desktop";
+import { Application, currentWindow, GlobalShortcut, titleBar, Window } from "nsh/desktop";
 import { t } from "nsh/i18n";
 import { Button } from "../components/ui/button";
 import { Icon } from "../components/ui/icon";
@@ -166,6 +166,7 @@ const ROOT_BORDER_HEIGHT = 2;
 
 /** Renders popup contents inside `<Window>` so `titleBar()` reads this window's caption area. */
 function QuickTranslateWindowBody(props: { controller: QuickTranslateController }) {
+  const win = currentWindow();
   const headerHeight = signal(0);
   const contentHeight = signal(0);
   const footerHeight = signal(0);
@@ -183,6 +184,16 @@ function QuickTranslateWindowBody(props: { controller: QuickTranslateController 
     const state = props.controller.attachedWindow()?.state();
     return state?.visible === true && state.mode === "normal";
   });
+
+  // On Windows, show without activation, then focus only the popup once visible.
+  if (platform.os === "windows") {
+    let requestedFocus = false;
+    effect(() => {
+      if (requestedFocus || !win.state()?.visible) return;
+      requestedFocus = true;
+      win.focus();
+    });
+  }
 
   // A cancelled or failed selection puts the caret back on the action that started it.
   effect(() => {
@@ -349,7 +360,7 @@ export function QuickTranslateWindow(props: { controller: QuickTranslateControll
       maximizable={false}
       closable={true}
       focusable={true}
-      activate={true}
+      activate={platform.os !== "windows"}
       backdrop="none"
       shadow={true}
       defaultSize={props.controller.openingSize()}

@@ -71,7 +71,7 @@ test("desktop: quick window opens from production tray action, reuses existing w
   expect(app.window("quick-translate").state()).toBeNull();
 
   await app.press("id:harness-tray-quick-translate");
-  await app.waitUntil(() => app.window("quick-translate").state()?.visible === true);
+  await app.waitUntil(() => app.window("quick-translate").state()?.focused === true);
 
   const firstState = app.window("quick-translate").state()!;
   expect(firstState.visible).toBe(true);
@@ -1156,6 +1156,8 @@ test("double copy: shell seam delivers copied text to a newly mounted popup, tra
   await app.press("id:harness-trigger-double-copy-valid");
   // A copied draft arrives collapsed: the popup shows the source and results without taking edits.
   await app.waitFor("id:quick-translate-source-preview");
+  await app.waitUntil(() => app.window("quick-translate").state()?.focused === true);
+  expect(app.window("main").state()?.focused).toBe(false);
   expect(app.shows("id:quick-translate-source")).toBe(false);
   expect(app.texts()).toContain("Clipboard manual text");
   // Double Ctrl+C is an explicit translation request, even with Auto-translate off.
@@ -1309,6 +1311,8 @@ test("selection translate: waits for the selection, then translates once with Au
 
   await app.press("id:harness-finish-selection");
   await app.waitFor("id:quick-translate-source-preview");
+  await app.waitUntil(() => app.window("quick-translate").state()?.focused === true);
+  expect(app.window("main").state()?.focused).toBe(false);
   expect(app.texts()).toContain("Selected line one");
   expect(app.shows("id:quick-translate-source")).toBe(false);
   await app.waitUntil(() => app.requests().length === 1);
