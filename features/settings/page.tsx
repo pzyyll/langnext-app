@@ -11,6 +11,7 @@ import { language, languageError, selectLanguage, type LanguagePreference } from
 import { LanguageDetectionSection } from "./language-detection-section";
 import { OcrSection } from "./ocr-section";
 import { ShortcutsSection } from "./shortcuts-section";
+import { selectSilentLaunch, silentLaunch, silentLaunchError } from "./silent-launch";
 import type { TranslationShortcutId, TranslationShortcutSetting } from "./shortcuts";
 import { selectTransparency, transparency, transparencyError } from "./transparency";
 
@@ -103,19 +104,42 @@ function LanguageOption(props: { value: LanguagePreference; label: string }) {
 
 function GeneralSection(props: { compact: boolean }) {
   return (
-    <Card testID="settings-general-card" class={props.compact ? "gap-4 p-4" : "gap-5 p-6"}>
-      <SectionHeading title={t("settings.language.title")} />
-      <RadioGroup accessibilityLabel={t("settings.language.title")} class="flex-row gap-3">
-        <LanguageOption value="system" label={t("settings.language.system")} />
-        <LanguageOption value="en" label={t("settings.language.en")} />
-        <LanguageOption value="zh-CN" label={t("settings.language.zh-CN")} />
-      </RadioGroup>
-      <If when={languageError() !== null}>
-        <Text role="alert" class="text-sm text-destructive">
-          {languageError()}
+    <>
+      <Card testID="settings-general-card" class={props.compact ? "gap-4 p-4" : "gap-5 p-6"}>
+        <SectionHeading title={t("settings.language.title")} />
+        <RadioGroup accessibilityLabel={t("settings.language.title")} class="flex-row gap-3">
+          <LanguageOption value="system" label={t("settings.language.system")} />
+          <LanguageOption value="en" label={t("settings.language.en")} />
+          <LanguageOption value="zh-CN" label={t("settings.language.zh-CN")} />
+        </RadioGroup>
+        <If when={languageError() !== null}>
+          <Text role="alert" class="text-sm text-destructive">
+            {languageError()}
+          </Text>
+        </If>
+      </Card>
+
+      <Card testID="settings-silent-launch-card" class={props.compact ? "gap-2 p-2" : "gap-2 p-3"}>
+        <Switch
+          testID="settings-silent-launch-switch"
+          label={t("settings.silentLaunch.label")}
+          checked={silentLaunch()}
+          onChange={(checked) => void selectSilentLaunch(checked)}
+        />
+        <Text class="px-3 text-xs text-muted-foreground">
+          {t("settings.silentLaunch.description")}
         </Text>
-      </If>
-    </Card>
+        <If when={silentLaunchError() !== null}>
+          <Text
+            testID="settings-silent-launch-error"
+            role="alert"
+            class="px-3 pb-1 text-sm text-destructive"
+          >
+            {silentLaunchError()}
+          </Text>
+        </If>
+      </Card>
+    </>
   );
 }
 

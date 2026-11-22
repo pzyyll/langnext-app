@@ -1,4 +1,4 @@
-import { cleanup, effect, platform, signal, View } from "nsh";
+import { cleanup, effect, platform, signal, untracked, View } from "nsh";
 import { Application, currentWindow, titleBar, Tray, Window, type TrayOptions } from "nsh/desktop";
 import { t } from "nsh/i18n";
 import trayIcon from "../assets/logos/icon.svg";
@@ -11,6 +11,7 @@ import { ModelsPage } from "../features/models/page";
 import { PresetsPage } from "../features/presets/page";
 import { SettingsPage } from "../features/settings/page";
 import type { TranslationShortcutBinding } from "../features/settings/shortcuts";
+import { silentLaunch } from "../features/settings/silent-launch";
 import { transparency } from "../features/settings/transparency";
 import type { DoubleCopyBinding } from "../platform/quick-translate";
 import {
@@ -73,6 +74,13 @@ export function AppShell(props: AppShellProps = {}) {
   // tray's Exit quits, and the tray icon brings the window back.
   win.set({ closeOnPress: false });
   win.on("closePress", () => win.hide());
+  effect(() => {
+    // nsh.json opens the main window hidden: a normal launch shows it, and a
+    // silent one leaves it to the tray icon. Read once, so toggling the
+    // setting later never shows a window the user hid.
+    const silent = untracked(silentLaunch);
+    if (!silent) win.show();
+  });
 
   const page = signal<SidebarPage>("models");
   let activeLeaveGuard: NavigationLeaveGuard | null = null;

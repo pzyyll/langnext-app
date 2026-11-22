@@ -1,4 +1,5 @@
 import { mount } from "nsh";
+import { Window } from "nsh/desktop";
 import { initializeAiModules } from "./app/ai-setup";
 import { AppShell } from "./app/shell";
 import { loadSplitRailWidths } from "./components/layout/split-rail";
@@ -11,24 +12,33 @@ import { loadQuickTranslatePreferences } from "./features/quick-translate/prefer
 import { loadAppearance } from "./features/settings/appearance";
 import { loadLanguage } from "./features/settings/language";
 import { loadSelectionCopy } from "./features/settings/selection-copy";
+import { loadSilentLaunch } from "./features/settings/silent-launch";
 import { loadTransparency } from "./features/settings/transparency";
 
 async function startApp() {
   initializeAiModules();
-  await Promise.all([
-    loadAppearance(),
-    loadLanguage(),
-    loadSelectionCopy(),
-    loadTransparency(),
-    loadQuickTranslatePreferences(),
-    loadModelsState(),
-    presetsStore.load(),
-    loadSkippedNoticeDismissal(),
-    languageDetectionStore.load(),
-    ocrSettingsStore.load(),
-    loadSplitRailWidths(),
-  ]);
-  mount(AppShell);
+  try {
+    await Promise.all([
+      loadAppearance(),
+      loadLanguage(),
+      loadSelectionCopy(),
+      loadSilentLaunch(),
+      loadTransparency(),
+      loadQuickTranslatePreferences(),
+      loadModelsState(),
+      presetsStore.load(),
+      loadSkippedNoticeDismissal(),
+      languageDetectionStore.load(),
+      ocrSettingsStore.load(),
+      loadSplitRailWidths(),
+    ]);
+    mount(AppShell);
+  } catch (error) {
+    // nsh.json opens the main window hidden and the shell shows it: a failed
+    // start still shows it, so the app never stays invisible.
+    Window.get("main")?.show();
+    throw error;
+  }
 }
 
 void startApp();

@@ -4,6 +4,7 @@ import { LANGUAGE_DETECTION_STORAGE_KEY } from "../language-detection/settings";
 import { makeChannel, makeModel, makeSeedStorage } from "../models/__tests__/fixtures";
 import { baiduCredentialStorageKey, OCR_STORAGE_KEY } from "../ocr/settings";
 import { SELECTION_COPY_STORAGE_KEY } from "./selection-copy";
+import { SILENT_LAUNCH_STORAGE_KEY } from "./silent-launch";
 
 const APP_ENTRY = "../../App.tsx";
 const viewport = { width: 1040, height: 720, platform: "windows" as const };
@@ -44,8 +45,9 @@ test("settings ui: groups language under General and theme under Appearance in a
   expect(app.texts()).toContain("Application");
   expect(app.texts()).toContain("Integrations");
 
-  // General is active by default and displays Language only.
+  // General is active by default and displays Language and Silent launch.
   expect(app.shows("id:settings-general-card")).toBe(true);
+  expect(app.shows("id:settings-silent-launch-card")).toBe(true);
   expect(app.shows("id:language-system")).toBe(true);
   expect(app.shows("id:settings-theme-card")).toBe(false);
   expect(app.shows("id:theme-dark")).toBe(false);
@@ -79,6 +81,57 @@ test("settings ui: groups language under General and theme under Appearance in a
   expect(app.texts()).toContain("外观");
   expect(app.texts()).toContain("主题");
   expect(app.texts()).toContain("透明标题栏");
+});
+
+test("silent launch: saves the switch and starts the next launch in the background", async () => {
+  const app = await open(APP_ENTRY, { ...viewport, storage: { "settings.language": "en" } });
+  expect(app.window("main").state()?.visible).toBe(true);
+
+  await app.press("id:nav-settings");
+  await app.waitFor("id:settings-silent-launch-switch");
+  expect(app.texts()).toContain("Silent launch");
+  expect(app.texts()).toContain("Applies from the next launch.");
+  expect(app.storage()[SILENT_LAUNCH_STORAGE_KEY]).toBeUndefined();
+
+  await app.press("id:settings-silent-launch-switch");
+  await app.waitUntil(() => app.storage()[SILENT_LAUNCH_STORAGE_KEY] === "true");
+  // The switch only says what the next launch does: this window stays open.
+  expect(app.window("main").state()?.visible).toBe(true);
+
+  const silent = await open(APP_ENTRY, { ...viewport, storage: app.storage() });
+  expect(silent.window("main").state()?.visible).toBe(false);
+
+  await app.press("id:settings-silent-launch-switch");
+  await app.waitUntil(() => app.storage()[SILENT_LAUNCH_STORAGE_KEY] === "false");
+  const visible = await open(APP_ENTRY, { ...viewport, storage: app.storage() });
+  expect(visible.window("main").state()?.visible).toBe(true);
+});
+
+test("silent launch: a failed write keeps the saved state and can be retried", async () => {
+  let fail = true;
+  const saved: Record<string, string> = { "settings.language": "en" };
+  const app = await open(APP_ENTRY, {
+    ...viewport,
+    modules: {
+      nsh: {
+        "Storage.getItem": async (key: string) => saved[key] ?? null,
+        "Storage.setItem": async (key: string, value: string) => {
+          if (key === SILENT_LAUNCH_STORAGE_KEY && fail) throw new Error("Storage unavailable");
+          saved[key] = value;
+        },
+      },
+    },
+  });
+  await app.press("id:nav-settings");
+  await app.press("id:settings-silent-launch-switch");
+  await app.waitFor("id:settings-silent-launch-error");
+  expect(app.texts()).toContain("Could not save silent launch. Try again.");
+  expect(saved[SILENT_LAUNCH_STORAGE_KEY]).toBeUndefined();
+
+  fail = false;
+  await app.press("id:settings-silent-launch-switch");
+  await app.waitUntil(() => saved[SILENT_LAUNCH_STORAGE_KEY] === "true");
+  expect(app.shows("id:settings-silent-launch-error")).toBe(false);
 });
 
 test("settings ui: resizes the settings split divider and persists width independently", async () => {

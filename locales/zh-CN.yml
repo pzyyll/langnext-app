@@ -62,6 +62,10 @@ settings:
     en: English
     "zh-CN": 简体中文
     error: 无法保存语言设置。本次选择将在关闭应用前生效。
+  silentLaunch:
+    label: 静默启动
+    description: 下次启动时生效。
+    error: 无法保存静默启动设置，请重试。
   shortcuts:
     quickTranslate: 打开快速翻译
     screenshotTranslate: 截图翻译
