@@ -32,7 +32,7 @@ import plusIcon from "../../assets/icons/plus.svg";
 import refreshIcon from "../../assets/icons/refresh.svg";
 import scanningIcon from "../../assets/icons/icon-park-outline--scanning.svg";
 import searchIcon from "../../assets/icons/search.svg";
-import speakerOneIcon from "../../assets/icons/icon-park-outline--speaker-one.svg";
+import speakerOneIcon from "../../assets/icons/icon-park-outline--volume-notice.svg";
 import switchIcon from "../../assets/icons/switch.svg";
 import videoIcon from "../../assets/icons/video.svg";
 
