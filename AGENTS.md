@@ -11,8 +11,6 @@ My Translator is a desktop application built with:
 
 ## UI/UX
 
-Design docs: `@docs/ui/DESIGNE.md`
-
 - Icons:
   - [icon-park-outline](https://icon-sets.iconify.design/icon-park-outline/)
   - [icon-park-solid](https://icon-sets.iconify.design/icon-park-solid)
@@ -30,7 +28,7 @@ Design docs: `@docs/ui/DESIGNE.md`
 
 - Style controls and layout with `class` and Tailwind utilities first (`w-full`, `p-8`, `gap-7`, `text-sm`).
 - Use `style` only for values computed at run time: platform metrics (`titleBar()`), theme colors (`token()`), or animation. Say why in a comment when you do.
-- Avoid concrete pixel numbers (`16`, `824`, `max-w-[824px]`). Take the nearest scale step (`p-4`, `max-w-4xl`) before inventing an arbitrary value; if a number is genuinely required, define it in the design system (`theme.json`, `@docs/ui/DESIGNE.md`) and reuse it.
+- Avoid concrete pixel numbers (`16`, `824`, `max-w-[824px]`). Take the nearest scale step (`p-4`, `max-w-4xl`) before inventing an arbitrary value; if a number is genuinely required, define it in the design system (`theme.json`) and reuse it.
 
 ## Logging
 

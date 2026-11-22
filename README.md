@@ -89,8 +89,7 @@ Quick Translate runs in a compact floating panel (`420 × 360` points, available
 - **Windows support & opt-in defaults**: Global shortcut registration, mixed-DPI physical cursor anchor placement, and Raw Input (`RIDEV_INPUTSINK` keyboard-only) double-copy monitoring target Windows. Both double-copy activation and popup **Auto-translate** (`500 ms` debounce) default to **off**. Copied text translates as soon as the window shows it, whatever **Auto-translate** says; source and target languages are configured from the title-bar language menu, and typing, paste, and language changes translate on **Enter** (`Shift+Enter` for newlines) or that toggle.
 - **Data destinations & privacy**: Quick Translate preferences persist exclusively in NSH `Storage` under `quickTranslate.preferences.v1` (`doubleCopyEnabled`, `autoTranslate`, `sourceLanguage`, `targetLanguage`, and ordered `{ id, presetId, templateId, collapsed }` cards). Pin state, source drafts, translated outputs, error text, keystroke history, and API keys are never persisted there or logged. Provider keys stay in NSH `Storage`, and a DeepL preset's key is stored separately from its preset record under a non-secret reference. Text is sent only to the enabled preset cards the user added: their AI models or DeepL.
 
-See [system architecture](docs/specs/system-architecture.md) and
-[design system](docs/ui/DESIGNE.md) for the selected scope.
+See [system architecture](docs/specs/system-architecture.md) for the selected scope.
 
 ## Language detection
 
