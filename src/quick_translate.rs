@@ -838,7 +838,7 @@ fn handle_keyboard_input(
 
     let pair_id = session.latest_pair.fetch_add(1, Ordering::AcqRel) + 1;
     let settle_session = Arc::clone(session);
-    let _ = std::thread::Builder::new()
+    let settled = std::thread::Builder::new()
         .name("quick-translate-clip-settle".into())
         .spawn(move || {
             let has_valid_copy = settle_clipboard_copy(
@@ -862,6 +862,9 @@ fn handle_keyboard_input(
                 .signal
                 .send_latest(DoubleCopyEvent { has_valid_copy });
         });
+    if let Err(error) = settled {
+        log::warn!("Could not start the clipboard settle check for a double copy: {error}");
+    }
 }
 
 #[cfg(windows)]

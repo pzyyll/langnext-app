@@ -1,9 +1,12 @@
 import { signal, Storage } from "nsh";
 import { setLocale, t } from "nsh/i18n";
+import { createLogger } from "../../services/log";
 
 export type LanguagePreference = "system" | "en" | "zh-CN";
 
 const LANGUAGE_STORAGE_KEY = "settings.language";
+
+const log = createLogger("settings/language");
 const preference = signal<LanguagePreference>("system");
 const saveError = signal<string | null>(null);
 
@@ -26,7 +29,7 @@ export async function loadLanguage() {
     preference.set(value);
     applyPreference(value);
   } catch (error) {
-    console.warn("Could not load language settings.", error);
+    log.warn("Could not load language settings.", error);
   }
 }
 

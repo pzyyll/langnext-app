@@ -1,4 +1,5 @@
 import { batch, signal, Storage, windowSize } from "nsh";
+import { createLogger } from "../../services/log";
 
 export type SplitPageId = "models" | "presets" | "settings";
 
@@ -9,6 +10,8 @@ export const COMPACT_RAIL_WIDTH = 192;
 export const MAX_RAIL_WIDTH = 360;
 export const MIN_DETAIL_WIDTH = 400;
 const COMPACT_BREAKPOINT = 860;
+
+const log = createLogger("layout/split-rail");
 
 export const SPLIT_RAIL_STORAGE_KEYS: Record<SplitPageId, string> = {
   models: "split.models.railWidth",
@@ -78,7 +81,7 @@ export function createSplitRailStore(storage: SplitRailStorage) {
         settingsWidth.set(parseRailWidth(settingsRaw));
       });
     } catch (error) {
-      console.warn("Could not load split rail widths.", error);
+      log.warn("Could not load split rail widths.", error);
     }
   }
 
@@ -89,7 +92,7 @@ export function createSplitRailStore(storage: SplitRailStorage) {
     try {
       await storage.setItem(SPLIT_RAIL_STORAGE_KEYS[page], String(clamped));
     } catch (error) {
-      console.warn("Could not persist split rail width.", error);
+      log.warn("Could not persist split rail width.", error);
     }
   }
 

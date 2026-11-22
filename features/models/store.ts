@@ -4,6 +4,7 @@ import { ProviderProtocolError } from "../../modules/ai/contracts/errors";
 import type { DiscoveredRemoteModel } from "../../modules/ai/contracts/model";
 import { aiClient, type AiClientInput } from "../../modules/ai/runtime/client";
 import { aiRegistry } from "../../modules/ai/runtime/registry";
+import { createLogger } from "../../services/log";
 import { inspectBaseUrl } from "./connection";
 import {
   isEffectiveProtocolSupported,
@@ -31,6 +32,8 @@ export const PROVIDERS_STORAGE_KEY = "models.v2.providers";
 export const MODELS_STORAGE_KEY = "models.v2.items";
 export const CREDENTIAL_KEY_PREFIX = "models.v2.credentials.";
 const FILTER_KEY = "models.enabledFilter";
+
+const log = createLogger("models/store");
 
 export function credentialStorageKey(providerId: string): string {
   return `${CREDENTIAL_KEY_PREFIX}${providerId}`;
@@ -186,7 +189,7 @@ export async function setEnabledFilter(filter: ModelsEnabledFilter): Promise<voi
   try {
     await Storage.setItem(FILTER_KEY, filter);
   } catch (error) {
-    console.warn("Could not persist model filter.", error);
+    log.warn("Could not persist model filter.", error);
   }
 }
 

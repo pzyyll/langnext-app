@@ -1,4 +1,4 @@
-import { mount } from "nsh";
+import { mount, platform } from "nsh";
 import { Window } from "nsh/desktop";
 import { initializeAiModules } from "./app/ai-setup";
 import { AppShell } from "./app/shell";
@@ -16,8 +16,12 @@ import { loadLanguage } from "./features/settings/language";
 import { loadSelectionCopy } from "./features/settings/selection-copy";
 import { loadSilentLaunch } from "./features/settings/silent-launch";
 import { loadTransparency } from "./features/settings/transparency";
+import { createLogger, logFile } from "./services/log";
+
+const log = createLogger("app");
 
 async function startApp() {
+  log.info(`Started on ${platform.os}; logs go to ${logFile() ?? "the platform's log"}`);
   initializeAiModules();
   try {
     await cleanupTtsPlaybackFiles();

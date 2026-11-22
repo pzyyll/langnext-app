@@ -113,10 +113,13 @@ pub(crate) fn snapshot() -> Option<String> {
         ..GUITHREADINFO::default()
     };
     // SAFETY: `info.cbSize` is set, and the pointer stays valid for the call.
-    let focus = unsafe { GetGUIThreadInfo(thread_id, &mut info) }
-        .ok()
-        .map(|_| info.hwndFocus)
-        .unwrap_or_default();
+    let focus = match unsafe { GetGUIThreadInfo(thread_id, &mut info) } {
+        Ok(()) => info.hwndFocus,
+        Err(error) => {
+            log::debug!("Could not read the foreground thread's focused window: {error}");
+            HWND::default()
+        }
+    };
     Some(encode_target(foreground, focus))
 }
 
@@ -139,7 +142,14 @@ pub(crate) fn read_target(target: &str, allow_copy_fallback: bool) -> SelectionT
 
     let _apartment = match ComApartment::enter() {
         Ok(apartment) => apartment,
-        Err(_) => return keep_current(target, SelectionTextResult::unavailable()),
+        Err(error) => {
+            let reason = match error {
+                ApartmentError::WrongMode => "the thread already uses a single-threaded apartment",
+                ApartmentError::Failed => "COM could not start on the thread",
+            };
+            log::warn!("Selection read skipped: {reason}");
+            return keep_current(target, SelectionTextResult::unavailable());
+        }
     };
     let started = Instant::now();
     let result = match read_focused_selection(target, foreground, started, allow_copy_fallback) {

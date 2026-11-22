@@ -1,9 +1,12 @@
 import { signal, Storage } from "nsh";
 import { t } from "nsh/i18n";
+import { createLogger } from "../../services/log";
 
 export const TTS_STORAGE_KEY = "settings.tts.v1";
 export const TTS_CREDENTIAL_KEY_PREFIX = "settings.tts.credentials.";
 const STORAGE_VERSION = 1;
+
+const log = createLogger("tts/settings");
 
 /** Storage key for one Cloud TTS API key, addressed by its non-secret reference. */
 export function ttsCredentialStorageKey(credentialRef: string): string {
@@ -140,7 +143,7 @@ export function createTtsSettingsStore(storage: TtsSettingsStorage): TtsSettings
     try {
       await storage.removeItem(ttsCredentialStorageKey(credentialRef));
     } catch {
-      console.warn("Could not remove an unused Cloud TTS credential.");
+      log.warn("Could not remove an unused Cloud TTS credential.");
     }
   }
 

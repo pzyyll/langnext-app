@@ -48,6 +48,23 @@ The first NSH check or build generates editor types in `.nsh/`.
 Do not edit or commit that directory. Keep the NSH CLI and Rust crate versions
 aligned. pnpm provides development tools only; it is not the app runtime.
 
+## Logging
+
+App code logs through `createLogger` in `services/log.ts`; native code logs through the
+`log` crate. NSH writes every line to the app's rolling log and to the platform's log.
+
+- **File**: `logs/app.log` in the app data directory
+  (`%APPDATA%\com.dev.mytranslator\logs\app.log` on Windows). It rolls over at 5 MiB and
+  keeps three older files, `app.1.log` to `app.3.log`.
+- **Levels**: `warn` and `error` always reach the file, `info` from the app reaches it in
+  every build, and `debug` needs `RUST_LOG`. Raise it with `RUST_LOG=debug mise run dev`,
+  or limit it with `RUST_LOG=my-translator=debug`.
+- **Development**: `nsh run` (`mise run dev`) also prints every kept line to the terminal.
+- **Path**: `logFile()` (or `process.logFile`) returns the file's path, `null` where the
+  lines go to the platform's log only.
+- **Secrets**: never log API keys, credentials, selected or translated text, or request
+  bodies.
+
 ## Structure
 
 - `App.tsx`: Load settings and mount the application once.
@@ -56,6 +73,7 @@ aligned. pnpm provides development tools only; it is not the app runtime.
   `icon.svg` glyph the system tray draws.
 - `components/`: Styled controls built on NSH base components.
 - `features/settings/`: Appearance state and settings screen.
+- `services/`: The models.dev catalog client and the app's scoped logger.
 - `theme.json`: Semantic light and dark tokens from the design system.
 - `src/lib.rs`: Native export registration (`my-translator/native`) for Windows cursor monitor anchor lookup and Raw Input double-copy detection.
 - `platform/`: Cross-display popup placement helpers and thin wrapper over `my-translator/native`.

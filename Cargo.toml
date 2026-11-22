@@ -7,6 +7,7 @@ publish = false
 [workspace]
 
 [dependencies]
+log = "0.4"
 nsh-core = "=0.6.1"
 
 [target.'cfg(windows)'.dependencies]

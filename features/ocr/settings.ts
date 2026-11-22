@@ -1,9 +1,12 @@
 import { signal, Storage } from "nsh";
 import { t } from "nsh/i18n";
+import { createLogger } from "../../services/log";
 
 export const OCR_STORAGE_KEY = "settings.ocr.v3";
 export const BAIDU_CREDENTIAL_KEY_PREFIX = "settings.ocr.credentials.";
 const STORAGE_VERSION = 3;
+
+const log = createLogger("ocr/settings");
 
 /** Storage key for one Baidu credential pair, addressed by its non-secret reference. */
 export function baiduCredentialStorageKey(credentialRef: string): string {
@@ -302,7 +305,7 @@ export function createOcrSettingsStore(storage: OcrSettingsStorage): OcrSettings
     try {
       await storage.removeItem(baiduCredentialStorageKey(credentialRef));
     } catch {
-      console.warn("Could not remove an unused Baidu OCR credential.");
+      log.warn("Could not remove an unused Baidu OCR credential.");
     }
   }
 
