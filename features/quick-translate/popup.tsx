@@ -22,7 +22,7 @@ import { ProviderMark } from "../../modules/ai/ui/provider-mark";
 import { providerSettingsRegistry } from "../../modules/ai/ui/registry";
 import { modelsStore } from "../models/store";
 import type { TranslationPreset } from "../presets/types";
-import type { CardViewItem, QuickTranslateSession, SourceDetectionState } from "./session";
+import type { CardViewItem, QuickTranslateSession } from "./session";
 import { resolvePresetTemplate } from "./translate";
 
 /** What the OCR action reports while it runs, and after it stops. */
@@ -44,10 +44,6 @@ function buildTemplateItems(preset: TranslationPreset | null): SelectItem[] {
     value: tpl.id,
     title: tpl.name,
   }));
-}
-
-function resolveSourceDetectionLabel(state: SourceDetectionState): string | null {
-  return state.status === "detecting" ? t("quickTranslate.detectingLanguage") : null;
 }
 
 /** Shared icon-only retry trigger used across card failures, result actions, and preset reload. */
@@ -436,7 +432,6 @@ function PresetCardRow(props: PresetCardRowProps) {
 /** Compact Quick Translate popup body composed inside the floating window or standalone harness. */
 export function QuickTranslatePopup(props: QuickTranslatePopupProps) {
   const isComposing = signal(false);
-  const detectionLabel = () => resolveSourceDetectionLabel(props.session.sourceDetection());
   // TODO(https://github.com/longbridge/nsh/issues/2655): Restore "min-h-10" on all platforms
   // once the pinned NSH release aligns Windows input measurement with drawing.
   // Zero uses the font's natural line height in NSH 0.6.1.
@@ -495,11 +490,10 @@ export function QuickTranslatePopup(props: QuickTranslatePopupProps) {
 
   const ocrMessage = () => (props.ocrState ? props.ocrState().message : null);
   const ocrRecognizing = () => (props.ocrState ? props.ocrState().phase === "recognizing" : false);
-  // One bottom-left status slot serves OCR errors, active recognition, and source detection in priority order.
+  // One bottom-left status slot serves OCR errors and active recognition by priority.
   const showOcrError = () => ocrMessage() !== null;
   const showOcrBusy = () => !showOcrError() && ocrRecognizing();
-  const showSourceDetection = () => !showOcrError() && !showOcrBusy() && detectionLabel() !== null;
-  const hasToolbarStatus = () => showOcrError() || showOcrBusy() || showSourceDetection();
+  const hasToolbarStatus = () => showOcrError() || showOcrBusy();
   const hasSourceToolbar = () => hasSpeakableSource() || hasToolbarStatus();
 
   const renderSourceActions = (extraClass = "") => (
@@ -571,14 +565,6 @@ export function QuickTranslatePopup(props: QuickTranslatePopupProps) {
             class="min-w-0 flex-1 truncate text-xs text-muted-foreground"
           >
             {t("quickTranslate.ocrRecognizing")}
-          </Text>
-        </If>
-        <If when={showSourceDetection()}>
-          <Text
-            testID="quick-translate-source-detection"
-            class="min-w-0 flex-1 truncate text-xs text-muted-foreground"
-          >
-            {detectionLabel() ?? ""}
           </Text>
         </If>
       </View>

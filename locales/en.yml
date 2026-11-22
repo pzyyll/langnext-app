@@ -558,7 +558,7 @@ quickTranslate:
   expandCard: Expand card
   removeCard: Remove card
   translating: Translating…
-  detectingLanguage: Detecting language…
+  detectingLanguage: Detecting
   enableAutoTranslate: Enable automatic translation
   disableAutoTranslate: Disable automatic translation
   speak: Read aloud

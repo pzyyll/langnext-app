@@ -52,6 +52,9 @@ export function QuickTranslateLanguageBar(props: QuickTranslateLanguageBarProps)
     if (props.sourceLanguage !== AUTO_LANGUAGE) {
       return getLanguageLabel(props.sourceLanguage);
     }
+    if (props.sourceDetection.status === "detecting") {
+      return t("quickTranslate.detectingLanguage");
+    }
     if (props.sourceDetection.status === "detected") {
       return t("quickTranslate.autoDetectDetected", {
         language: getLanguageLabel(props.sourceDetection.language),

@@ -1158,6 +1158,9 @@ test("language resolution: one detection request serves both expanded cards", as
 
   await app.waitFor("id:quick-translate-source");
   await app.waitFor("id:quick-translate-card-card-2");
+  expect(
+    app.shows(`id:quick-translate-source-language >> text:${t("quickTranslate.autoDetect")}`),
+  ).toBe(true);
   expect(app.shows("id:quick-translate-source-detection")).toBe(false);
 
   await app.type("id:quick-translate-source", "Bonjour");
@@ -1165,11 +1168,18 @@ test("language resolution: one detection request serves both expanded cards", as
   await app.keyboard.press("enter");
   await app.waitUntil(() => app.texts().some((text) => text.includes("detects=1|")));
 
-  // Both cards wait on the same run: one detection and no translation traffic yet.
+  // Both cards wait on the same run: header source capsule shows Detecting while toolbar stays free of detection text.
   expect(app.texts().some((text) => text.startsWith("calls=0|"))).toBe(true);
   expect(requestsTo(app, TRANSLATE_URL)).toHaveLength(0);
   expect(app.texts()).toContain(t("quickTranslate.translating"));
-  expect(app.texts()).toContain(t("quickTranslate.detectingLanguage"));
+  expect(
+    app.shows(
+      `id:quick-translate-source-language >> text:${t("quickTranslate.detectingLanguage")}`,
+    ),
+  ).toBe(true);
+  expect(
+    app.shows(`id:quick-translate-source-toolbar >> text:${t("quickTranslate.detectingLanguage")}`),
+  ).toBe(false);
 
   await app.press("id:harness-resolve-language-fr");
   await app.waitUntil(() => requestsTo(app, TRANSLATE_URL).length === 2);
@@ -1304,15 +1314,23 @@ test("language resolution: the last consumer leaving aborts the shared detection
   await app.type("id:quick-translate-source", "Bonjour");
   await app.keyboard.press("enter");
   await app.waitUntil(() => app.texts().some((text) => text.includes("detects=1|")));
-  expect(app.texts()).toContain(t("quickTranslate.detectingLanguage"));
+  expect(
+    app.shows(
+      `id:quick-translate-source-language >> text:${t("quickTranslate.detectingLanguage")}`,
+    ),
+  ).toBe(true);
 
   await app.press("id:quick-translate-clear");
-  expect(app.shows("id:quick-translate-source-detection")).toBe(false);
+  expect(
+    app.shows(`id:quick-translate-source-language >> text:${t("quickTranslate.autoDetect")}`),
+  ).toBe(true);
   await app.waitUntil(() => app.texts().some((text) => text.includes("detectAborts=aborted-1")));
   await app.press("id:harness-resolve-language-fr");
   await app.wait(50);
 
-  expect(app.shows("id:quick-translate-source-detection")).toBe(false);
+  expect(
+    app.shows(`id:quick-translate-source-language >> text:${t("quickTranslate.autoDetect")}`),
+  ).toBe(true);
   expect(requestsTo(app, TRANSLATE_URL)).toHaveLength(0);
   expect(app.shows("id:quick-translate-result-text")).toBe(false);
   expect(app.shows("id:quick-translate-error")).toBe(false);
@@ -1333,11 +1351,18 @@ test("language resolution: retrying after a failure starts a new detection run",
   await app.waitUntil(() => app.texts().some((text) => text.includes("detects=1|")));
   await app.press("id:harness-resolve-language-und");
   await app.waitFor("id:quick-translate-retry");
-  expect(app.shows("id:quick-translate-source-detection")).toBe(false);
+  expect(
+    app.shows(`id:quick-translate-source-language >> text:${t("quickTranslate.autoDetect")}`),
+  ).toBe(true);
   expect(requestsTo(app, TRANSLATE_URL)).toHaveLength(0);
 
   await app.press("id:quick-translate-retry");
   await app.waitUntil(() => app.texts().some((text) => text.includes("detects=2|")));
+  expect(
+    app.shows(
+      `id:quick-translate-source-language >> text:${t("quickTranslate.detectingLanguage")}`,
+    ),
+  ).toBe(true);
   await app.press("id:harness-resolve-language-fr");
   await app.waitFor("id:quick-translate-result-text");
 
@@ -1348,7 +1373,6 @@ test("language resolution: retrying after a failure starts a new detection run",
       `id:quick-translate-source-language >> text:${t("quickTranslate.autoDetectDetected", { language: getLanguageLabel("fr") })}`,
     ),
   ).toBe(true);
-  expect(app.shows("id:quick-translate-source-detection")).toBe(false);
 });
 
 const DEEPL_URL = "POST https://api-free.deepl.com/v2/translate";
@@ -1635,7 +1659,7 @@ test("DeepL card: a DeepL-only action translates without AI models", async () =>
   expect(requestsTo(app, DETECT_URL)).toHaveLength(0);
 });
 
-test("quick popup: renders OCR status and source detection in one bottom-left toolbar slot by priority", async () => {
+test("quick popup: separates header detection status from OCR status priority in the bottom-left toolbar", async () => {
   const app = await open(POPUP_HARNESS, {
     ...viewport,
     storage: seedAutoPair([false], "ocr-status"),
@@ -1649,20 +1673,15 @@ test("quick popup: renders OCR status and source detection in one bottom-left to
     false,
   );
   expect(app.shows("id:quick-translate-source-toolbar >> id:quick-translate-ocr-busy")).toBe(false);
-  expect(
-    app.shows("id:quick-translate-source-toolbar >> id:quick-translate-source-detection"),
-  ).toBe(false);
+  expect(app.shows("id:quick-translate-source-detection")).toBe(false);
 
   // 1. Empty input with OCR error shows the alert in the bottom-left toolbar.
   await app.press("id:harness-ocr-error");
   await app.waitFor("id:quick-translate-source-toolbar >> id:quick-translate-ocr-status");
   expect(app.texts()).toContain(t("ocr.failure.malformedAnswer"));
   expect(app.shows("id:quick-translate-source-toolbar >> id:quick-translate-ocr-busy")).toBe(false);
-  expect(
-    app.shows("id:quick-translate-source-toolbar >> id:quick-translate-source-detection"),
-  ).toBe(false);
 
-  // 2. Clear OCR status, enter source text, and start language detection (active status renders).
+  // 2. Clear OCR status, enter source text, and start language detection in the header capsule.
   await app.press("id:harness-ocr-idle");
   expect(app.shows("id:quick-translate-source-toolbar >> id:quick-translate-ocr-status")).toBe(
     false,
@@ -1670,28 +1689,29 @@ test("quick popup: renders OCR status and source detection in one bottom-left to
   await app.type("id:quick-translate-source", "Bonjour");
   await app.keyboard.press("enter");
   await app.waitUntil(() => app.texts().some((text) => text.includes("detects=1|")));
-  await app.waitFor("id:quick-translate-source-toolbar >> id:quick-translate-source-detection");
-  expect(app.texts()).toContain(t("quickTranslate.detectingLanguage"));
+  await app.waitFor(
+    `id:quick-translate-source-language >> text:${t("quickTranslate.detectingLanguage")}`,
+  );
+  expect(app.shows("id:quick-translate-source-detection")).toBe(false);
 
-  // 3. Entering OCR recognizing replaces source detection inside the same toolbar.
+  // 3. Entering OCR recognizing leaves header Detecting intact and shows busy below source.
   await app.press("id:harness-ocr-recognizing");
   await app.waitFor("id:quick-translate-source-toolbar >> id:quick-translate-ocr-busy");
   expect(app.texts()).toContain(t("quickTranslate.ocrRecognizing"));
   expect(
-    app.shows("id:quick-translate-source-toolbar >> id:quick-translate-source-detection"),
-  ).toBe(false);
+    app.shows(
+      `id:quick-translate-source-language >> text:${t("quickTranslate.detectingLanguage")}`,
+    ),
+  ).toBe(true);
   expect(app.shows("id:quick-translate-source-toolbar >> id:quick-translate-ocr-status")).toBe(
     false,
   );
 
-  // 4. Entering OCR error replaces busy and keeps detection hidden.
+  // 4. Entering OCR error replaces busy inside the source toolbar.
   await app.press("id:harness-ocr-error");
   await app.waitFor("id:quick-translate-source-toolbar >> id:quick-translate-ocr-status");
   expect(app.texts()).toContain(t("ocr.failure.malformedAnswer"));
   expect(app.shows("id:quick-translate-source-toolbar >> id:quick-translate-ocr-busy")).toBe(false);
-  expect(
-    app.shows("id:quick-translate-source-toolbar >> id:quick-translate-source-detection"),
-  ).toBe(false);
 
   // 5. Collapsing the source input keeps the OCR alert and speech placeholder visible.
   await app.press("id:quick-translate-collapse-source");
@@ -1704,9 +1724,8 @@ test("quick popup: renders OCR status and source detection in one bottom-left to
   );
   expect(app.texts()).toContain(t("ocr.failure.malformedAnswer"));
 
-  // 6. Returning OCR to idle restores the detecting status while unresolved, then resolution updates header capsule only.
+  // 6. Returning OCR to idle clears the alert, and resolution updates only the header capsule.
   await app.press("id:harness-ocr-idle");
-  await app.waitFor("id:quick-translate-source-toolbar >> id:quick-translate-source-detection");
   expect(app.shows("id:quick-translate-source-toolbar >> id:quick-translate-ocr-status")).toBe(
     false,
   );
@@ -1759,13 +1778,17 @@ test("quick popup: swap button swaps explicit or auto-detected languages and ign
   await app.type("id:quick-translate-source", "Bonjour");
   await app.keyboard.press("enter");
   await app.waitUntil(() => app.texts().some((text) => text.includes("detects=1|")));
+  expect(
+    app.shows(
+      `id:quick-translate-source-language >> text:${t("quickTranslate.detectingLanguage")}`,
+    ),
+  ).toBe(true);
   await app.press("id:harness-resolve-language-fr");
   await app.waitUntil(() =>
     app.shows(
       `id:quick-translate-source-language >> text:${t("quickTranslate.autoDetectDetected", { language: getLanguageLabel("fr") })}`,
     ),
   );
-  expect(app.shows("id:quick-translate-source-detection")).toBe(false);
   expect(app.enabled("id:quick-translate-swap-languages")).toBe(true);
 
   await app.press("id:quick-translate-swap-languages");
