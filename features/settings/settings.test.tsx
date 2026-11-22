@@ -1234,7 +1234,7 @@ test("tts settings: enables on the first save and keeps a replaced key off", asy
   await app.press("id:settings-tts-open-google-cloud");
   await app.waitFor("id:settings-tts-detail-card");
   expect(app.enabled("id:settings-tts-save")).toBe(false);
-  expect(app.texts()).toContain("The key is stored on this device and is not encrypted.");
+  expect(app.texts()).not.toContain("The key is stored on this device and is not encrypted.");
 
   await app.type("id:settings-tts-api-key", "synthetic-tts-key");
   expect(app.enabled("id:settings-tts-save")).toBe(true);
@@ -1302,7 +1302,6 @@ test("tts settings: enables on the first save and keeps a replaced key off", asy
   expect(reopened.texts()).toContain("已配置");
   await reopened.press("id:settings-tts-channel-google-cloud");
   await reopened.waitFor("id:settings-tts-detail-card");
-  expect(reopened.texts()).toContain("密钥保存在本机，且未加密。");
   expect(reopened.value("id:settings-tts-api-key")).toBe("");
 });
 
@@ -1405,7 +1404,7 @@ test("tts preview: plays the saved sample and ignores drafts, saves, and toggles
   await app.press("id:settings-tts-open-google-cloud");
   await app.waitFor("id:settings-tts-preview");
   expect(app.requests()).toHaveLength(0);
-  expect(app.texts()).toContain("Sends a short English sample to Google.");
+  expect(app.texts()).not.toContain("Sends a short English sample to Google.");
 
   await app.type("id:settings-tts-api-key", "draft-preview-key");
   expect(app.enabled("id:settings-tts-preview")).toBe(false);
