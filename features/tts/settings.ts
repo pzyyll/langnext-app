@@ -335,8 +335,14 @@ export function createTtsSettingsStore(storage: TtsSettingsStorage): TtsSettings
             current.azure = { ...current.azure, enabled: false };
           }
         }
-        if (channel === "azure") current.azure = { ...target, enabled };
-        else current.googleCloud = { ...target, enabled };
+        if (channel === "azure") {
+          if (current.azure === null) return failure("storage_write_failed");
+          current.azure = { ...current.azure, enabled };
+        } else if (current.googleCloud === null) {
+          return failure("storage_write_failed");
+        } else {
+          current.googleCloud = { ...current.googleCloud, enabled };
+        }
         return persistRecord(current);
       }),
   };

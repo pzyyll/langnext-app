@@ -276,7 +276,7 @@ function ChannelDetail(props: {
   effect(() => {
     if (props.channel !== "azure" || regionTouched) return;
     const saved = ttsSettingsStore.savedBinding("azure");
-    regionDraft.set(saved === null ? "" : saved.region);
+    regionDraft.set(saved?.channel === "azure" ? saved.region : "");
   });
 
   effect(() => {
@@ -289,7 +289,7 @@ function ChannelDetail(props: {
   const regionDirty = () => {
     if (props.channel !== "azure") return false;
     const saved = ttsSettingsStore.savedBinding("azure");
-    if (saved === null) return regionDraft().trim().length > 0;
+    if (saved?.channel !== "azure") return regionDraft().trim().length > 0;
     return regionDraft().trim() !== saved.region;
   };
   const previewLabel = () => {

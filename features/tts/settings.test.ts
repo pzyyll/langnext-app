@@ -414,7 +414,9 @@ test("tts store: a first Azure save on an empty store becomes the active channel
     region: "westus2",
   });
   expect(saved.ok).toBe(true);
-  if (!saved.ok) throw new Error("expected the first Azure save to succeed");
+  if (!saved.ok || saved.binding.channel !== "azure") {
+    throw new Error("expected the first Azure save to succeed");
+  }
   expect(store.activeBinding()).toEqual(saved.binding);
   expect(saved.binding.enabled).toBe(true);
   expect(saved.binding.region).toBe("westus2");

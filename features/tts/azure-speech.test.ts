@@ -397,12 +397,14 @@ test("azure speech tts: cancellation and timeout return no audio", async () => {
   expect(earlyHarness.requests).toHaveLength(0);
 
   const controller = new AbortController();
-  let release: ((response: HttpResponseLike) => void) | null = null;
+  const pendingResponse: { release: ((response: HttpResponseLike) => void) | null } = {
+    release: null,
+  };
   const requests: { signal: AbortSignal }[] = [];
   const fetchImpl: FetchLike = async (_url, init) => {
     requests.push({ signal: init.signal });
     return new Promise<HttpResponseLike>((resolve) => {
-      release = resolve;
+      pendingResponse.release = resolve;
       const timer = setTimeout(() => resolve(bytesResponse(MP3)), 200);
       init.signal.addEventListener("abort", () => {
         clearTimeout(timer);
@@ -419,7 +421,7 @@ test("azure speech tts: cancellation and timeout return no audio", async () => {
   ]);
   expect(cancelled).toEqual({ status: "cancelled" });
   expect(requests[0]?.signal.aborted).toBe(true);
-  release?.(bytesResponse(MP3));
+  pendingResponse.release?.(bytesResponse(MP3));
 
   let bodyTimer: ReturnType<typeof setTimeout> | null = null;
   const stalled = createHarness(() => {
