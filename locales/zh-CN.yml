@@ -701,7 +701,6 @@ quickTranslate:
   speakInvalidText: 这段文字含有 Azure 语音无法朗读的字符。
   speakSending: 将这段文字发送到 %{name}。
   speakChooseSource: 请先选择源语言。
-  speakTranslateFirst: 请先翻译，以便确定源语言。
   speakUnsupported: 此语言没有 Google Cloud 语音合成的语音。
   speakVoiceUnavailable: 该语言已保存的语音已不可用。请在设置中重新选择。
   speakVoiceNeedsSettings: 当前 Google 语音家族中没有此语言的语音。请在设置中选择语音。

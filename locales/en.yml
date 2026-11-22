@@ -701,7 +701,6 @@ quickTranslate:
   speakInvalidText: This text contains characters Azure Speech cannot read.
   speakSending: Sends this text to %{name}.
   speakChooseSource: Choose a source language.
-  speakTranslateFirst: Translate first so the source language can be detected.
   speakUnsupported: This language has no Google Cloud Text-to-Speech voice.
   speakVoiceUnavailable: The saved voice for this language is no longer available. Choose another voice in Settings.
   speakVoiceNeedsSettings: No voice for this language is in the chosen Google voice family. Choose a voice in Settings.

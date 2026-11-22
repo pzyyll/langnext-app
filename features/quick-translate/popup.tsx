@@ -21,8 +21,8 @@ import { Select, type SelectItem } from "../../components/ui/select";
 import { Textarea } from "../../components/ui/textarea";
 import { ProviderMark } from "../../modules/ai/ui/provider-mark";
 import { providerSettingsRegistry } from "../../modules/ai/ui/registry";
-import { languageDetectionStore } from "../language-detection/settings";
-import { AUTO_LANGUAGE, type LanguageId } from "../presets/languages";
+import { languageResolutionErrorMessage } from "../language-detection/messages";
+import { AUTO_LANGUAGE, type LanguageId, type SourceLanguageId } from "../presets/languages";
 import { modelsStore } from "../models/store";
 import type { TranslationPreset } from "../presets/types";
 import { synthesizeSpeech } from "../tts/channels";
@@ -535,7 +535,7 @@ export function QuickTranslatePopup(props: QuickTranslatePopupProps) {
   const resultSpeechErrors = signal<Readonly<Record<string, string>>>({});
   const speechPhase = signal<"idle" | "loading" | "playing">("idle");
   const speechOwner = signal<
-    | { kind: "source"; text: string; language: string }
+    | { kind: "source"; text: string; selection: SourceLanguageId }
     | { kind: "result"; cardId: string; text: string; language: string }
     | null
   >(null);
@@ -577,15 +577,7 @@ export function QuickTranslatePopup(props: QuickTranslatePopupProps) {
   effect(() => {
     const owner = speechOwner();
     if (owner?.kind !== "source" || speechPhase() === "idle") return;
-    const selected = props.session.sourceLanguage();
-    const detected = props.session.sourceDetection();
-    const effective =
-      selected === AUTO_LANGUAGE
-        ? detected.status === "detected"
-          ? detected.language
-          : ""
-        : selected;
-    if (owner.text !== sourceText() || owner.language !== `${selected}:${effective}`) {
+    if (owner.text !== sourceText() || owner.selection !== props.session.sourceLanguage()) {
       cancelSpeech();
     }
   });
@@ -630,11 +622,11 @@ export function QuickTranslatePopup(props: QuickTranslatePopupProps) {
 
   const runSpeech = async (input: {
     owner:
-      | { kind: "source"; text: string; language: string }
+      | { kind: "source"; text: string; selection: SourceLanguageId }
       | { kind: "result"; cardId: string; text: string; language: string };
     text: string;
+    /** Null asks for an Automatic source detection before synthesis. */
     language: LanguageId | null;
-    unresolvedAuto: "choose-source" | "translate-first" | null;
     report: (message: string | null) => void;
   }) => {
     const token = ++speechToken;
@@ -647,11 +639,33 @@ export function QuickTranslatePopup(props: QuickTranslatePopupProps) {
     speechOwner.set(input.owner);
     speechPhase.set("loading");
     input.report(null);
-    const prepared = await prepareQuickSpeech({
-      text: input.text,
-      language: input.language,
-      unresolvedAuto: input.unresolvedAuto,
-    });
+    if (!speakEnabled()) {
+      finishSpeech(token);
+      input.report(t("quickTranslate.speakOff"));
+      return;
+    }
+    let language = input.language;
+    if (language === null) {
+      const detected = await props.session.detectSourceLanguage(controller.signal);
+      if (!mountedSpeech(token)) return;
+      if (controller.signal.aborted || detected === null) {
+        finishSpeech(token);
+        return;
+      }
+      if (!detected.ok) {
+        finishSpeech(token);
+        if (detected.code !== "cancelled") {
+          input.report(
+            detected.code === "unconfigured"
+              ? t("quickTranslate.speakChooseSource")
+              : languageResolutionErrorMessage(detected.code),
+          );
+        }
+        return;
+      }
+      language = detected.language;
+    }
+    const prepared = await prepareQuickSpeech({ text: input.text, language });
     if (!mountedSpeech(token)) return;
     if (!prepared.ok) {
       finishSpeech(token);
@@ -696,24 +710,10 @@ export function QuickTranslatePopup(props: QuickTranslatePopupProps) {
 
   const speakSource = () => {
     const selected = props.session.sourceLanguage();
-    const detected = props.session.sourceDetection();
-    const language =
-      selected === AUTO_LANGUAGE
-        ? detected.status === "detected"
-          ? detected.language
-          : null
-        : selected;
-    const unresolvedAuto =
-      language === null
-        ? languageDetectionStore.enabledDetectors().length === 0
-          ? ("choose-source" as const)
-          : ("translate-first" as const)
-        : null;
     void runSpeech({
-      owner: { kind: "source", text: sourceText(), language: `${selected}:${language ?? ""}` },
+      owner: { kind: "source", text: sourceText(), selection: selected },
       text: sourceText(),
-      language,
-      unresolvedAuto,
+      language: selected === AUTO_LANGUAGE ? null : selected,
       report: (message) => sourceSpeechError.set(message),
     });
   };
@@ -730,7 +730,6 @@ export function QuickTranslatePopup(props: QuickTranslatePopupProps) {
       },
       text: card.result.text,
       language: card.result.targetLanguage,
-      unresolvedAuto: null,
       report: (message) => setResultSpeechError(cardId, message),
     });
   };

@@ -1351,6 +1351,33 @@ test("language resolution: a collapsed card neither starts nor joins the run", a
   expect(app.texts().some((text) => text.includes("detects=1|"))).toBe(true);
 });
 
+test("language resolution: a later card expand reuses the detection of the same input", async () => {
+  const app = await open(POPUP_HARNESS, {
+    ...viewport,
+    storage: seedAutoPair([false, true], "language-resolution"),
+    network: {
+      [TRANSLATE_URL]: { status: 200, body: { choices: [{ message: { content: "译文" } }] } },
+    },
+  });
+
+  await app.waitFor("id:quick-translate-source");
+  await app.waitFor("id:quick-translate-card-card-2");
+  await app.type("id:quick-translate-source", "Bonjour");
+  await app.keyboard.press("enter");
+  await app.waitUntil(() => app.texts().some((text) => text.includes("detects=1|")));
+  await app.press("id:harness-resolve-language-fr");
+  await app.waitUntil(() => requestsTo(app, TRANSLATE_URL).length === 1);
+  await app.waitFor("id:quick-translate-result-text");
+
+  // The collapsed card starts later on the same input: no second detector request.
+  await app.press("id:quick-translate-card-card-2 >> id:quick-translate-collapse");
+  await app.waitUntil(() => requestsTo(app, TRANSLATE_URL).length === 2);
+  await app.waitFor("id:quick-translate-card-card-2 >> id:quick-translate-result-text");
+
+  expect(app.texts().some((text) => text.startsWith("calls=2|"))).toBe(true);
+  expect(app.texts().some((text) => text.includes("detects=1|"))).toBe(true);
+});
+
 test("language resolution: blocked detection shows the same recovery text on every card without translation traffic", async () => {
   const app = await open(POPUP_HARNESS, {
     ...viewport,
@@ -2162,7 +2189,7 @@ test("quick tts: refuses a disabled channel, an unsupported language, and unreso
   expect(unresolved.requests()).toHaveLength(0);
 });
 
-test("quick tts: resolved Auto uses the detected source and the card's stored target", async () => {
+test("quick tts: reading an Automatic source detects once and translation reuses it", async () => {
   const app = await open(POPUP_HARNESS, {
     ...viewport,
     storage: {
@@ -2179,37 +2206,44 @@ test("quick tts: resolved Auto uses the detected source and the card's stored ta
   });
   await app.waitFor("id:quick-translate-source");
   await app.type("id:quick-translate-source", "Bonjour");
+
+  // Reading waits for the source detection, then speaks in the detected language.
   await app.press("id:quick-translate-speak-source");
-  await app.waitFor("id:quick-translate-speak-source-error");
-  expect(app.texts()).toContain(t("quickTranslate.speakTranslateFirst"));
-  expect(app.requests().some((request) => request.url === GOOGLE_CLOUD_TTS_URL)).toBe(false);
-
-  await app.keyboard.press("enter");
+  await app.waitUntil(() => app.texts().some((text) => text.includes("detects=1|")));
   await app.press("id:harness-resolve-language-fr");
-  await app.waitFor("id:quick-translate-card-card-1 >> id:quick-translate-speak-result");
-  expect(app.requests().some((request) => request.url === GOOGLE_CLOUD_TTS_URL)).toBe(false);
-
-  await app.press("id:quick-translate-card-card-1 >> id:quick-translate-speak-result");
   await app.waitUntil(() => app.requests().some((request) => request.url === GOOGLE_CLOUD_TTS_URL));
-  const resultSpeech = app.requests().find((request) => request.url === GOOGLE_CLOUD_TTS_URL)!;
+  const sourceSpeech = app.requests().find((request) => request.url === GOOGLE_CLOUD_TTS_URL)!;
+  expect(JSON.parse(sourceSpeech.body ?? "").input.text).toBe("Bonjour");
+  expect(ttsVoice(sourceSpeech.body)).toEqual({ languageCode: "fr-FR", name: "fr-FR-Standard-F" });
+  expect(
+    app.shows(
+      `id:quick-translate-source-language >> text:${t("quickTranslate.autoDetectDetected", { language: getLanguageLabel("fr") })}`,
+    ),
+  ).toBe(true);
+
+  // The translation of the same input reuses the detection.
+  await app.keyboard.press("enter");
+  await app.waitFor("id:quick-translate-result-text");
+  expect(app.texts().some((text) => text.includes("detects=1|"))).toBe(true);
+  expect(requestsTo(app, TRANSLATE_URL)).toHaveLength(1);
+  const body = JSON.parse(requestsTo(app, TRANSLATE_URL)[0]!.body!) as {
+    messages: Array<{ content: string }>;
+  };
+  expect(body.messages[0]!.content).toContain(getLanguageLabel("fr"));
+  expect(body.messages[0]!.content).toContain(getLanguageLabel("zh"));
+
+  // A result reads in its own target language without another detection.
+  await app.press("id:quick-translate-card-card-1 >> id:quick-translate-speak-result");
+  await app.waitUntil(
+    () => app.requests().filter((request) => request.url === GOOGLE_CLOUD_TTS_URL).length === 2,
+  );
+  const resultSpeech = app.requests().filter((request) => request.url === GOOGLE_CLOUD_TTS_URL)[1]!;
   expect(JSON.parse(resultSpeech.body ?? "").input.text).toBe("\u8bd1\u6587");
   expect(ttsVoice(resultSpeech.body)).toEqual({
     languageCode: "cmn-CN",
     name: "cmn-CN-Standard-A",
   });
-
-  await app.press("id:quick-translate-speak-source");
-  await app.waitUntil(
-    () => app.requests().filter((request) => request.url === GOOGLE_CLOUD_TTS_URL).length === 2,
-  );
-  const sourceSpeech = app.requests().filter((request) => request.url === GOOGLE_CLOUD_TTS_URL)[1]!;
-  expect(JSON.parse(sourceSpeech.body ?? "").input.text).toBe("Bonjour");
-  expect(ttsVoice(sourceSpeech.body)).toEqual({ languageCode: "fr-FR", name: "fr-FR-Standard-F" });
-
-  await app.press("id:quick-translate-target-language");
-  await app.waitFor(`role:option[${getLanguageLabel("en")}]`);
-  await app.press(`role:option[${getLanguageLabel("en")}]`);
-  expect(app.requests().filter((request) => request.url === GOOGLE_CLOUD_TTS_URL)).toHaveLength(2);
+  expect(app.texts().some((text) => text.includes("detects=1|"))).toBe(true);
 });
 
 test("quick tts: a later speaker replaces a delayed request, and Stop closes playback", async () => {
