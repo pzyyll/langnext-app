@@ -128,9 +128,10 @@ settings:
     moveDown: Move backup %{index} down
     removeBackup: Remove backup %{index}
     nativeLanguage: Native language
+    nativeLanguageHelp: With an Automatic target, other languages are translated into your native language.
     preferredTranslation: Translate my native language into
+    preferredTranslationHelp: With an Automatic target, your native language is translated into the selected language.
     preferenceUnset: Not set
-    help: When the target is set to Automatic, text in other languages is translated into your native language. Text in your native language is translated into the language selected above.
     error:
       storageReadFailed: Could not read the saved language detection settings.
       storageMalformed: The saved language detection settings are unreadable.

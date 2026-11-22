@@ -8,6 +8,17 @@ import { SILENT_LAUNCH_STORAGE_KEY } from "./silent-launch";
 
 const APP_ENTRY = "../../App.tsx";
 const viewport = { width: 1040, height: 720, platform: "windows" as const };
+const LANGUAGE_DETECTION_HELP = {
+  en: {
+    native: "With an Automatic target, other languages are translated into your native language.",
+    preferred:
+      "With an Automatic target, your native language is translated into the selected language.",
+  },
+  zh: {
+    native: "目标语言设为自动时，非母语内容译为母语。",
+    preferred: "目标语言设为自动时，母语内容译为所选的语言。",
+  },
+};
 
 /** One saved OCR record; either service can carry its own configuration. */
 function ocrRecord(options: {
@@ -560,9 +571,13 @@ test("language detection: localizes labels and help text in both languages", asy
   expect(app.texts()).toContain("Off");
   expect(app.texts()).toContain("Native language");
   expect(app.texts()).toContain("Translate my native language into");
-  expect(app.texts()).toContain(
-    "When the target is set to Automatic, text in other languages is translated into your native language. Text in your native language is translated into the language selected above.",
-  );
+
+  // The mapping rule lives in the field labels' tooltips, not in a help line.
+  expect(app.texts()).not.toContain(LANGUAGE_DETECTION_HELP.en.native);
+  await app.hover("id:settings-detection-native-language-label");
+  await app.waitUntil(() => app.texts().includes(LANGUAGE_DETECTION_HELP.en.native));
+  await app.hover("id:settings-detection-preferred-language-label");
+  await app.waitUntil(() => app.texts().includes(LANGUAGE_DETECTION_HELP.en.preferred));
 
   // The detector list carries every mode, with the saved one selected.
   await app.press("id:settings-detection-mode");
@@ -578,7 +593,11 @@ test("language detection: localizes labels and help text in both languages", asy
   expect(app.texts()).toContain("关闭");
   expect(app.texts()).toContain("母语");
   expect(app.texts()).toContain("母语译为");
-  expect(app.texts()).toContain("目标语言设为自动时，非母语译为母语，母语译为上方指定的语言。");
+  expect(app.texts()).not.toContain(LANGUAGE_DETECTION_HELP.zh.native);
+  await app.hover("id:settings-detection-native-language-label");
+  await app.waitUntil(() => app.texts().includes(LANGUAGE_DETECTION_HELP.zh.native));
+  await app.hover("id:settings-detection-preferred-language-label");
+  await app.waitUntil(() => app.texts().includes(LANGUAGE_DETECTION_HELP.zh.preferred));
 });
 
 test("ocr settings: saves and restores the image-capable model", async () => {

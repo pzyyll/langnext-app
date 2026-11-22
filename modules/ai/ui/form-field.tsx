@@ -1,8 +1,11 @@
 import { Text, View, type JSX } from "nsh";
+import { buildTooltip } from "../../../components/ui/tooltip";
 
 interface FormFieldProps {
   label: string;
   labelAction?: JSX.Element;
+  labelTestID?: string;
+  tooltip?: string;
   hint?: string | null;
   error?: string | null;
   class?: string;
@@ -14,7 +17,16 @@ export function FormField(props: FormFieldProps) {
   return (
     <View class={`gap-1.5 ${props.class ?? ""}`}>
       <View class="min-h-5 flex-row items-center justify-between gap-2">
-        <Text class="text-xs font-medium text-foreground">{props.label}</Text>
+        <Text
+          testID={props.labelTestID}
+          accessibilityDescription={props.tooltip}
+          tooltip={
+            props.tooltip ? buildTooltip(props.tooltip, "top", { align: "start" }) : undefined
+          }
+          class="text-xs font-medium text-foreground"
+        >
+          {props.label}
+        </Text>
         <If when={props.labelAction !== undefined}>{props.labelAction}</If>
       </View>
       {props.children}

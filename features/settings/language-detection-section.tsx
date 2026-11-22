@@ -371,6 +371,8 @@ export function LanguageDetectionSection(props: LanguageDetectionSectionProps) {
         <FormField
           class={props.compact ? "" : "min-w-0 flex-1"}
           label={t("settings.languageDetection.nativeLanguage")}
+          labelTestID="settings-detection-native-language-label"
+          tooltip={t("settings.languageDetection.nativeLanguageHelp")}
         >
           <Select
             testID="settings-detection-native-language"
@@ -384,6 +386,8 @@ export function LanguageDetectionSection(props: LanguageDetectionSectionProps) {
         <FormField
           class={props.compact ? "" : "min-w-0 flex-1"}
           label={t("settings.languageDetection.preferredTranslation")}
+          labelTestID="settings-detection-preferred-language-label"
+          tooltip={t("settings.languageDetection.preferredTranslationHelp")}
         >
           <Select
             testID="settings-detection-preferred-language"
@@ -395,10 +399,6 @@ export function LanguageDetectionSection(props: LanguageDetectionSectionProps) {
           />
         </FormField>
       </View>
-
-      <Text testID="settings-detection-help" class="text-xs text-muted-foreground">
-        {t("settings.languageDetection.help")}
-      </Text>
 
       <If when={error() !== null}>
         <Text testID="settings-detection-error" role="alert" class="text-sm text-destructive">

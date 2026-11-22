@@ -128,9 +128,10 @@ settings:
     moveDown: 下移备用模型 %{index}
     removeBackup: 移除备用模型 %{index}
     nativeLanguage: 母语
+    nativeLanguageHelp: 目标语言设为自动时，非母语内容译为母语。
     preferredTranslation: 母语译为
+    preferredTranslationHelp: 目标语言设为自动时，母语内容译为所选的语言。
     preferenceUnset: 未设置
-    help: 目标语言设为自动时，非母语译为母语，母语译为上方指定的语言。
     error:
       storageReadFailed: 无法读取已保存的语言检测设置。
       storageMalformed: 已保存的语言检测设置无法解析。
