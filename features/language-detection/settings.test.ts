@@ -1,10 +1,10 @@
 import { expect, test } from "nsh/test";
 import {
   createLanguageDetectionSettingsStore,
-  DEFAULT_LANGUAGE_DETECTION_SETTINGS,
   LANGUAGE_DETECTION_STORAGE_KEY,
-  type LanguageDetectionSettings,
+  type LanguageDetectionPreferences,
   type LanguageDetectionSettingsStorage,
+  type LanguageDetectorKind,
 } from "./settings";
 
 function createMemoryStorage(initial: Record<string, string> = {}) {
@@ -43,59 +43,199 @@ function createMemoryStorage(initial: Record<string, string> = {}) {
   };
 }
 
-function makeSettings(
-  overrides: Partial<LanguageDetectionSettings> = {},
-): LanguageDetectionSettings {
-  return {
-    mode: "ai",
-    modelIds: ["primary", "backup-b", "backup-a"],
-    nativeLanguage: "zh",
-    preferredTranslationLanguage: "en",
-    ...overrides,
-  };
+function detectionRecord(
+  options: {
+    order?: readonly LanguageDetectorKind[];
+    enabled?: Partial<Record<LanguageDetectorKind, boolean>>;
+    modelId?: string | null;
+    nativeLanguage?: string | null;
+    preferredTranslationLanguage?: string | null;
+  } = {},
+): string {
+  const ai =
+    options.modelId === undefined || options.modelId === null ? null : { modelId: options.modelId };
+  return JSON.stringify({
+    version: 2,
+    order: options.order ?? ["ai", "google"],
+    enabled: {
+      ai: options.enabled?.ai ?? ai !== null,
+      google: options.enabled?.google ?? false,
+    },
+    ai,
+    nativeLanguage: options.nativeLanguage ?? null,
+    preferredTranslationLanguage: options.preferredTranslationLanguage ?? null,
+  });
 }
 
-test("detection settings: keeps the saved mode, model order, and language preferences", async () => {
+const PREFERENCES: LanguageDetectionPreferences = {
+  nativeLanguage: "zh",
+  preferredTranslationLanguage: "en",
+};
+
+test("detection settings: starts with both detectors disabled in the default order", async () => {
   const mem = createMemoryStorage();
-  const store1 = createLanguageDetectionSettingsStore(mem.storage);
+  const store = createLanguageDetectionSettingsStore(mem.storage);
 
-  expect(store1.settings()).toEqual(DEFAULT_LANGUAGE_DETECTION_SETTINGS);
-  expect(store1.loadError()).toBeNull();
+  expect(store.detectorOrder()).toEqual(["ai", "google"]);
+  expect(store.isEnabled("ai")).toBe(false);
+  expect(store.isEnabled("google")).toBe(false);
+  expect(store.savedAiBinding()).toBeNull();
+  expect(store.enabledDetectors()).toEqual([]);
+  expect(store.snapshot()).toEqual({
+    detectors: [],
+    nativeLanguage: null,
+    preferredTranslationLanguage: null,
+  });
+  expect(store.loadError()).toBeNull();
 
-  await store1.load();
-  expect(store1.loadError()).toBeNull();
-
-  const result = await store1.save(makeSettings());
-  expect(result.ok).toBe(true);
-  expect(store1.settings()).toEqual(makeSettings());
-
-  const store2 = createLanguageDetectionSettingsStore(mem.storage);
-  await store2.load();
-  expect(store2.loadError()).toBeNull();
-  expect(store2.settings()).toEqual(makeSettings());
-  expect(store2.settings().modelIds).toEqual(["primary", "backup-b", "backup-a"]);
-
-  const raw = JSON.parse(mem.backing[LANGUAGE_DETECTION_STORAGE_KEY]!);
-  expect(raw.version).toBe(1);
-  expect(raw.mode).toBe("ai");
-  expect(raw.modelIds).toEqual(["primary", "backup-b", "backup-a"]);
-  expect(raw.nativeLanguage).toBe("zh");
-  expect(raw.preferredTranslationLanguage).toBe("en");
+  await store.load();
+  expect(store.loadError()).toBeNull();
+  expect(store.detectorOrder()).toEqual(["ai", "google"]);
+  expect(store.enabledDetectors()).toEqual([]);
+  expect(mem.getSetCalls()).toBe(0);
 });
 
-test("detection settings: starts disabled with no model and no preferences", async () => {
+test("detection settings: saving the AI model enables the detector and persists the v2 record", async () => {
   const mem = createMemoryStorage();
   const store = createLanguageDetectionSettingsStore(mem.storage);
   await store.load();
 
-  expect(store.loadError()).toBeNull();
-  expect(store.settings()).toEqual({
-    mode: "off",
-    modelIds: [],
+  const result = await store.saveAiModel("m-1");
+  expect(result.ok).toBe(true);
+  if (result.ok) expect(result.binding).toEqual({ kind: "ai", modelId: "m-1" });
+
+  expect(store.savedAiBinding()).toEqual({ kind: "ai", modelId: "m-1" });
+  expect(store.isEnabled("ai")).toBe(true);
+  expect(store.isEnabled("google")).toBe(false);
+  expect(store.enabledDetectors()).toEqual([{ kind: "ai", modelId: "m-1" }]);
+
+  expect(JSON.parse(mem.backing[LANGUAGE_DETECTION_STORAGE_KEY]!)).toEqual({
+    version: 2,
+    order: ["ai", "google"],
+    enabled: { ai: true, google: false },
+    ai: { modelId: "m-1" },
     nativeLanguage: null,
     preferredTranslationLanguage: null,
   });
+
+  const reopened = createLanguageDetectionSettingsStore(mem.storage);
+  await reopened.load();
+  expect(reopened.loadError()).toBeNull();
+  expect(reopened.savedAiBinding()).toEqual({ kind: "ai", modelId: "m-1" });
+  expect(reopened.enabledDetectors()).toEqual([{ kind: "ai", modelId: "m-1" }]);
+});
+
+test("detection settings: editing a disabled AI detector keeps it disabled", async () => {
+  const mem = createMemoryStorage();
+  const store = createLanguageDetectionSettingsStore(mem.storage);
+  await store.load();
+
+  await store.saveAiModel("m-1");
+  const disabled = await store.setEnabled("ai", false);
+  expect(disabled.ok).toBe(true);
+
+  const edited = await store.saveAiModel("m-2");
+  expect(edited.ok).toBe(true);
+  expect(store.savedAiBinding()).toEqual({ kind: "ai", modelId: "m-2" });
+  expect(store.isEnabled("ai")).toBe(false);
+  expect(store.enabledDetectors()).toEqual([]);
+  expect(JSON.parse(mem.backing[LANGUAGE_DETECTION_STORAGE_KEY]!).enabled.ai).toBe(false);
+});
+
+test("detection settings: Google enables without configuration and an unconfigured AI detector refuses to enable", async () => {
+  const mem = createMemoryStorage();
+  const store = createLanguageDetectionSettingsStore(mem.storage);
+  await store.load();
+
+  const google = await store.setEnabled("google", true);
+  expect(google.ok).toBe(true);
+  expect(store.isEnabled("google")).toBe(true);
+  expect(store.enabledDetectors()).toEqual([{ kind: "google" }]);
+
+  const ai = await store.setEnabled("ai", true);
+  expect(ai.ok).toBe(false);
+  if (!ai.ok) expect(ai.key).toBe("detector_unconfigured");
+  expect(store.isEnabled("ai")).toBe(false);
+
+  await store.saveAiModel("m-1");
+  expect(store.isEnabled("ai")).toBe(true);
+  expect(store.enabledDetectors()).toEqual([{ kind: "ai", modelId: "m-1" }, { kind: "google" }]);
+});
+
+test("detection settings: reorders detectors and keeps end moves inert", async () => {
+  const mem = createMemoryStorage();
+  const store = createLanguageDetectionSettingsStore(mem.storage);
+  await store.load();
+  await store.saveAiModel("m-1");
+  await store.setEnabled("google", true);
+
+  const moved = await store.moveDetector("google", "up");
+  expect(moved.ok).toBe(true);
+  expect(store.detectorOrder()).toEqual(["google", "ai"]);
+  expect(store.enabledDetectors()).toEqual([{ kind: "google" }, { kind: "ai", modelId: "m-1" }]);
+
+  const writes = mem.getSetCalls();
+  expect((await store.moveDetector("google", "up")).ok).toBe(true);
+  expect((await store.moveDetector("ai", "down")).ok).toBe(true);
+  expect(mem.getSetCalls()).toBe(writes);
+
+  const reopened = createLanguageDetectionSettingsStore(mem.storage);
+  await reopened.load();
+  expect(reopened.detectorOrder()).toEqual(["google", "ai"]);
+});
+
+test("detection settings: saves and restores the language preferences", async () => {
+  const mem = createMemoryStorage();
+  const store = createLanguageDetectionSettingsStore(mem.storage);
+  await store.load();
+
+  const saved = await store.savePreferences(PREFERENCES);
+  expect(saved.ok).toBe(true);
+  expect(store.snapshot()).toEqual({
+    detectors: [],
+    nativeLanguage: "zh",
+    preferredTranslationLanguage: "en",
+  });
+
+  const raw = JSON.parse(mem.backing[LANGUAGE_DETECTION_STORAGE_KEY]!);
+  expect(raw.nativeLanguage).toBe("zh");
+  expect(raw.preferredTranslationLanguage).toBe("en");
+
+  const reopened = createLanguageDetectionSettingsStore(mem.storage);
+  await reopened.load();
+  expect(reopened.loadError()).toBeNull();
+  expect(reopened.snapshot()).toEqual({
+    detectors: [],
+    nativeLanguage: "zh",
+    preferredTranslationLanguage: "en",
+  });
+});
+
+test("detection settings: rejects invalid and identical preferences without writing", async () => {
+  const mem = createMemoryStorage();
+  const store = createLanguageDetectionSettingsStore(mem.storage);
+  await store.load();
+
+  const automatic = await store.savePreferences({
+    nativeLanguage: "auto" as unknown as LanguageDetectionPreferences["nativeLanguage"],
+    preferredTranslationLanguage: null,
+  });
+  expect(automatic.ok).toBe(false);
+  if (!automatic.ok) expect(automatic.key).toBe("preference_invalid");
+
+  const identical = await store.savePreferences({
+    nativeLanguage: "zh",
+    preferredTranslationLanguage: "zh",
+  });
+  expect(identical.ok).toBe(false);
+  if (!identical.ok) expect(identical.key).toBe("preferences_identical");
+
   expect(mem.getSetCalls()).toBe(0);
+  expect(store.snapshot()).toEqual({
+    detectors: [],
+    nativeLanguage: null,
+    preferredTranslationLanguage: null,
+  });
 });
 
 test("detection settings: keeps malformed storage untouched and reports a load error", async () => {
@@ -104,18 +244,19 @@ test("detection settings: keeps malformed storage untouched and reports a load e
   const store = createLanguageDetectionSettingsStore(mem.storage);
   await store.load();
 
-  expect(store.settings()).toEqual(DEFAULT_LANGUAGE_DETECTION_SETTINGS);
   expect(store.loadError()?.key).toBe("storage_malformed");
   expect(store.loadError()?.message).toBeTruthy();
+  expect(store.enabledDetectors()).toEqual([]);
+  expect(store.detectorOrder()).toEqual(["ai", "google"]);
   expect(mem.backing[LANGUAGE_DETECTION_STORAGE_KEY]).toBe(raw);
   expect(mem.getSetCalls()).toBe(0);
 });
 
 test("detection settings: keeps an unsupported version untouched and reports a load error", async () => {
   const raw = JSON.stringify({
-    version: 2,
+    version: 1,
     mode: "ai",
-    modelIds: ["primary"],
+    modelIds: ["m-1"],
     nativeLanguage: "zh",
     preferredTranslationLanguage: "en",
   });
@@ -123,72 +264,100 @@ test("detection settings: keeps an unsupported version untouched and reports a l
   const store = createLanguageDetectionSettingsStore(mem.storage);
   await store.load();
 
-  expect(store.settings()).toEqual(DEFAULT_LANGUAGE_DETECTION_SETTINGS);
   expect(store.loadError()?.key).toBe("storage_unsupported_version");
+  expect(store.enabledDetectors()).toEqual([]);
   expect(mem.backing[LANGUAGE_DETECTION_STORAGE_KEY]).toBe(raw);
   expect(mem.getSetCalls()).toBe(0);
 });
 
-test("detection settings: rejects an invalid stored shape without enabling detection", async () => {
-  const raw = JSON.stringify({
-    version: 1,
-    mode: "ai",
-    modelIds: ["primary", "primary"],
-    nativeLanguage: "auto",
-    preferredTranslationLanguage: null,
-  });
+test("detection settings: rejects an enabled AI detector without a saved model", async () => {
+  const raw = detectionRecord({ enabled: { ai: true }, modelId: null });
   const mem = createMemoryStorage({ [LANGUAGE_DETECTION_STORAGE_KEY]: raw });
   const store = createLanguageDetectionSettingsStore(mem.storage);
   await store.load();
 
-  expect(store.settings().mode).toBe("off");
   expect(store.loadError()?.key).toBe("storage_malformed");
-});
-
-test("detection settings: rejects a non-string model ID instead of promoting a backup", async () => {
-  const raw = JSON.stringify({ version: 1, ...makeSettings(), modelIds: [42, "backup"] });
-  const mem = createMemoryStorage({ [LANGUAGE_DETECTION_STORAGE_KEY]: raw });
-  const store = createLanguageDetectionSettingsStore(mem.storage);
-  await store.load();
-
-  expect(store.settings()).toEqual(DEFAULT_LANGUAGE_DETECTION_SETTINGS);
-  expect(store.loadError()?.key).toBe("storage_malformed");
-  expect(mem.backing[LANGUAGE_DETECTION_STORAGE_KEY]).toBe(raw);
+  expect(store.enabledDetectors()).toEqual([]);
+  expect(store.savedAiBinding()).toBeNull();
   expect(mem.getSetCalls()).toBe(0);
 });
 
-test("detection settings: reports a read failure without enabling detection", async () => {
+test("detection settings: rejects a malformed order, enabled map, or AI binding", async () => {
+  const records = [
+    JSON.stringify({ version: 2, order: ["ai"], enabled: { ai: false, google: false }, ai: null }),
+    JSON.stringify({
+      version: 2,
+      order: ["ai", "ai"],
+      enabled: { ai: false, google: false },
+      ai: null,
+    }),
+    JSON.stringify({
+      version: 2,
+      order: ["ai", "google"],
+      enabled: { ai: false, google: "no" },
+      ai: null,
+    }),
+    JSON.stringify({
+      version: 2,
+      order: ["ai", "google"],
+      enabled: { ai: false, google: false },
+      ai: { modelId: 42 },
+    }),
+  ];
+
+  for (const raw of records) {
+    const mem = createMemoryStorage({ [LANGUAGE_DETECTION_STORAGE_KEY]: raw });
+    const store = createLanguageDetectionSettingsStore(mem.storage);
+    await store.load();
+    expect(store.loadError()?.key).toBe("storage_malformed");
+    expect(store.detectorOrder()).toEqual(["ai", "google"]);
+    expect(mem.backing[LANGUAGE_DETECTION_STORAGE_KEY]).toBe(raw);
+    expect(mem.getSetCalls()).toBe(0);
+  }
+});
+
+test("detection settings: reports a read failure and keeps detection off", async () => {
   const mem = createMemoryStorage();
   mem.setGetError(new Error("ERR_NSH_IO"));
   const store = createLanguageDetectionSettingsStore(mem.storage);
   await store.load();
 
-  expect(store.settings()).toEqual(DEFAULT_LANGUAGE_DETECTION_SETTINGS);
   expect(store.loadError()?.key).toBe("storage_read_failed");
+  expect(store.enabledDetectors()).toEqual([]);
+});
+
+test("detection settings: rejects a blank model ID without writing", async () => {
+  const mem = createMemoryStorage();
+  const store = createLanguageDetectionSettingsStore(mem.storage);
+  await store.load();
+
+  const blank = await store.saveAiModel("   ");
+  expect(blank.ok).toBe(false);
+  if (!blank.ok) expect(blank.key).toBe("model_id_blank");
+  expect(mem.getSetCalls()).toBe(0);
+  expect(store.savedAiBinding()).toBeNull();
 });
 
 test("detection settings: keeps the last saved snapshot when a write fails", async () => {
   const mem = createMemoryStorage();
   const store = createLanguageDetectionSettingsStore(mem.storage);
   await store.load();
-
-  const saved = await store.save(makeSettings());
-  expect(saved.ok).toBe(true);
-  const snapshot = store.settings();
+  await store.saveAiModel("m-1");
+  const savedOrder = store.detectorOrder();
 
   mem.setSetError(new Error("ERR_NSH_QUOTA_EXCEEDED"));
-  const failed = await store.save(makeSettings({ mode: "off", modelIds: [] }));
+  const failed = await store.moveDetector("ai", "down");
 
   expect(failed.ok).toBe(false);
-  if (failed.ok) return;
-  expect(failed.key).toBe("storage_write_failed");
-  expect(failed.message).toBeTruthy();
-  expect(failed.message.includes("ERR_NSH_QUOTA_EXCEEDED")).toBe(false);
-  expect(store.settings()).toEqual(snapshot);
+  if (!failed.ok) expect(failed.key).toBe("storage_write_failed");
+  expect(store.detectorOrder()).toEqual(savedOrder);
+  expect(store.savedAiBinding()).toEqual({ kind: "ai", modelId: "m-1" });
 
-  const reloaded = createLanguageDetectionSettingsStore(mem.storage);
-  await reloaded.load();
-  expect(reloaded.settings()).toEqual(snapshot);
+  mem.setSetError(null);
+  const reopened = createLanguageDetectionSettingsStore(mem.storage);
+  await reopened.load();
+  expect(reopened.detectorOrder()).toEqual(savedOrder);
+  expect(reopened.savedAiBinding()).toEqual({ kind: "ai", modelId: "m-1" });
 });
 
 test("detection settings: serializes writes so a late failure cannot replace a saved snapshot", async () => {
@@ -206,129 +375,41 @@ test("detection settings: serializes writes so a late failure cannot replace a s
     if (writeCount === 1) await firstWriteGate;
   });
 
-  const first = store.save(makeSettings({ modelIds: ["primary"] }));
-  const second = store.save(makeSettings({ modelIds: ["primary", "backup-a"] }));
+  const first = store.saveAiModel("m-1");
+  const second = store.savePreferences(PREFERENCES);
   releaseFirstWrite();
 
   const [firstResult, secondResult] = await Promise.all([first, second]);
   expect(firstResult.ok).toBe(true);
   expect(secondResult.ok).toBe(true);
   expect(mem.getSetCalls()).toBe(2);
-  expect(store.settings().modelIds).toEqual(["primary", "backup-a"]);
-
-  const raw = JSON.parse(mem.backing[LANGUAGE_DETECTION_STORAGE_KEY]!);
-  expect(raw.modelIds).toEqual(["primary", "backup-a"]);
-});
-
-test("detection settings: rejects blank and duplicate model IDs", async () => {
-  const mem = createMemoryStorage();
-  const store = createLanguageDetectionSettingsStore(mem.storage);
-  await store.load();
-
-  const blank = await store.save(makeSettings({ modelIds: ["primary", "  "] }));
-  expect(blank.ok).toBe(false);
-  if (!blank.ok) expect(blank.key).toBe("model_id_blank");
-
-  const duplicate = await store.save(
-    makeSettings({ modelIds: ["primary", "backup-a", "primary"] }),
-  );
-  expect(duplicate.ok).toBe(false);
-  if (!duplicate.ok) expect(duplicate.key).toBe("model_id_duplicate");
-
-  expect(mem.getSetCalls()).toBe(0);
-  expect(store.settings()).toEqual(DEFAULT_LANGUAGE_DETECTION_SETTINGS);
-});
-
-test("detection settings: requires a primary model in AI mode", async () => {
-  const mem = createMemoryStorage();
-  const store = createLanguageDetectionSettingsStore(mem.storage);
-  await store.load();
-
-  const result = await store.save(makeSettings({ modelIds: [] }));
-  expect(result.ok).toBe(false);
-  if (!result.ok) expect(result.key).toBe("primary_model_required");
-  expect(mem.getSetCalls()).toBe(0);
-
-  const offResult = await store.save(makeSettings({ mode: "off", modelIds: [] }));
-  expect(offResult.ok).toBe(true);
-  expect(store.settings().mode).toBe("off");
-});
-
-test("detection settings: rejects automatic and identical language preferences", async () => {
-  const mem = createMemoryStorage();
-  const store = createLanguageDetectionSettingsStore(mem.storage);
-  await store.load();
-
-  const automaticNative = await store.save(
-    makeSettings({
-      nativeLanguage: "auto" as unknown as LanguageDetectionSettings["nativeLanguage"],
-    }),
-  );
-  expect(automaticNative.ok).toBe(false);
-  if (!automaticNative.ok) expect(automaticNative.key).toBe("preference_invalid");
-
-  const automaticPreferred = await store.save(
-    makeSettings({
-      preferredTranslationLanguage:
-        "auto" as unknown as LanguageDetectionSettings["preferredTranslationLanguage"],
-    }),
-  );
-  expect(automaticPreferred.ok).toBe(false);
-  if (!automaticPreferred.ok) expect(automaticPreferred.key).toBe("preference_invalid");
-
-  const identical = await store.save(
-    makeSettings({ nativeLanguage: "zh", preferredTranslationLanguage: "zh" }),
-  );
-  expect(identical.ok).toBe(false);
-  if (!identical.ok) expect(identical.key).toBe("preferences_identical");
-
-  expect(mem.getSetCalls()).toBe(0);
-});
-
-test("detection settings: saves Google detection without any model", async () => {
-  const mem = createMemoryStorage();
-  const store = createLanguageDetectionSettingsStore(mem.storage);
-  await store.load();
-
-  const result = await store.save({
-    mode: "google",
-    modelIds: [],
+  expect(store.savedAiBinding()).toEqual({ kind: "ai", modelId: "m-1" });
+  expect(store.snapshot()).toEqual({
+    detectors: [{ kind: "ai", modelId: "m-1" }],
     nativeLanguage: "zh",
-    preferredTranslationLanguage: null,
+    preferredTranslationLanguage: "en",
   });
-  expect(result.ok).toBe(true);
-
-  const reopened = createLanguageDetectionSettingsStore(mem.storage);
-  await reopened.load();
-  expect(reopened.loadError()).toBeNull();
-  expect(reopened.settings()).toEqual({
-    mode: "google",
-    modelIds: [],
-    nativeLanguage: "zh",
-    preferredTranslationLanguage: null,
-  });
-  expect(JSON.parse(mem.backing[LANGUAGE_DETECTION_STORAGE_KEY]!).mode).toBe("google");
 });
 
-test("detection settings: accepts one unset preference and a disabled mode with saved models", async () => {
-  const mem = createMemoryStorage();
+test("detection settings: loads a disabled saved model and one unset preference", async () => {
+  const mem = createMemoryStorage({
+    [LANGUAGE_DETECTION_STORAGE_KEY]: detectionRecord({
+      order: ["google", "ai"],
+      enabled: { ai: false, google: false },
+      modelId: "m-1",
+      nativeLanguage: "zh",
+    }),
+  });
   const store = createLanguageDetectionSettingsStore(mem.storage);
   await store.load();
 
-  const onePreference = await store.save(
-    makeSettings({ nativeLanguage: "zh", preferredTranslationLanguage: null }),
-  );
-  expect(onePreference.ok).toBe(true);
-  expect(store.settings().preferredTranslationLanguage).toBeNull();
-
-  const offWithModels = await store.save(
-    makeSettings({ mode: "off", nativeLanguage: null, preferredTranslationLanguage: null }),
-  );
-  expect(offWithModels.ok).toBe(true);
-  expect(store.settings()).toEqual({
-    mode: "off",
-    modelIds: ["primary", "backup-b", "backup-a"],
-    nativeLanguage: null,
+  expect(store.loadError()).toBeNull();
+  expect(store.detectorOrder()).toEqual(["google", "ai"]);
+  expect(store.savedAiBinding()).toEqual({ kind: "ai", modelId: "m-1" });
+  expect(store.enabledDetectors()).toEqual([]);
+  expect(store.snapshot()).toEqual({
+    detectors: [],
+    nativeLanguage: "zh",
     preferredTranslationLanguage: null,
   });
 });

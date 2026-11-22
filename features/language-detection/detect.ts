@@ -8,7 +8,7 @@ import {
 import { DEFAULT_HTTP_TIMEOUT_MS } from "../../modules/ai/runtime/http";
 import { resolveSavedModelRequest, type SavedModelRequestResolution } from "../models/store";
 import { isLanguageId, LANGUAGE_IDS, type LanguageId } from "../presets/languages";
-import type { LanguageDetectionSettings } from "./settings";
+import type { LanguageDetectorBinding } from "./settings";
 
 /** Maximum sample length in Unicode code points, so one sample never costs unbounded tokens. */
 const MAX_SAMPLE_CODE_POINTS = 2048;
@@ -53,7 +53,7 @@ export interface DetectLanguageOptions {
 }
 
 /**
- * Free Google Translate endpoint used by the `google` mode. It is undocumented and has no
+ * Free Google Translate endpoint used by the `google` detector. It is undocumented and has no
  * support contract: no key, per-IP rate limits, and a plain-text refusal page under abuse.
  * The sample travels in a form body, so it never appears in a URL.
  */
@@ -186,70 +186,86 @@ export function parseDetectionAnswer(raw: string): Answer {
   return { kind: "invalid" };
 }
 
+/** Asks one saved model for the sample's language; an unavailable model answers without a request. */
+async function detectWithAiModel(
+  modelId: string,
+  sample: string,
+  options: DetectLanguageOptions,
+): Promise<LanguageDetectionResult> {
+  const resolveModel = options.resolveSavedModelRequest ?? resolveSavedModelRequest;
+  const runGeneration = options.generateText ?? aiClient.generateText;
+
+  let raw: string;
+  try {
+    const resolved = await resolveModel(modelId);
+    if (options.signal?.aborted) return failure("cancelled");
+    if (!resolved.ok) return failure("no_eligible_model");
+
+    raw = await runGeneration(
+      resolved.connection,
+      {
+        modelId: resolved.modelKey,
+        system: DETECTION_SYSTEM_MESSAGE,
+        user: sample,
+        // One literal ID needs no reasoning; providers that cannot turn it off ignore the hint.
+        disableReasoning: true,
+      },
+      { signal: options.signal, timeoutMs: options.timeoutMs },
+    );
+  } catch (error) {
+    if (
+      options.signal?.aborted ||
+      (error instanceof ProviderProtocolError && error.kind === "cancelled")
+    ) {
+      return failure("cancelled");
+    }
+    return failure("failed");
+  }
+  if (options.signal?.aborted) return failure("cancelled");
+
+  const answer = parseDetectionAnswer(raw);
+  if (answer.kind === "language") return { ok: true, language: answer.language };
+  if (answer.kind === "undetermined") return failure("unknown_language");
+  return failure("failed");
+}
+
 /**
- * Detects the dominant language with the saved detector.
+ * Detects the dominant language with the enabled detectors in priority order.
  *
- * `ai` tries each saved model in order: only a valid supported ID wins, and `und`, unavailable
- * models, and provider failures fall through. `google` asks the free Google Translate endpoint
- * once. Neither mode falls back to the other, so no sample reaches a service the user did not
- * choose.
+ * Each detector runs one bounded sample: AI resolves its saved model and accepts one supported
+ * ID, Google asks the free Translate endpoint once. A failure, an ineligible model, or `und`
+ * falls through to the next enabled detector. Cancellation stops the chain, and neither
+ * detector runs when none is enabled.
  */
 export async function detectLanguage(
   text: string,
-  settings: LanguageDetectionSettings,
+  detectors: readonly LanguageDetectorBinding[],
   options: DetectLanguageOptions = {},
 ): Promise<LanguageDetectionResult> {
   if (options.signal?.aborted) return failure("cancelled");
 
   const sample = boundDetectionSample(text);
   if (sample.length === 0) return failure("blank_input");
-  if (settings.mode === "google") return detectWithGoogle(sample, options);
-  if (settings.mode !== "ai" || settings.modelIds.length === 0) return failure("unconfigured");
+  if (detectors.length === 0) return failure("unconfigured");
 
-  const resolveModel = options.resolveSavedModelRequest ?? resolveSavedModelRequest;
-  const runGeneration = options.generateText ?? aiClient.generateText;
-  let attempted = false;
-  let sawUndetermined = false;
+  let lastFailure: LanguageDetectionFailureCode | null = null;
+  let firstUnavailable: LanguageDetectionFailureCode | null = null;
 
-  for (const modelId of settings.modelIds) {
+  for (const detector of detectors) {
     if (options.signal?.aborted) return failure("cancelled");
 
-    let raw: string;
-    try {
-      const resolved = await resolveModel(modelId);
-      if (options.signal?.aborted) return failure("cancelled");
-      if (!resolved.ok) continue;
+    const result =
+      detector.kind === "google"
+        ? await detectWithGoogle(sample, options)
+        : await detectWithAiModel(detector.modelId, sample, options);
 
-      attempted = true;
-      raw = await runGeneration(
-        resolved.connection,
-        {
-          modelId: resolved.modelKey,
-          system: DETECTION_SYSTEM_MESSAGE,
-          user: sample,
-          // One literal ID needs no reasoning; providers that cannot turn it off ignore the hint.
-          disableReasoning: true,
-        },
-        { signal: options.signal, timeoutMs: options.timeoutMs },
-      );
-    } catch (error) {
-      if (
-        options.signal?.aborted ||
-        (error instanceof ProviderProtocolError && error.kind === "cancelled")
-      ) {
-        return failure("cancelled");
-      }
-      if (error instanceof ProviderProtocolError) continue;
-      return failure("failed");
+    if (result.ok || result.code === "cancelled") return result;
+    if (result.code === "no_eligible_model") {
+      firstUnavailable ??= result.code;
+      continue;
     }
-    if (options.signal?.aborted) return failure("cancelled");
-
-    const answer = parseDetectionAnswer(raw);
-    if (answer.kind === "language") return { ok: true, language: answer.language };
-    if (answer.kind === "undetermined") sawUndetermined = true;
+    lastFailure = result.code;
   }
 
-  if (sawUndetermined) return failure("unknown_language");
-  if (!attempted) return failure("no_eligible_model");
-  return failure("failed");
+  return failure(lastFailure ?? firstUnavailable ?? "failed");
 }

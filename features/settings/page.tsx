@@ -3,12 +3,13 @@ import { Radio, RadioGroup } from "nsh/base";
 import { t } from "nsh/i18n";
 import { SplitPane } from "../../components/layout/split-pane";
 import { motion } from "../../components/motion";
-import { Breadcrumb } from "../../components/ui/breadcrumb";
+import { Breadcrumb, type BreadcrumbItem } from "../../components/ui/breadcrumb";
 import { Button } from "../../components/ui/button";
 import { Card, SectionHeading } from "../../components/ui/card";
 import { Icon } from "../../components/ui/icon";
 import { Switch } from "../../components/ui/switch";
 import { buildTooltip } from "../../components/ui/tooltip";
+import type { LanguageDetectorKind } from "../language-detection/settings";
 import type { OcrServiceKind } from "../ocr/settings";
 import { appearance, appearanceError, selectAppearance, type Appearance } from "./appearance";
 import { language, languageError, selectLanguage, type LanguagePreference } from "./language";
@@ -62,6 +63,12 @@ function sectionLabelKey(section: SettingsSection) {
 }
 
 const selectedSection = signal<SettingsSection>("general");
+
+interface HeaderBreadcrumb {
+  testID: string;
+  accessibilityLabel: string;
+  items: readonly BreadcrumbItem[];
+}
 
 interface ChoiceOptionProps {
   testID: string;
@@ -187,13 +194,57 @@ export function SettingsPage(props: {
   const currentOs = () => props.platformOs ?? platform.os;
   const activeSectionLabelKey = () => sectionLabelKey(selectedSection());
   const selectedOcrChannel = signal<OcrServiceKind | null>(null);
-  const showingOcrBreadcrumb = () => selectedSection() === "ocr" && selectedOcrChannel() !== null;
+  const selectedDetectionChannel = signal<LanguageDetectorKind | null>(null);
+
+  const headerBreadcrumb = (): HeaderBreadcrumb | null => {
+    const ocrChannel = selectedOcrChannel();
+    if (selectedSection() === "ocr" && ocrChannel !== null) {
+      return {
+        testID: "settings-ocr-breadcrumb",
+        accessibilityLabel: t("settings.ocr.breadcrumbLabel"),
+        items: [
+          {
+            label: t("settings.sections.ocr"),
+            testID: "settings-ocr-breadcrumb-root",
+            onPress: () => selectedOcrChannel.set(null),
+          },
+          {
+            label: t(`settings.ocr.${ocrChannel}`),
+            testID: "settings-ocr-detail-title",
+          },
+        ],
+      };
+    }
+
+    const detectionChannel = selectedDetectionChannel();
+    if (selectedSection() === "language-detection" && detectionChannel !== null) {
+      return {
+        testID: "settings-detection-breadcrumb",
+        accessibilityLabel: t("settings.languageDetection.breadcrumbLabel"),
+        items: [
+          {
+            label: t("settings.sections.languageDetection"),
+            testID: "settings-detection-breadcrumb-root",
+            onPress: () => selectedDetectionChannel.set(null),
+          },
+          {
+            label: t(`settings.languageDetection.${detectionChannel}`),
+            testID: "settings-detection-detail-title",
+          },
+        ],
+      };
+    }
+
+    return null;
+  };
+
+  const showingBreadcrumb = () => headerBreadcrumb() !== null;
   const headerPaddingClass = () =>
     compact()
-      ? showingOcrBreadcrumb()
+      ? showingBreadcrumb()
         ? "pl-2 pr-4"
         : "px-4"
-      : showingOcrBreadcrumb()
+      : showingBreadcrumb()
         ? "pl-4 pr-6"
         : "px-6";
 
@@ -238,6 +289,7 @@ export function SettingsPage(props: {
                               onPress={() => {
                                 selectedSection.set(item().id);
                                 selectedOcrChannel.set(null);
+                                selectedDetectionChannel.set(null);
                               }}
                               class="w-full"
                             />
@@ -259,7 +311,7 @@ export function SettingsPage(props: {
               class={`mx-auto h-14 w-full max-w-4xl flex-row items-center justify-between gap-3 ${headerPaddingClass()}`}
             >
               <If
-                when={selectedSection() === "ocr" ? selectedOcrChannel() : null}
+                when={headerBreadcrumb() !== null}
                 else={
                   <View class="min-w-0 flex-row items-center gap-1.5">
                     <Text
@@ -280,26 +332,26 @@ export function SettingsPage(props: {
                         <Icon name="info" tone="muted-foreground" class="size-4" />
                       </View>
                     </If>
+                    <If when={selectedSection() === "language-detection"}>
+                      <View
+                        testID="settings-detection-priority-info"
+                        accessibilityLabel={t("settings.languageDetection.priorityHint")}
+                        tooltip={buildTooltip(t("settings.languageDetection.priorityHint"), "top", {
+                          align: "start",
+                        })}
+                        class="shrink-0 items-center justify-center p-1"
+                      >
+                        <Icon name="info" tone="muted-foreground" class="size-4" />
+                      </View>
+                    </If>
                   </View>
                 }
               >
-                {(channel) => (
-                  <Breadcrumb
-                    testID="settings-ocr-breadcrumb"
-                    accessibilityLabel={t("settings.ocr.breadcrumbLabel")}
-                    items={[
-                      {
-                        label: t("settings.sections.ocr"),
-                        testID: "settings-ocr-breadcrumb-root",
-                        onPress: () => selectedOcrChannel.set(null),
-                      },
-                      {
-                        label: t(`settings.ocr.${channel()}`),
-                        testID: "settings-ocr-detail-title",
-                      },
-                    ]}
-                  />
-                )}
+                <Breadcrumb
+                  testID={headerBreadcrumb()!.testID}
+                  accessibilityLabel={headerBreadcrumb()!.accessibilityLabel}
+                  items={headerBreadcrumb()!.items}
+                />
               </If>
             </View>
           </View>
@@ -323,6 +375,8 @@ export function SettingsPage(props: {
               <If when={selectedSection() === "language-detection"}>
                 <LanguageDetectionSection
                   compact={compact()}
+                  selectedChannel={selectedDetectionChannel()}
+                  onSelectChannel={(channel) => selectedDetectionChannel.set(channel)}
                   onManageModels={props.onNavigateToModels}
                 />
               </If>

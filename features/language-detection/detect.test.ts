@@ -8,7 +8,7 @@ import {
   type DetectLanguageOptions,
   type GoogleDetectionFetch,
 } from "./detect";
-import type { LanguageDetectionSettings } from "./settings";
+import type { LanguageDetectorBinding } from "./settings";
 
 const CONNECTION: AiClientInput = {
   providerTypeId: "openai",
@@ -17,13 +17,14 @@ const CONNECTION: AiClientInput = {
   credential: "sk-test",
 };
 
-function aiSettings(modelIds: readonly string[]): LanguageDetectionSettings {
-  return {
-    mode: "ai",
-    modelIds,
-    nativeLanguage: null,
-    preferredTranslationLanguage: null,
-  };
+const GOOGLE_DETECTOR: LanguageDetectorBinding = { kind: "google" };
+
+function aiDetector(modelId: string): LanguageDetectorBinding {
+  return { kind: "ai", modelId };
+}
+
+function aiDetectors(modelIds: readonly string[]): LanguageDetectorBinding[] {
+  return modelIds.map(aiDetector);
 }
 
 interface Harness {
@@ -71,10 +72,10 @@ function harness(options: {
   };
 }
 
-test("AI detection: sends the sample to the primary model and accepts a trimmed language ID", async () => {
+test("AI detection: sends the sample to the saved model and accepts a trimmed language ID", async () => {
   const h = harness({ responses: { "key-m1": async () => " FR\n" } });
 
-  const result = await detectLanguage("  Bonjour le monde  ", aiSettings(["m1"]), h.options);
+  const result = await detectLanguage("  Bonjour le monde  ", aiDetectors(["m1"]), h.options);
 
   expect(result).toEqual({ ok: true, language: "fr" });
   expect(h.resolveCalls).toEqual(["m1"]);
@@ -93,7 +94,7 @@ test("AI detection: bounds the sample to 2048 code points without splitting a co
   const h = harness({ responses: { "key-m1": async () => "en" } });
   const text = `a${"😀".repeat(3000)}`;
 
-  await detectLanguage(text, aiSettings(["m1"]), h.options);
+  await detectLanguage(text, aiDetectors(["m1"]), h.options);
 
   const sample = h.requests[0]!.request.user;
   expect(Array.from(sample)).toHaveLength(2048);
@@ -101,7 +102,7 @@ test("AI detection: bounds the sample to 2048 code points without splitting a co
   expect(sample.endsWith("😀")).toBe(true);
 });
 
-test("AI detection: falls back past an unavailable model, a rate limit, and a malformed answer", async () => {
+test("AI detection: falls through an unavailable detector, a rate limit, and a malformed answer", async () => {
   const h = harness({
     unavailable: ["m1"],
     responses: {
@@ -113,7 +114,7 @@ test("AI detection: falls back past an unavailable model, a rate limit, and a ma
     },
   });
 
-  const result = await detectLanguage("Bonjour", aiSettings(["m1", "m2", "m3", "m4"]), h.options);
+  const result = await detectLanguage("Bonjour", aiDetectors(["m1", "m2", "m3", "m4"]), h.options);
 
   expect(result).toEqual({ ok: true, language: "fr" });
   expect(h.resolveCalls).toEqual(["m1", "m2", "m3", "m4"]);
@@ -124,7 +125,7 @@ test("AI detection: accepts only an exact supported ID, never prose, JSON, or au
   const answers = ["fr-FR", "```fr```", '{"language":"fr"}', "auto", "French", "zh_CN", "FR"];
   for (const [index, answer] of answers.entries()) {
     const h = harness({ responses: { "key-m1": async () => answer } });
-    const result = await detectLanguage("Texte", aiSettings(["m1"]), h.options);
+    const result = await detectLanguage("Texte", aiDetectors(["m1"]), h.options);
     if (index === answers.length - 1) {
       expect(result).toEqual({ ok: true, language: "fr" });
     } else {
@@ -133,11 +134,11 @@ test("AI detection: accepts only an exact supported ID, never prose, JSON, or au
   }
 });
 
-test("AI detection: tries the next model after und and reports unknown_language when every answer is und", async () => {
+test("AI detection: tries the next detector after und and reports unknown_language when every answer is und", async () => {
   const retry = harness({
     responses: { "key-m1": async () => "und", "key-m2": async () => "ja" },
   });
-  expect(await detectLanguage("Texte", aiSettings(["m1", "m2"]), retry.options)).toEqual({
+  expect(await detectLanguage("Texte", aiDetectors(["m1", "m2"]), retry.options)).toEqual({
     ok: true,
     language: "ja",
   });
@@ -146,7 +147,7 @@ test("AI detection: tries the next model after und and reports unknown_language 
   const allUnd = harness({
     responses: { "key-m1": async () => "und", "key-m2": async () => " UND " },
   });
-  expect(await detectLanguage("Texte", aiSettings(["m1", "m2"]), allUnd.options)).toEqual({
+  expect(await detectLanguage("Texte", aiDetectors(["m1", "m2"]), allUnd.options)).toEqual({
     ok: false,
     code: "unknown_language",
   });
@@ -155,7 +156,7 @@ test("AI detection: tries the next model after und and reports unknown_language 
 test("AI detection: reports no_eligible_model when no request was possible", async () => {
   const h = harness({ unavailable: ["m1", "m2"] });
 
-  expect(await detectLanguage("Texte", aiSettings(["m1", "m2"]), h.options)).toEqual({
+  expect(await detectLanguage("Texte", aiDetectors(["m1", "m2"]), h.options)).toEqual({
     ok: false,
     code: "no_eligible_model",
   });
@@ -172,13 +173,13 @@ test("AI detection: reports failed when attempts fail without a definite und ans
     },
   });
 
-  expect(await detectLanguage("Texte", aiSettings(["m1", "m2"]), h.options)).toEqual({
+  expect(await detectLanguage("Texte", aiDetectors(["m1", "m2"]), h.options)).toEqual({
     ok: false,
     code: "failed",
   });
 });
 
-test("AI detection: maps an unexpected exception to failed and stops the chain", async () => {
+test("AI detection: maps an unexpected exception to failed and falls through to the next detector", async () => {
   const h = harness({
     responses: {
       "key-m1": async () => {
@@ -188,34 +189,28 @@ test("AI detection: maps an unexpected exception to failed and stops the chain",
     },
   });
 
-  const result = await detectLanguage("Texte", aiSettings(["m1", "m2"]), h.options);
+  const result = await detectLanguage("Texte", aiDetectors(["m1", "m2"]), h.options);
 
-  expect(result).toEqual({ ok: false, code: "failed" });
+  expect(result).toEqual({ ok: true, language: "fr" });
   expect(JSON.stringify(result)).not.toContain("secret provider detail");
-  expect(h.requests.map((entry) => entry.modelId)).toEqual(["key-m1"]);
-  expect(h.resolveCalls).toEqual(["m1"]);
+  expect(h.requests.map((entry) => entry.modelId)).toEqual(["key-m1", "key-m2"]);
+  expect(h.resolveCalls).toEqual(["m1", "m2"]);
 });
 
-test("AI detection: does not resolve a model for blank input or when detection is off", async () => {
+test("detection: blank input and an empty chain resolve nothing", async () => {
   const blank = harness({ responses: {} });
-  expect(await detectLanguage("   ", aiSettings(["m1"]), blank.options)).toEqual({
+  expect(await detectLanguage("   ", aiDetectors(["m1"]), blank.options)).toEqual({
     ok: false,
     code: "blank_input",
   });
   expect(blank.resolveCalls).toHaveLength(0);
 
-  const off = harness({ responses: {} });
-  expect(
-    await detectLanguage("Texte", { ...aiSettings(["m1"]), mode: "off" }, off.options),
-  ).toEqual({ ok: false, code: "unconfigured" });
-  expect(off.resolveCalls).toHaveLength(0);
-
-  const unconfigured = harness({ responses: {} });
-  expect(await detectLanguage("Texte", aiSettings([]), unconfigured.options)).toEqual({
+  const empty = harness({ responses: {} });
+  expect(await detectLanguage("Texte", [], empty.options)).toEqual({
     ok: false,
     code: "unconfigured",
   });
-  expect(unconfigured.resolveCalls).toHaveLength(0);
+  expect(empty.resolveCalls).toHaveLength(0);
 });
 
 test("AI detection: stops on cancellation during resolution and prevents later attempts", async () => {
@@ -223,7 +218,7 @@ test("AI detection: stops on cancellation during resolution and prevents later a
   const resolveCalls: string[] = [];
   const requests: string[] = [];
 
-  const result = await detectLanguage("Texte", aiSettings(["m1", "m2"]), {
+  const result = await detectLanguage("Texte", aiDetectors(["m1", "m2"]), {
     signal: controller.signal,
     resolveSavedModelRequest: async (modelId) => {
       resolveCalls.push(modelId);
@@ -245,7 +240,7 @@ test("AI detection: ignores a late result after cancellation", async () => {
   const controller = new AbortController();
   const requests: string[] = [];
 
-  const result = await detectLanguage("Texte", aiSettings(["m1", "m2"]), {
+  const result = await detectLanguage("Texte", aiDetectors(["m1", "m2"]), {
     signal: controller.signal,
     resolveSavedModelRequest: async (modelId) => ({
       ok: true,
@@ -274,21 +269,12 @@ test("AI detection: treats a cancelled provider error as cancellation", async ()
     },
   });
 
-  expect(await detectLanguage("Texte", aiSettings(["m1", "m2"]), h.options)).toEqual({
+  expect(await detectLanguage("Texte", aiDetectors(["m1", "m2"]), h.options)).toEqual({
     ok: false,
     code: "cancelled",
   });
   expect(h.requests).toHaveLength(1);
 });
-
-function googleSettings(modelIds: readonly string[] = []): LanguageDetectionSettings {
-  return {
-    mode: "google",
-    modelIds,
-    nativeLanguage: null,
-    preferredTranslationLanguage: null,
-  };
-}
 
 type GoogleInit = Parameters<GoogleDetectionFetch>[1];
 
@@ -335,7 +321,7 @@ function googleHarness(
 test("Google detection: posts the trimmed sample and maps a regional code onto its base language", async () => {
   const h = googleHarness({ payload: [["Hello world", "zh-CN"]] });
 
-  const result = await detectLanguage("  你好，世界  ", googleSettings(), h.options);
+  const result = await detectLanguage("  你好，世界  ", [GOOGLE_DETECTOR], h.options);
 
   expect(result).toEqual({ ok: true, language: "zh" });
   expect(h.calls).toHaveLength(1);
@@ -355,7 +341,7 @@ test("Google detection: maps legacy and regional codes onto supported IDs", asyn
   ];
   for (const [code, expected] of cases) {
     const h = googleHarness({ payload: [["text", code]] });
-    expect(await detectLanguage("Texte", googleSettings(), h.options)).toEqual({
+    expect(await detectLanguage("Texte", [GOOGLE_DETECTOR], h.options)).toEqual({
       ok: true,
       language: expected,
     });
@@ -365,7 +351,7 @@ test("Google detection: maps legacy and regional codes onto supported IDs", asyn
 test("Google detection: reports unsupported_language for a language outside the supported set", async () => {
   const h = googleHarness({ payload: [["Good morning", "cy"]] });
 
-  expect(await detectLanguage("Bore da", googleSettings(), h.options)).toEqual({
+  expect(await detectLanguage("Bore da", [GOOGLE_DETECTOR], h.options)).toEqual({
     ok: false,
     code: "unsupported_language",
   });
@@ -373,19 +359,19 @@ test("Google detection: reports unsupported_language for a language outside the 
 
 test("Google detection: reads the code beside the segments and reports unknown_language when absent", async () => {
   const beside = googleHarness({ payload: [["Hello"], "ja"] });
-  expect(await detectLanguage("こんにちは", googleSettings(), beside.options)).toEqual({
+  expect(await detectLanguage("こんにちは", [GOOGLE_DETECTOR], beside.options)).toEqual({
     ok: true,
     language: "ja",
   });
 
   const absent = googleHarness({ payload: [["Hello"]] });
-  expect(await detectLanguage("Texte", googleSettings(), absent.options)).toEqual({
+  expect(await detectLanguage("Texte", [GOOGLE_DETECTOR], absent.options)).toEqual({
     ok: false,
     code: "unknown_language",
   });
 
   const notAList = googleHarness({ payload: { languages: "fr" } });
-  expect(await detectLanguage("Texte", googleSettings(), notAList.options)).toEqual({
+  expect(await detectLanguage("Texte", [GOOGLE_DETECTOR], notAList.options)).toEqual({
     ok: false,
     code: "unknown_language",
   });
@@ -393,13 +379,13 @@ test("Google detection: reads the code beside the segments and reports unknown_l
 
 test("Google detection: maps a refusal page and an HTTP error to failed", async () => {
   const refusal = googleHarness({ unreadable: true });
-  expect(await detectLanguage("Texte", googleSettings(), refusal.options)).toEqual({
+  expect(await detectLanguage("Texte", [GOOGLE_DETECTOR], refusal.options)).toEqual({
     ok: false,
     code: "failed",
   });
 
   const rateLimited = googleHarness({ ok: false, status: 429, payload: [["text", "fr"]] });
-  expect(await detectLanguage("Texte", googleSettings(), rateLimited.options)).toEqual({
+  expect(await detectLanguage("Texte", [GOOGLE_DETECTOR], rateLimited.options)).toEqual({
     ok: false,
     code: "failed",
   });
@@ -410,14 +396,14 @@ test("Google detection: maps a network failure and a timeout to failed", async (
   failing.options.googleFetch = async () => {
     throw new Error("getaddrinfo ENOTFOUND");
   };
-  expect(await detectLanguage("Texte", googleSettings(), failing.options)).toEqual({
+  expect(await detectLanguage("Texte", [GOOGLE_DETECTOR], failing.options)).toEqual({
     ok: false,
     code: "failed",
   });
 
   const slow = googleHarness({ hang: true });
   expect(
-    await detectLanguage("Texte", googleSettings(), { ...slow.options, timeoutMs: 5 }),
+    await detectLanguage("Texte", [GOOGLE_DETECTOR], { ...slow.options, timeoutMs: 5 }),
   ).toEqual({ ok: false, code: "failed" });
   expect(slow.calls).toHaveLength(1);
 });
@@ -425,7 +411,7 @@ test("Google detection: maps a network failure and a timeout to failed", async (
 test("Google detection: reports cancelled and never lets a late answer win", async () => {
   const controller = new AbortController();
   const hanging = googleHarness({ hang: true });
-  const cancelled = detectLanguage("Texte", googleSettings(), {
+  const cancelled = detectLanguage("Texte", [GOOGLE_DETECTOR], {
     ...hanging.options,
     signal: controller.signal,
   });
@@ -438,32 +424,130 @@ test("Google detection: reports cancelled and never lets a late answer win", asy
     beforeJson: () => late.abort(),
   });
   expect(
-    await detectLanguage("Texte", googleSettings(), {
+    await detectLanguage("Texte", [GOOGLE_DETECTOR], {
       ...lateAnswer.options,
       signal: late.signal,
     }),
   ).toEqual({ ok: false, code: "cancelled" });
 });
 
-test("Google detection: sends nothing for blank input, an off detector, or an AI attempt", async () => {
+test("Google detection: sends nothing for blank input or an empty chain", async () => {
   const blank = googleHarness({ payload: [["text", "fr"]] });
-  expect(await detectLanguage("   ", googleSettings(), blank.options)).toEqual({
+  expect(await detectLanguage("   ", [GOOGLE_DETECTOR], blank.options)).toEqual({
     ok: false,
     code: "blank_input",
   });
   expect(blank.calls).toHaveLength(0);
 
-  const off = googleHarness({ payload: [["text", "fr"]] });
-  expect(await detectLanguage("Texte", { ...googleSettings(), mode: "off" }, off.options)).toEqual({
+  const empty = googleHarness({ payload: [["text", "fr"]] });
+  expect(await detectLanguage("Texte", [], empty.options)).toEqual({
     ok: false,
     code: "unconfigured",
   });
-  expect(off.calls).toHaveLength(0);
+  expect(empty.calls).toHaveLength(0);
+});
 
-  const ai = googleHarness({ payload: [["text", "fr"]] });
-  const h = harness({ responses: { "key-m1": async () => "fr" } });
+test("detector chain: an AI failure falls through to an enabled Google detector", async () => {
+  const ai = harness({
+    responses: {
+      "key-m1": async () => {
+        throw new ProviderProtocolError("server", "Upstream failed", 500);
+      },
+    },
+  });
+  const google = googleHarness({ payload: [["Hello", "fr"]] });
+
+  const result = await detectLanguage("Texte", [aiDetector("m1"), GOOGLE_DETECTOR], {
+    ...ai.options,
+    ...google.options,
+  });
+
+  expect(result).toEqual({ ok: true, language: "fr" });
+  expect(ai.resolveCalls).toEqual(["m1"]);
+  expect(google.calls).toHaveLength(1);
+});
+
+test("detector chain: an AI und answer falls through to Google", async () => {
+  const ai = harness({ responses: { "key-m1": async () => "und" } });
+  const google = googleHarness({ payload: [["Hello", "ja"]] });
+
+  const result = await detectLanguage("Texte", [aiDetector("m1"), GOOGLE_DETECTOR], {
+    ...ai.options,
+    ...google.options,
+  });
+
+  expect(result).toEqual({ ok: true, language: "ja" });
+  expect(google.calls).toHaveLength(1);
+});
+
+test("detector chain: an unavailable AI detector lets Google answer", async () => {
+  const ai = harness({ unavailable: ["m1"] });
+  const google = googleHarness({ payload: [["Hello", "de"]] });
+
+  const result = await detectLanguage("Texte", [aiDetector("m1"), GOOGLE_DETECTOR], {
+    ...ai.options,
+    ...google.options,
+  });
+
+  expect(result).toEqual({ ok: true, language: "de" });
+  expect(ai.requests).toHaveLength(0);
+});
+
+test("detector chain: the first valid answer stops later detectors", async () => {
+  const ai = harness({ responses: { "key-m1": async () => "fr" } });
+  const google = googleHarness({ payload: [["Hello", "de"]] });
+
+  const aiFirst = await detectLanguage("Texte", [aiDetector("m1"), GOOGLE_DETECTOR], {
+    ...ai.options,
+    ...google.options,
+  });
+  expect(aiFirst).toEqual({ ok: true, language: "fr" });
+  expect(google.calls).toHaveLength(0);
+
+  const googleFirst = googleHarness({ payload: [["Hello", "de"]] });
+  const aiAfter = harness({ responses: { "key-m1": async () => "fr" } });
+  const googleResult = await detectLanguage("Texte", [GOOGLE_DETECTOR, aiDetector("m1")], {
+    ...googleFirst.options,
+    ...aiAfter.options,
+  });
+  expect(googleResult).toEqual({ ok: true, language: "de" });
+  expect(aiAfter.resolveCalls).toHaveLength(0);
+});
+
+test("detector chain: reports the last concrete failure across enabled detectors", async () => {
+  const ai = harness({ unavailable: ["m1"] });
+  const google = googleHarness({ unreadable: true });
+
   expect(
-    await detectLanguage("Texte", aiSettings(["m1"]), { ...h.options, ...ai.options }),
-  ).toEqual({ ok: true, language: "fr" });
-  expect(ai.calls).toHaveLength(0);
+    await detectLanguage("Texte", [aiDetector("m1"), GOOGLE_DETECTOR], {
+      ...ai.options,
+      ...google.options,
+    }),
+  ).toEqual({ ok: false, code: "failed" });
+
+  const aiUnd = harness({ responses: { "key-m1": async () => "und" } });
+  const googleAbsent = googleHarness({ payload: [["Hello"]] });
+  expect(
+    await detectLanguage("Texte", [aiDetector("m1"), GOOGLE_DETECTOR], {
+      ...aiUnd.options,
+      ...googleAbsent.options,
+    }),
+  ).toEqual({ ok: false, code: "unknown_language" });
+});
+
+test("detector chain: cancellation in one detector prevents the next", async () => {
+  const controller = new AbortController();
+  const google = googleHarness({ payload: [["Hello", "fr"]] });
+
+  const result = await detectLanguage("Texte", [aiDetector("m1"), GOOGLE_DETECTOR], {
+    signal: controller.signal,
+    resolveSavedModelRequest: async (_modelId) => {
+      controller.abort();
+      return { ok: false, reason: "aborted" };
+    },
+    ...google.options,
+  });
+
+  expect(result).toEqual({ ok: false, code: "cancelled" });
+  expect(google.calls).toHaveLength(0);
 });

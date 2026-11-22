@@ -2,7 +2,7 @@ import { expect, test } from "nsh/test";
 import type { TextGenerationRequest } from "../../modules/ai/contracts/protocol";
 import type { AiClientInput } from "../../modules/ai/runtime/client";
 import { resolveTranslationLanguages } from "./resolve";
-import type { LanguageDetectionSettings } from "./settings";
+import type { LanguageDetectionSnapshot } from "./settings";
 
 const CONNECTION: AiClientInput = {
   providerTypeId: "openai",
@@ -11,10 +11,9 @@ const CONNECTION: AiClientInput = {
   credential: "sk-test",
 };
 
-function settings(overrides: Partial<LanguageDetectionSettings> = {}): LanguageDetectionSettings {
+function detection(overrides: Partial<LanguageDetectionSnapshot> = {}): LanguageDetectionSnapshot {
   return {
-    mode: "ai",
-    modelIds: ["m1"],
+    detectors: [{ kind: "ai", modelId: "m1" }],
     nativeLanguage: "zh",
     preferredTranslationLanguage: "en",
     ...overrides,
@@ -48,7 +47,7 @@ test("language pair: resolves a concrete source and an automatic target without 
       sourceText: "Bonjour",
       sourceLanguage: "fr",
       targetLanguage: "auto",
-      settings: settings(),
+      detection: detection(),
     },
     spy.options,
   );
@@ -66,7 +65,7 @@ test("language pair: translates the native language into the preferred one", asy
       sourceText: "你好",
       sourceLanguage: "zh",
       targetLanguage: "auto",
-      settings: settings(),
+      detection: detection(),
     },
     spy.options,
   );
@@ -83,7 +82,7 @@ test("language pair: detects an automatic source once and keeps a concrete targe
       sourceText: "Guten Tag",
       sourceLanguage: "auto",
       targetLanguage: "ja",
-      settings: settings({ nativeLanguage: null, preferredTranslationLanguage: null }),
+      detection: detection({ nativeLanguage: null, preferredTranslationLanguage: null }),
     },
     spy.options,
   );
@@ -100,7 +99,7 @@ test("language pair: resolves both concrete selections with no detection and no 
       sourceText: "Bonjour",
       sourceLanguage: "fr",
       targetLanguage: "ja",
-      settings: settings({ nativeLanguage: null, preferredTranslationLanguage: null }),
+      detection: detection({ nativeLanguage: null, preferredTranslationLanguage: null }),
     },
     spy.options,
   );
@@ -117,7 +116,7 @@ test("language pair: requires the native language before detection for an automa
       sourceText: "Bonjour",
       sourceLanguage: "auto",
       targetLanguage: "auto",
-      settings: settings({ nativeLanguage: null }),
+      detection: detection({ nativeLanguage: null }),
     },
     spy.options,
   );
@@ -135,13 +134,31 @@ test("language pair: propagates a detector failure without guessing a target", a
       sourceText: "???",
       sourceLanguage: "auto",
       targetLanguage: "auto",
-      settings: settings(),
+      detection: detection(),
     },
     spy.options,
   );
 
   expect(result).toEqual({ ok: false, code: "unknown_language" });
   expect(spy.calls).toHaveLength(1);
+});
+
+test("language pair: reports unconfigured when no detector is enabled", async () => {
+  const spy = detector();
+
+  const result = await resolveTranslationLanguages(
+    {
+      sourceText: "Bonjour",
+      sourceLanguage: "auto",
+      targetLanguage: "ko",
+      detection: detection({ detectors: [] }),
+    },
+    spy.options,
+  );
+
+  expect(result).toEqual({ ok: false, code: "unconfigured" });
+  expect(spy.resolveCalls).toHaveLength(0);
+  expect(spy.calls).toHaveLength(0);
 });
 
 test("language pair: uses the native language when the preferred one is unset and the source differs", async () => {
@@ -152,7 +169,7 @@ test("language pair: uses the native language when the preferred one is unset an
       sourceText: "Bonjour",
       sourceLanguage: "auto",
       targetLanguage: "auto",
-      settings: settings({ preferredTranslationLanguage: null }),
+      detection: detection({ preferredTranslationLanguage: null }),
     },
     spy.options,
   );
@@ -164,7 +181,7 @@ test("language pair: uses the native language when the preferred one is unset an
       sourceText: "你好",
       sourceLanguage: "auto",
       targetLanguage: "auto",
-      settings: settings({ preferredTranslationLanguage: null }),
+      detection: detection({ preferredTranslationLanguage: null }),
     },
     { ...spy.options, generateText: async () => "zh" },
   );
@@ -180,7 +197,7 @@ test("language pair: requires the preferred language only when the source is the
       sourceText: "你好",
       sourceLanguage: "auto",
       targetLanguage: "auto",
-      settings: settings({ preferredTranslationLanguage: null }),
+      detection: detection({ preferredTranslationLanguage: null }),
     },
     spy.options,
   );
@@ -193,7 +210,7 @@ test("language pair: requires the preferred language only when the source is the
       sourceText: "你好",
       sourceLanguage: "zh",
       targetLanguage: "auto",
-      settings: settings({ preferredTranslationLanguage: null }),
+      detection: detection({ preferredTranslationLanguage: null }),
     },
     spy.options,
   );
@@ -209,7 +226,7 @@ test("language pair: does not require preferences for a concrete target", async 
       sourceText: "Bonjour",
       sourceLanguage: "auto",
       targetLanguage: "en",
-      settings: settings({ nativeLanguage: null, preferredTranslationLanguage: null }),
+      detection: detection({ nativeLanguage: null, preferredTranslationLanguage: null }),
     },
     spy.options,
   );
@@ -225,7 +242,7 @@ test("language pair: reports blank input instead of detecting", async () => {
       sourceText: "   ",
       sourceLanguage: "auto",
       targetLanguage: "auto",
-      settings: settings(),
+      detection: detection(),
     },
     spy.options,
   );
@@ -244,7 +261,7 @@ test("language pair: checks cancellation before and after detection", async () =
       sourceText: "Bonjour",
       sourceLanguage: "auto",
       targetLanguage: "auto",
-      settings: settings(),
+      detection: detection(),
     },
     { ...before.options, signal: beforeController.signal },
   );
@@ -255,7 +272,12 @@ test("language pair: checks cancellation before and after detection", async () =
   const afterController = new AbortController();
   const after = detector();
   const cancelledAfter = await resolveTranslationLanguages(
-    { sourceText: "Bonjour", sourceLanguage: "auto", targetLanguage: "auto", settings: settings() },
+    {
+      sourceText: "Bonjour",
+      sourceLanguage: "auto",
+      targetLanguage: "auto",
+      detection: detection(),
+    },
     {
       ...after.options,
       signal: afterController.signal,

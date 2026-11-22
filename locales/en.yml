@@ -129,17 +129,24 @@ settings:
       channelUnconfigured: Configure this channel before enabling it.
   languageDetection:
     title: Language Detection
-    detection: Detection
-    off: "Off"
     ai: AI
     google: Google
-    models: Detection models
-    primary: Primary model
-    backups: Backup models
-    addBackup: Add backup
-    moveUp: Move backup %{index} up
-    moveDown: Move backup %{index} down
-    removeBackup: Remove backup %{index}
+    googleSummary: Free Google Translate endpoint
+    notConfigured: Not configured
+    saved: Detector saved
+    breadcrumbLabel: Language Detection navigation
+    priorityHint: Enabled detectors run in order from top to bottom. Later ones act as backups.
+    configureBeforeEnable: Configure this detector before enabling it.
+    configureLabel: Configure %{name}
+    enableLabel: Enable %{name}
+    moveUp: Move %{name} up
+    moveDown: Move %{name} down
+    itemLabel: "%{name} (%{status})"
+    role:
+      primary: Primary
+      backup: Backup
+    model: Model
+    languages: Detection languages
     nativeLanguage: Native language
     nativeLanguageHelp: With an Automatic target, other languages are translated into your native language.
     preferredTranslation: Translate my native language into
@@ -150,9 +157,8 @@ settings:
       storageMalformed: The saved language detection settings are unreadable.
       storageUnsupportedVersion: The saved language detection settings use an unsupported version.
       storageWriteFailed: Could not save the language detection settings. Check storage and try again.
-      modelIdBlank: Choose a model for every detection slot.
-      modelIdDuplicate: Each detection model can appear only once.
-      primaryModelRequired: Choose a primary detection model.
+      modelIdBlank: Choose a model for the AI detector.
+      detectorUnconfigured: Configure this detector before enabling it.
       preferenceInvalid: Choose a supported language.
       preferencesIdentical: The native language and the preferred translation language must differ.
 ocr:
@@ -174,7 +180,7 @@ ocr:
 languageDetection:
   failure:
     unconfigured: Configure language detection, or choose the source language.
-    noEligibleModel: Check the configured detection models, or choose the source language.
+    noEligibleModel: Check the configured detection model, or choose the source language.
     unknownLanguage: The detector could not identify the source language. Choose the source language.
     unsupportedLanguage: The detected language is not supported here. Choose the source language.
     failed: Language detection failed. Choose the source language.

@@ -9,7 +9,7 @@ import {
   type DetectLanguageOptions,
   type LanguageDetectionFailureCode,
 } from "./detect";
-import type { LanguageDetectionSettings } from "./settings";
+import type { LanguageDetectionSnapshot } from "./settings";
 
 export type LanguageResolutionFailureCode =
   | LanguageDetectionFailureCode
@@ -20,7 +20,7 @@ export interface ResolveTranslationLanguagesInput {
   sourceText: string;
   sourceLanguage: SourceLanguageId;
   targetLanguage: TargetLanguageId;
-  settings: LanguageDetectionSettings;
+  detection: LanguageDetectionSnapshot;
 }
 
 export type ResolveTranslationLanguagesResult =
@@ -42,8 +42,8 @@ export async function resolveTranslationLanguages(
 ): Promise<ResolveTranslationLanguagesResult> {
   if (options.signal?.aborted) return failure("cancelled");
 
-  const { sourceText, sourceLanguage, targetLanguage, settings } = input;
-  const nativeLanguage = settings.nativeLanguage;
+  const { sourceText, sourceLanguage, targetLanguage, detection } = input;
+  const nativeLanguage = detection.nativeLanguage;
   const automaticTarget = targetLanguage === AUTO_LANGUAGE;
 
   // An automatic target cannot resolve without a native language, so fail before any request.
@@ -51,7 +51,7 @@ export async function resolveTranslationLanguages(
 
   let resolvedSource: LanguageId;
   if (sourceLanguage === AUTO_LANGUAGE) {
-    const detected = await detectLanguage(sourceText, settings, options);
+    const detected = await detectLanguage(sourceText, detection.detectors, options);
     if (!detected.ok) return failure(detected.code);
     resolvedSource = detected.language;
   } else {
@@ -67,7 +67,7 @@ export async function resolveTranslationLanguages(
     return { ok: true, sourceLanguage: resolvedSource, targetLanguage: nativeLanguage };
   }
 
-  const preferred = settings.preferredTranslationLanguage;
+  const preferred = detection.preferredTranslationLanguage;
   if (preferred === null) return failure("missing_preferred_language");
 
   return { ok: true, sourceLanguage: resolvedSource, targetLanguage: preferred };

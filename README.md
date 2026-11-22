@@ -76,39 +76,43 @@ See [system architecture](docs/specs/system-architecture.md) and
 ## Language detection
 
 Language detection resolves an **Automatic** source or target into a concrete
-language before a prompt is rendered. Two detectors are available and neither
-falls back to the other; there is no local detector.
+language before a prompt is rendered. Two detectors are available; enabled
+detectors run in priority order, and later ones act as backups. There is no
+local detector.
 
-- **Setup**: Open **Settings → Language Detection**, choose **Detection**, set
-  the **Native language** and the language for **Translate my native language
-  into**, then save. Detection stays off until that save.
-- **AI**: Choose **AI**, then a primary model and optional backups in order. A
-  sample goes to the chosen model, and to the backups if the earlier answers are
-  unusable.
-- **Google**: Choose **Google** to use the free Google Translate endpoint. It
+- **Setup**: Open **Settings → Language Detection**, configure **AI** with a
+  model, enable the detectors to use, and set the **Native language** and the
+  language for **Translate my native language into**. Detection stays off until
+  a detector is enabled.
+- **AI**: One text model per AI detector. A sample goes to that model; an
+  unusable answer falls through to the next enabled detector.
+- **Google**: Enable **Google** to use the free Google Translate endpoint. It
   needs no key and no model configuration; a sample goes to Google Translate.
+- **Priority**: Use the arrows to order detectors. The first enabled detector is
+  the primary; later enabled detectors act as backups.
 - **Automatic target**: Text in another language is translated into your native
   language. Text in your native language is translated into the preferred
   translation language. A concrete source and target pair never starts a
   detection request.
 - **Upstream choices**: Presets store engine configuration only; the Quick
-  Translate language menu offers **Automatic** for both selections. With
-  detection off, an **Automatic** source needs a manual source selection, and an
-  **Automatic** target needs a native language.
+  Translate language menu offers **Automatic** for both selections. With no
+  detector enabled, an **Automatic** source needs a manual source selection, and
+  an **Automatic** target needs a native language.
 - **Fallback behavior**: A blocked or failed detection never guesses. The card
   shows a localized message that asks you to choose the source manually.
   Cancellation stays silent.
-- **Request shape**: AI detection uses one buffered request per configured
-  model, never a stream, and asks the model to skip reasoning because the answer
-  is a single language ID. Google detection uses one form-encoded request, so the
-  sample never appears in a URL.
+- **Request shape**: AI detection uses one buffered request per enabled AI
+  detector, never a stream, and asks the model to skip reasoning because the
+  answer is a single language ID. Google detection uses one form-encoded request,
+  so the sample never appears in a URL.
 - **Language mapping**: A regional Google code keeps its base language
   (`zh-CN` → `zh`, `pt-BR` → `pt`), legacy `iw` and `in` map to Hebrew and
   Indonesian, and any other language is reported as unsupported instead of
   translated as a guess.
 - **Privacy**: Detection runs only inside a translation action with an
-  automatic source. Each detector receives the first 2,048 characters of the
-  trimmed text, and may use a different provider than the translation model. The
+  automatic source. Every enabled detector tried receives the first 2,048
+  characters of the trimmed text, and may use a different provider than the
+  translation model. The
   full source text still goes to the selected translation model. Only settings
   and model IDs are stored; samples, detected values, and model replies are
   never stored or logged.

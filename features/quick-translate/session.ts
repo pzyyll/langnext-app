@@ -10,7 +10,7 @@ import {
 } from "../language-detection/resolve";
 import {
   languageDetectionStore,
-  type LanguageDetectionSettings,
+  type LanguageDetectionSnapshot,
 } from "../language-detection/settings";
 import {
   AUTO_LANGUAGE,
@@ -86,7 +86,7 @@ interface LanguageSnapshot {
   sourceText: string;
   sourceLanguage: SourceLanguageId;
   targetLanguage: TargetLanguageId;
-  settings: LanguageDetectionSettings;
+  detection: LanguageDetectionSnapshot;
 }
 
 /**
@@ -123,7 +123,7 @@ function createSharedLanguageRun(
             sourceText: snapshot.sourceText,
             sourceLanguage: snapshot.sourceLanguage,
             targetLanguage: snapshot.targetLanguage,
-            settings: snapshot.settings,
+            detection: snapshot.detection,
           },
           { signal: shared.signal },
         ).then(
@@ -279,7 +279,7 @@ export function createQuickTranslateSession(
         sourceText: text,
         sourceLanguage: sourceLanguage(),
         targetLanguage: targetLanguage(),
-        settings: languageDetectionStore.settings(),
+        detection: languageDetectionStore.snapshot(),
       },
       runResolveLanguages,
       (state) => {
