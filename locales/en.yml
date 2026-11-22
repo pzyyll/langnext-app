@@ -158,7 +158,8 @@ settings:
       storageUnsupportedVersion: The saved text-to-speech settings use an unsupported version.
       storageWriteFailed: Could not save the text-to-speech settings. Check storage and try again.
       apiKeyBlank: Enter an API key.
-      channelUnconfigured: Configure Google Cloud Text-to-Speech before enabling it.
+      invalidRegion: Enter a public Azure Speech region, such as eastus.
+      channelUnconfigured: Configure this channel before enabling it.
       credentialUnreadable: The saved API key could not be read. Enter it again.
   languageDetection:
     title: Language Detection

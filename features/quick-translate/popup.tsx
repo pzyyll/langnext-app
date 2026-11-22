@@ -542,11 +542,11 @@ export function QuickTranslatePopup(props: QuickTranslatePopupProps) {
   let speechAbort: AbortController | null = null;
   let stopSpeech: (() => void) | null = null;
   let activeCredential = "";
-  const speakEnabled = () => ttsSettingsStore.isEnabled();
+  const speakEnabled = () => ttsSettingsStore.activeBinding()?.channel === "google-cloud";
   const speakTooltip = () =>
     speakEnabled() ? t("quickTranslate.speakSending") : t("quickTranslate.speakOff");
   const credentialSignature = () => {
-    const binding = ttsSettingsStore.savedBinding();
+    const binding = ttsSettingsStore.savedBinding("google-cloud");
     return binding?.enabled ? binding.credentialRef : "";
   };
 

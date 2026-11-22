@@ -68,8 +68,8 @@ function TtsChannelList(props: TtsChannelListProps) {
   const mutating = signal(false);
   const listError = signal<string | null>(null);
   const name = () => t("settings.tts.channel");
-  const configured = () => ttsSettingsStore.savedBinding() !== null;
-  const enabled = () => ttsSettingsStore.isEnabled();
+  const configured = () => ttsSettingsStore.savedBinding("google-cloud") !== null;
+  const enabled = () => ttsSettingsStore.activeBinding()?.channel === "google-cloud";
   const summary = (): { text: string; toneClass: string } => {
     if (!configured()) {
       return { text: t("settings.tts.notConfigured"), toneClass: "text-muted-foreground" };
@@ -94,7 +94,7 @@ function TtsChannelList(props: TtsChannelListProps) {
     listError.set(null);
     mutating.set(true);
     try {
-      const result = await ttsSettingsStore.setEnabled(nextEnabled);
+      const result = await ttsSettingsStore.setEnabled("google-cloud", nextEnabled);
       if (!result.ok) listError.set(result.message);
     } finally {
       mutating.set(false);
@@ -224,7 +224,7 @@ function GoogleCloudDetail(props: { compact: boolean; credentialState: Credentia
   };
   const previewNote = (): string | undefined => {
     if (!playbackReady()) return t("settings.tts.previewUnavailable");
-    if (ttsSettingsStore.savedBinding() === null || props.credentialState !== "readable") {
+    if (ttsSettingsStore.savedBinding("google-cloud") === null || props.credentialState !== "readable") {
       return t("settings.tts.previewNeedsKey");
     }
     if (phase() === "idle" && apiKeyDraft().trim().length > 0)
@@ -236,7 +236,7 @@ function GoogleCloudDetail(props: { compact: boolean; credentialState: Credentia
     (saving() ||
       !playbackReady() ||
       apiKeyDraft().trim().length > 0 ||
-      ttsSettingsStore.savedBinding() === null ||
+      ttsSettingsStore.savedBinding("google-cloud") === null ||
       props.credentialState !== "readable");
   const controlsLocked = () => saving() || phase() !== "idle";
 
@@ -246,7 +246,7 @@ function GoogleCloudDetail(props: { compact: boolean; credentialState: Credentia
     error.set(null);
     saving.set(true);
     try {
-      const result = await ttsSettingsStore.saveGoogleCloud({ apiKey });
+      const result = await ttsSettingsStore.saveChannel({ channel: "google-cloud", apiKey });
       if (!result.ok) {
         error.set(result.message);
         return;
@@ -278,7 +278,7 @@ function GoogleCloudDetail(props: { compact: boolean; credentialState: Credentia
       return;
     }
     if (previewDisabled()) return;
-    const saved = ttsSettingsStore.savedBinding();
+    const saved = ttsSettingsStore.savedBinding("google-cloud");
     if (saved === null) return;
     const token = active.token + 1;
     active.token = token;
@@ -286,9 +286,9 @@ function GoogleCloudDetail(props: { compact: boolean; credentialState: Credentia
     active.abort = controller;
     previewError.set(null);
     phase.set("loading");
-    const apiKey = await ttsSettingsStore.readGoogleCloudKey(saved.credentialRef);
+    const apiKey = await ttsSettingsStore.readKey(saved.credentialRef);
     if (!mounted || token !== active.token) return;
-    if (apiKey === null || saved.credentialRef !== ttsSettingsStore.savedBinding()?.credentialRef) {
+    if (apiKey === null || saved.credentialRef !== ttsSettingsStore.savedBinding("google-cloud")?.credentialRef) {
       phase.set("idle");
       previewError.set(t("settings.tts.keyUnreadable"));
       return;
@@ -410,14 +410,14 @@ export function TtsSection(props: TtsSectionProps) {
   let restoreFocusOnList = false;
 
   effect(() => {
-    const saved = ttsSettingsStore.savedBinding();
+    const saved = ttsSettingsStore.savedBinding("google-cloud");
     if (saved === null) {
       credentialState.set("unknown");
       return;
     }
     const ref = saved.credentialRef;
-    void ttsSettingsStore.readGoogleCloudKey(ref).then((key) => {
-      if (ttsSettingsStore.savedBinding()?.credentialRef !== ref) return;
+    void ttsSettingsStore.readKey(ref).then((key) => {
+      if (ttsSettingsStore.savedBinding("google-cloud")?.credentialRef !== ref) return;
       credentialState.set(key === null ? "missing" : "readable");
     });
   });

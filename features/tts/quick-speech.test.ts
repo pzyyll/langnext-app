@@ -47,10 +47,10 @@ test("quick speech: over-limit text is refused before a key read", async () => {
       unresolvedAuto: null,
     },
     {
-      savedBinding: () => settings.savedBinding(),
-      readGoogleCloudKey: (ref) => {
+      savedBinding: () => settings.savedBinding("google-cloud"),
+      readKey: (ref) => {
         reads.push(ref);
-        return settings.readGoogleCloudKey(ref);
+        return settings.readKey(ref);
       },
     },
   );

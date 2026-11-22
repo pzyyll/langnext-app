@@ -6,7 +6,7 @@ import { createTtsSettingsStore, ttsSettingsStore } from "./settings";
 
 type SpeechSettings = Pick<
   ReturnType<typeof createTtsSettingsStore>,
-  "savedBinding" | "readGoogleCloudKey"
+  "savedBinding" | "readKey"
 >;
 
 export interface PreparedQuickSpeech {
@@ -28,7 +28,7 @@ export async function prepareQuickSpeech(
   },
   settings: SpeechSettings = ttsSettingsStore,
 ): Promise<QuickSpeechPreparation> {
-  const binding = settings.savedBinding();
+  const binding = settings.savedBinding("google-cloud");
   if (binding === null || !binding.enabled) {
     return { ok: false, message: t("quickTranslate.speakOff") };
   }
@@ -47,8 +47,8 @@ export async function prepareQuickSpeech(
   if (new TextEncoder().encode(input.text).byteLength > TTS_MAX_UTF8_BYTES) {
     return { ok: false, message: t("quickTranslate.speakTooLong") };
   }
-  const apiKey = await settings.readGoogleCloudKey(binding.credentialRef);
-  if (apiKey === null || settings.savedBinding()?.credentialRef !== binding.credentialRef) {
+  const apiKey = await settings.readKey(binding.credentialRef);
+  if (apiKey === null || settings.savedBinding("google-cloud")?.credentialRef !== binding.credentialRef) {
     return { ok: false, message: t("settings.tts.keyUnreadable") };
   }
   return { ok: true, speech: { apiKey, text: input.text, voice } };

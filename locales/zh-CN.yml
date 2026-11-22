@@ -158,7 +158,8 @@ settings:
       storageUnsupportedVersion: 已保存的语音合成设置版本不受支持。
       storageWriteFailed: 无法保存语音合成设置，请检查存储后重试。
       apiKeyBlank: 请填写 API Key。
-      channelUnconfigured: 请先配置 Google Cloud Text-to-Speech 再启用。
+      invalidRegion: 请填写公开的 Azure Speech 区域，例如 eastus。
+      channelUnconfigured: 请先配置此渠道再启用。
       credentialUnreadable: 无法读取已保存的 API Key。请重新填写。
   languageDetection:
     title: 语言检测
