@@ -17,6 +17,7 @@ import editIcon from "../../assets/icons/edit.svg";
 import englishIcon from "../../assets/icons/icon-park-outline--english.svg";
 import filePdfIcon from "../../assets/icons/file-pdf.svg";
 import fileTextIcon from "../../assets/icons/file-text.svg";
+import infoIcon from "../../assets/icons/icon-park-outline--info.svg";
 import lightningSolidIcon from "../../assets/icons/lightning-solid.svg";
 import lightningIcon from "../../assets/icons/lightning.svg";
 import minusIcon from "../../assets/icons/minus.svg";
@@ -49,6 +50,7 @@ const ICONS = {
   english: englishIcon,
   "file-pdf": filePdfIcon,
   "file-text": fileTextIcon,
+  info: infoIcon,
   lightning: lightningIcon,
   "lightning-solid": lightningSolidIcon,
   minus: minusIcon,

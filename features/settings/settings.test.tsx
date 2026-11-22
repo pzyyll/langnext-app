@@ -16,6 +16,11 @@ const COPY_SWITCH_HELP = {
   doubleCopyZh: "连续按两次 Ctrl+C 会读取复制的文本，并使用已启用的预设进行翻译。",
 };
 
+const OCR_PRIORITY_HINT = {
+  en: "Enabled channels run in order from top to bottom. Later ones act as backups.",
+  zh: "已启用的渠道按从上到下的顺序使用，其余作为备用。",
+};
+
 const LANGUAGE_DETECTION_HELP = {
   en: {
     native: "With an Automatic target, other languages are translated into your native language.",
@@ -651,7 +656,10 @@ test("ocr settings: lists all channels, configures AI OCR on its detail page, an
 
   expect(app.shows("id:settings-ocr-channel-ai")).toBe(true);
   expect(app.shows("id:settings-ocr-channel-baidu")).toBe(true);
-  expect(app.shows("id:settings-ocr-priority-hint")).toBe(true);
+  expect(app.shows("id:settings-ocr-priority-info")).toBe(true);
+  expect(app.texts()).not.toContain(OCR_PRIORITY_HINT.en);
+  await app.hover("id:settings-ocr-priority-info");
+  await app.waitUntil(() => app.texts().includes(OCR_PRIORITY_HINT.en));
   expect(app.enabled("id:settings-ocr-toggle-ai")).toBe(false);
   expect(app.enabled("id:settings-ocr-toggle-baidu")).toBe(false);
   expect(app.texts()).toContain("AI OCR");
@@ -716,6 +724,9 @@ test("ocr settings: lists all channels, configures AI OCR on its detail page, an
   await reopened.press("id:language-zh-CN");
   await reopened.press("id:settings-nav-ocr");
   await reopened.waitFor("id:settings-ocr-card");
+  expect(reopened.texts()).not.toContain(OCR_PRIORITY_HINT.zh);
+  await reopened.hover("id:settings-ocr-priority-info");
+  await reopened.waitUntil(() => reopened.texts().includes(OCR_PRIORITY_HINT.zh));
   expect(reopened.texts()).toContain("首选");
   expect(reopened.texts()).toContain("百度 OCR");
   await reopened.press("id:settings-ocr-channel-ai");

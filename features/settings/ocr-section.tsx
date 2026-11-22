@@ -282,10 +282,6 @@ function OcrChannelList(props: OcrChannelListProps) {
         </Text>
       </If>
 
-      <Text testID="settings-ocr-priority-hint" class="px-1 text-xs text-muted-foreground">
-        {t("settings.ocr.priorityHint")}
-      </Text>
-
       <If when={props.platformOs !== "windows"}>
         <Text testID="settings-ocr-windows-only" class="px-1 text-xs text-muted-foreground">
           {t("settings.ocr.windowsOnly")}

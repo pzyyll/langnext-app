@@ -6,7 +6,9 @@ import { motion } from "../../components/motion";
 import { Breadcrumb } from "../../components/ui/breadcrumb";
 import { Button } from "../../components/ui/button";
 import { Card, SectionHeading } from "../../components/ui/card";
+import { Icon } from "../../components/ui/icon";
 import { Switch } from "../../components/ui/switch";
+import { buildTooltip } from "../../components/ui/tooltip";
 import type { OcrServiceKind } from "../ocr/settings";
 import { appearance, appearanceError, selectAppearance, type Appearance } from "./appearance";
 import { language, languageError, selectLanguage, type LanguagePreference } from "./language";
@@ -259,12 +261,26 @@ export function SettingsPage(props: {
               <If
                 when={selectedSection() === "ocr" ? selectedOcrChannel() : null}
                 else={
-                  <Text
-                    role="header"
-                    class="min-w-0 truncate text-lg font-semibold text-foreground"
-                  >
-                    {t(activeSectionLabelKey())}
-                  </Text>
+                  <View class="min-w-0 flex-row items-center gap-1.5">
+                    <Text
+                      role="header"
+                      class="min-w-0 truncate text-lg font-semibold text-foreground"
+                    >
+                      {t(activeSectionLabelKey())}
+                    </Text>
+                    <If when={selectedSection() === "ocr"}>
+                      <View
+                        testID="settings-ocr-priority-info"
+                        accessibilityLabel={t("settings.ocr.priorityHint")}
+                        tooltip={buildTooltip(t("settings.ocr.priorityHint"), "top", {
+                          align: "start",
+                        })}
+                        class="shrink-0 items-center justify-center p-1"
+                      >
+                        <Icon name="info" tone="muted-foreground" class="size-4" />
+                      </View>
+                    </If>
+                  </View>
                 }
               >
                 {(channel) => (
