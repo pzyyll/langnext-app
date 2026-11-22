@@ -23,6 +23,9 @@ export function Switch(props: SwitchProps) {
     <BaseSwitch
       testID={props.testID}
       accessibilityLabel={props.accessibilityLabel ?? props.label}
+      tooltip={
+        props.label === undefined && props.tooltip ? buildTooltip(props.tooltip, "top") : undefined
+      }
       checked={props.checked}
       disabled={props.disabled}
       onChange={({ checked }) => props.onChange(checked)}

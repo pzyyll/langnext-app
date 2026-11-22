@@ -28,17 +28,24 @@ const LANGUAGE_DETECTION_HELP = {
   },
 };
 
-/** One saved OCR record; either service can carry its own configuration. */
+/** One saved v3 OCR record; each channel keeps its own config, enabled state, and priority order. */
 function ocrRecord(options: {
-  active: "ai" | "baidu";
+  order?: readonly ("ai" | "baidu")[];
+  enabled?: Partial<Record<"ai" | "baidu", boolean>>;
   modelId?: string;
   baidu?: { operation: string; credentialRef: string };
 }): string {
+  const ai = options.modelId === undefined ? null : { modelId: options.modelId };
+  const baidu = options.baidu ?? null;
   return JSON.stringify({
-    version: 2,
-    active: options.active,
-    ai: options.modelId === undefined ? null : { modelId: options.modelId },
-    baidu: options.baidu ?? null,
+    version: 3,
+    order: options.order ?? ["ai", "baidu"],
+    enabled: {
+      ai: options.enabled?.ai ?? ai !== null,
+      baidu: options.enabled?.baidu ?? baidu !== null,
+    },
+    ai,
+    baidu,
   });
 }
 
@@ -615,7 +622,7 @@ test("language detection: localizes labels and help text in both languages", asy
   await app.waitUntil(() => app.texts().includes(LANGUAGE_DETECTION_HELP.zh.preferred));
 });
 
-test("ocr settings: saves and restores the image-capable model", async () => {
+test("ocr settings: lists all channels, configures AI OCR on its detail page, and returns via breadcrumb", async () => {
   const seed = makeSeedStorage({
     channels: [makeChannel({ id: "ch-openai", displayName: "OpenAI Main", enabled: true })],
     models: [
@@ -642,13 +649,26 @@ test("ocr settings: saves and restores the image-capable model", async () => {
   await app.press("id:settings-nav-ocr");
   await app.waitFor("id:settings-ocr-card");
 
-  expect(app.shows("id:settings-ocr-service")).toBe(true);
+  expect(app.shows("id:settings-ocr-channel-ai")).toBe(true);
+  expect(app.shows("id:settings-ocr-channel-baidu")).toBe(true);
+  expect(app.shows("id:settings-ocr-priority-hint")).toBe(true);
+  expect(app.enabled("id:settings-ocr-toggle-ai")).toBe(false);
+  expect(app.enabled("id:settings-ocr-toggle-baidu")).toBe(false);
   expect(app.texts()).toContain("AI OCR");
-  expect(app.enabled("id:settings-ocr-save")).toBe(false);
+  expect(app.texts()).toContain("Baidu OCR");
+  expect(app.texts()).toContain("Not configured");
   expect(app.storage()[OCR_STORAGE_KEY]).toBeUndefined();
 
-  await app.press("id:settings-ocr-service");
-  await app.press("role:option[AI OCR]");
+  await app.hover("id:settings-ocr-toggle-ai");
+  await app.waitUntil(() => app.texts().includes("Configure this channel before enabling it."));
+
+  await app.press("id:settings-ocr-channel-ai");
+  await app.waitFor("id:settings-ocr-detail-card");
+  expect(app.shows("id:settings-ocr-breadcrumb")).toBe(true);
+  expect(app.shows("id:settings-ocr-breadcrumb-root")).toBe(true);
+  expect(app.shows("id:settings-ocr-detail-title")).toBe(true);
+  expect(app.enabled("id:settings-ocr-save")).toBe(false);
+
   await app.press("id:settings-ocr-model");
   await app.waitFor("role:option[OpenAI Main · gpt-4.1]");
   expect(app.texts()).not.toContain("OpenAI Main · gpt-4.1-mini");
@@ -659,14 +679,23 @@ test("ocr settings: saves and restores the image-capable model", async () => {
   await app.press("id:settings-ocr-save");
   await app.waitUntil(() => Boolean(app.storage()[OCR_STORAGE_KEY]));
   expect(JSON.parse(app.storage()[OCR_STORAGE_KEY]!)).toEqual({
-    version: 2,
-    active: "ai",
+    version: 3,
+    order: ["ai", "baidu"],
+    enabled: { ai: true, baidu: false },
     ai: { modelId: "m-vision" },
     baidu: null,
   });
   expect(app.requests()).toHaveLength(0);
 
-  // Leaving the category and returning keeps the saved choice.
+  await app.press("id:settings-ocr-breadcrumb-root");
+  await app.waitFor("id:settings-ocr-card");
+  expect(app.shows("id:settings-ocr-detail-card")).toBe(false);
+  expect(app.shows("id:settings-ocr-role-ai")).toBe(true);
+  expect(app.texts()).toContain("Primary");
+  expect(app.texts()).toContain("OpenAI Main · gpt-4.1");
+  expect(app.enabled("id:settings-ocr-toggle-ai")).toBe(true);
+
+  // Leaving the category and returning keeps the saved configuration.
   await app.press("id:settings-nav-general");
   await app.waitFor("id:settings-general-card");
   expect(app.shows("id:settings-ocr-card")).toBe(false);
@@ -679,17 +708,18 @@ test("ocr settings: saves and restores the image-capable model", async () => {
   await reopened.press("id:settings-nav-ocr");
   await reopened.waitFor("id:settings-ocr-card");
   expect(reopened.texts()).toContain("OpenAI Main · gpt-4.1");
-  expect(reopened.shows("id:settings-ocr-model-unavailable")).toBe(false);
+  expect(reopened.shows("id:settings-ocr-role-ai")).toBe(true);
+  expect(reopened.shows("id:settings-ocr-windows-only")).toBe(false);
   expect(reopened.requests()).toHaveLength(0);
 
-  expect(reopened.shows("id:settings-ocr-windows-only")).toBe(false);
-
-  // Both locales carry the service, model, and privacy copy.
   await reopened.press("id:settings-nav-general");
   await reopened.press("id:language-zh-CN");
   await reopened.press("id:settings-nav-ocr");
   await reopened.waitFor("id:settings-ocr-card");
-  expect(reopened.texts()).toContain("OCR 服务");
+  expect(reopened.texts()).toContain("首选");
+  expect(reopened.texts()).toContain("百度 OCR");
+  await reopened.press("id:settings-ocr-channel-ai");
+  await reopened.waitFor("id:settings-ocr-detail-card");
   expect(reopened.texts()).toContain("模型");
 });
 
@@ -714,13 +744,17 @@ test("ocr settings: keeps an unavailable saved model and offers Models recovery"
       }),
     ],
     extra: {
-      [OCR_STORAGE_KEY]: ocrRecord({ active: "ai", modelId: "m-removed" }),
+      [OCR_STORAGE_KEY]: ocrRecord({ modelId: "m-removed" }),
     },
   });
   const app = await open(APP_ENTRY, { ...viewport, storage: seed });
 
   await app.press("id:nav-settings");
   await app.press("id:settings-nav-ocr");
+  await app.waitFor("id:settings-ocr-summary-ai");
+  expect(app.texts()).toContain("Model no longer exists in Models.");
+
+  await app.press("id:settings-ocr-channel-ai");
   await app.waitFor("id:settings-ocr-model-unavailable");
   expect(app.texts()).toContain("Model no longer exists in Models.");
   expect(app.shows("id:settings-ocr-manage-models")).toBe(true);
@@ -745,12 +779,13 @@ test("ocr settings: keeps an unavailable saved model and offers Models recovery"
         }),
       ],
       extra: {
-        [OCR_STORAGE_KEY]: ocrRecord({ active: "ai", modelId: "m-vision" }),
+        [OCR_STORAGE_KEY]: ocrRecord({ modelId: "m-vision" }),
       },
     }),
   });
   await lostImage.press("id:nav-settings");
   await lostImage.press("id:settings-nav-ocr");
+  await lostImage.press("id:settings-ocr-channel-ai");
   await lostImage.waitFor("id:settings-ocr-model-unavailable");
   expect(lostImage.texts()).toContain("Model does not support images.");
 });
@@ -768,13 +803,14 @@ test("ocr settings: an empty catalog or a failed write keeps the active binding"
       }),
     ],
     extra: {
-      [OCR_STORAGE_KEY]: ocrRecord({ active: "ai", modelId: "m-vision" }),
+      [OCR_STORAGE_KEY]: ocrRecord({ modelId: "m-vision" }),
     },
   });
   const app = await open(APP_ENTRY, { ...viewport, storage: seed });
 
   await app.press("id:nav-settings");
   await app.press("id:settings-nav-ocr");
+  await app.press("id:settings-ocr-channel-ai");
   await app.waitFor("id:settings-ocr-models-recovery");
   expect(app.shows("id:settings-ocr-model")).toBe(true);
   expect(app.enabled("id:settings-ocr-model")).toBe(false);
@@ -803,7 +839,7 @@ test("ocr settings: an empty catalog or a failed write keeps the active binding"
         }),
       ],
       extra: {
-        [OCR_STORAGE_KEY]: ocrRecord({ active: "ai", modelId: "m-vision" }),
+        [OCR_STORAGE_KEY]: ocrRecord({ modelId: "m-vision" }),
       },
     }),
     modules: {
@@ -816,7 +852,8 @@ test("ocr settings: an empty catalog or a failed write keeps the active binding"
   });
   await failingWrite.press("id:nav-settings");
   await failingWrite.press("id:settings-nav-ocr");
-  await failingWrite.waitFor("id:settings-ocr-card");
+  await failingWrite.press("id:settings-ocr-channel-ai");
+  await failingWrite.waitFor("id:settings-ocr-detail-card");
   await failingWrite.press("id:settings-ocr-model");
   await failingWrite.waitFor("role:option[OpenAI Main · gpt-4o]");
   await failingWrite.press("role:option[OpenAI Main · gpt-4o]");
@@ -829,15 +866,14 @@ test("ocr settings: an empty catalog or a failed write keeps the active binding"
   expect(JSON.parse(failingWrite.storage()[OCR_STORAGE_KEY]!).ai.modelId).toBe("m-vision");
 });
 
-test("ocr settings: saves Baidu keys and restores a blank form", async () => {
+test("ocr settings: saves Baidu keys on detail page and restores a blank form", async () => {
   const app = await open(APP_ENTRY, { ...viewport, storage: makeSeedStorage({}) });
   await app.press("id:nav-settings");
   await app.press("id:settings-nav-ocr");
   await app.waitFor("id:settings-ocr-card");
 
-  await app.press("id:settings-ocr-service");
-  await app.waitFor("role:option[Baidu OCR]");
-  await app.press("role:option[Baidu OCR]");
+  await app.press("id:settings-ocr-open-baidu");
+  await app.waitFor("id:settings-ocr-detail-card");
 
   expect(app.texts()).toContain("Accurate with Location");
   expect(app.shows("id:settings-ocr-model")).toBe(false);
@@ -854,12 +890,14 @@ test("ocr settings: saves Baidu keys and restores a blank form", async () => {
   await app.waitUntil(() => Boolean(app.storage()[OCR_STORAGE_KEY]));
   const saved = JSON.parse(app.storage()[OCR_STORAGE_KEY]!) as {
     version: number;
-    active: string;
+    order: string[];
+    enabled: { ai: boolean; baidu: boolean };
     ai: unknown;
     baidu: { operation: string; credentialRef: string };
   };
-  expect(saved.version).toBe(2);
-  expect(saved.active).toBe("baidu");
+  expect(saved.version).toBe(3);
+  expect(saved.order).toEqual(["ai", "baidu"]);
+  expect(saved.enabled).toEqual({ ai: false, baidu: true });
   expect(saved.ai).toBeNull();
   expect(saved.baidu.operation).toBe("accurate");
   expect(JSON.stringify(saved).includes("synthetic")).toBe(false);
@@ -872,12 +910,21 @@ test("ocr settings: saves Baidu keys and restores a blank form", async () => {
   expect(app.enabled("id:settings-ocr-save")).toBe(true);
   expect(app.requests()).toHaveLength(0);
 
+  // Clicking OCR in the left rail also returns from the detail page to the list.
+  await app.press("id:settings-nav-ocr");
+  await app.waitFor("id:settings-ocr-card");
+  expect(app.shows("id:settings-ocr-role-baidu")).toBe(true);
+  expect(app.texts()).toContain("Primary");
+  expect(app.texts()).toContain("Accurate with Location");
+
   const reopened = await open(APP_ENTRY, { ...viewport, storage: app.storage() });
   await reopened.press("id:nav-settings");
   await reopened.press("id:settings-nav-ocr");
   await reopened.waitFor("id:settings-ocr-card");
   expect(reopened.texts()).toContain("Baidu OCR");
   expect(reopened.texts()).toContain("Accurate with Location");
+  await reopened.press("id:settings-ocr-channel-baidu");
+  await reopened.waitFor("id:settings-ocr-detail-card");
   expect(reopened.value("id:settings-ocr-baidu-api-key")).toBe("");
   expect(reopened.value("id:settings-ocr-baidu-secret-key")).toBe("");
   expect(reopened.requests()).toHaveLength(0);
@@ -887,11 +934,13 @@ test("ocr settings: saves Baidu keys and restores a blank form", async () => {
   await reopened.press("id:settings-nav-ocr");
   await reopened.waitFor("id:settings-ocr-card");
   expect(reopened.texts()).toContain("百度 OCR");
-  expect(reopened.texts()).toContain("模式");
   expect(reopened.texts()).toContain("高精度含位置版");
+  await reopened.press("id:settings-ocr-channel-baidu");
+  await reopened.waitFor("id:settings-ocr-detail-card");
+  expect(reopened.texts()).toContain("模式");
 });
 
-test("ocr settings: each service keeps its own saved configuration", async () => {
+test("ocr settings: reorders channels and toggles enable state while preserving config", async () => {
   const ref = "saved-baidu-ref";
   const seed = makeSeedStorage({
     channels: [makeChannel({ id: "ch-openai", displayName: "OpenAI Main", enabled: true })],
@@ -906,7 +955,9 @@ test("ocr settings: each service keeps its own saved configuration", async () =>
     ],
     extra: {
       [OCR_STORAGE_KEY]: ocrRecord({
-        active: "baidu",
+        order: ["ai", "baidu"],
+        enabled: { ai: true, baidu: true },
+        modelId: "m-vision",
         baidu: { operation: "general", credentialRef: ref },
       }),
       [baiduCredentialStorageKey(ref)]: JSON.stringify({
@@ -915,59 +966,90 @@ test("ocr settings: each service keeps its own saved configuration", async () =>
       }),
     },
   });
+
   const app = await open(APP_ENTRY, { ...viewport, storage: seed });
   await app.press("id:nav-settings");
   await app.press("id:settings-nav-ocr");
-  await app.waitUntil(() => app.enabled("id:settings-ocr-save"));
-  expect(app.texts()).toContain("General with Location");
-  expect(app.value("id:settings-ocr-baidu-api-key")).toBe("");
-  expect(app.value("id:settings-ocr-baidu-secret-key")).toBe("");
+  await app.waitFor("id:settings-ocr-card");
 
-  // Saving AI stores its own model and leaves the Baidu configuration untouched.
-  await app.press("id:settings-ocr-service");
-  await app.press("role:option[AI OCR]");
-  expect(app.texts()).not.toContain("Saving AI OCR removes the saved Baidu keys.");
-  await app.press("id:settings-ocr-model");
-  await app.press("role:option[OpenAI Main · gpt-4.1]");
-  await app.press("id:settings-ocr-save");
-  await app.waitUntil(() => JSON.parse(app.storage()[OCR_STORAGE_KEY] ?? "{}").active === "ai");
-  expect(JSON.parse(app.storage()[OCR_STORAGE_KEY]!)).toEqual({
-    version: 2,
-    active: "ai",
-    ai: { modelId: "m-vision" },
-    baidu: { operation: "general", credentialRef: ref },
-  });
-  expect(app.storage()[baiduCredentialStorageKey(ref)]).toBe(
-    JSON.stringify({ apiKey: "saved-api-key", secretKey: "saved-secret-key" }),
-  );
+  expect(app.enabled("id:settings-ocr-move-up-ai")).toBe(false);
+  expect(app.enabled("id:settings-ocr-move-down-ai")).toBe(true);
+  expect(app.enabled("id:settings-ocr-move-up-baidu")).toBe(true);
+  expect(app.enabled("id:settings-ocr-move-down-baidu")).toBe(false);
+  expect(app.shows("id:settings-ocr-role-ai")).toBe(true);
+  expect(app.shows("id:settings-ocr-role-baidu")).toBe(true);
 
-  // Reopening restores both services; switching back reuses the saved keys.
+  await app.press("id:settings-ocr-move-up-baidu");
+  await app.waitUntil(() => JSON.parse(app.storage()[OCR_STORAGE_KEY]!).order[0] === "baidu");
+  expect(app.enabled("id:settings-ocr-move-up-baidu")).toBe(false);
+  expect(app.enabled("id:settings-ocr-move-down-baidu")).toBe(true);
+
   const reopened = await open(APP_ENTRY, { ...viewport, storage: app.storage() });
   await reopened.press("id:nav-settings");
   await reopened.press("id:settings-nav-ocr");
   await reopened.waitFor("id:settings-ocr-card");
-  expect(reopened.texts()).toContain("OpenAI Main · gpt-4.1");
-  await reopened.press("id:settings-ocr-service");
-  await reopened.press("role:option[Baidu OCR]");
-  await reopened.waitUntil(() => reopened.enabled("id:settings-ocr-save"));
+  expect(JSON.parse(reopened.storage()[OCR_STORAGE_KEY]!).order).toEqual(["baidu", "ai"]);
+
+  // Disabling Baidu keeps its credentials & summary, and promotes AI to Primary.
+  await reopened.press("id:settings-ocr-toggle-baidu");
+  await reopened.waitUntil(
+    () => JSON.parse(reopened.storage()[OCR_STORAGE_KEY]!).enabled.baidu === false,
+  );
+  expect(reopened.shows("id:settings-ocr-role-baidu")).toBe(false);
+  expect(reopened.shows("id:settings-ocr-role-ai")).toBe(true);
   expect(reopened.texts()).toContain("General with Location");
-  expect(reopened.enabled("id:settings-ocr-save")).toBe(true);
+  expect(reopened.storage()[baiduCredentialStorageKey(ref)]).toBe(
+    JSON.stringify({ apiKey: "saved-api-key", secretKey: "saved-secret-key" }),
+  );
+
+  // Editing an already-configured disabled channel preserves its disabled state.
+  await reopened.press("id:settings-ocr-channel-baidu");
+  await reopened.waitFor("id:settings-ocr-detail-card");
+  await reopened.press("id:settings-ocr-baidu-operation");
+  await reopened.waitFor("role:option[Accurate Basic]");
+  await reopened.press("role:option[Accurate Basic]");
   await reopened.press("id:settings-ocr-save");
   await reopened.waitUntil(
-    () => JSON.parse(reopened.storage()[OCR_STORAGE_KEY]!).active === "baidu",
+    () => JSON.parse(reopened.storage()[OCR_STORAGE_KEY]!).baidu.operation === "accurate_basic",
   );
-  expect(JSON.parse(reopened.storage()[OCR_STORAGE_KEY]!)).toEqual({
-    version: 2,
-    active: "baidu",
-    ai: { modelId: "m-vision" },
-    baidu: { operation: "general", credentialRef: ref },
-  });
+  expect(JSON.parse(reopened.storage()[OCR_STORAGE_KEY]!).enabled.baidu).toBe(false);
+});
 
-  // The saved AI model survives while Baidu is active.
-  await reopened.press("id:settings-ocr-service");
-  await reopened.press("role:option[AI OCR]");
-  expect(reopened.texts()).toContain("OpenAI Main · gpt-4.1");
-  expect(reopened.requests()).toHaveLength(0);
+test("ocr settings: keeps previous order and enabled state on a failed list write", async () => {
+  const ref = "saved-baidu-ref";
+  const failing = await open(APP_ENTRY, {
+    ...viewport,
+    storage: makeSeedStorage({
+      extra: {
+        [OCR_STORAGE_KEY]: ocrRecord({
+          order: ["baidu", "ai"],
+          enabled: { ai: false, baidu: false },
+          baidu: { operation: "accurate_basic", credentialRef: ref },
+        }),
+        [baiduCredentialStorageKey(ref)]: JSON.stringify({
+          apiKey: "saved-api-key",
+          secretKey: "saved-secret-key",
+        }),
+      },
+    }),
+    modules: {
+      nsh: {
+        "Storage.setItem": async (key: string) => {
+          if (key === OCR_STORAGE_KEY) throw new Error("Simulated write failure");
+        },
+      },
+    },
+  });
+  await failing.press("id:nav-settings");
+  await failing.press("id:settings-nav-ocr");
+  await failing.waitFor("id:settings-ocr-card");
+  await failing.press("id:settings-ocr-toggle-baidu");
+  await failing.waitFor("id:settings-ocr-list-error");
+  expect(JSON.parse(failing.storage()[OCR_STORAGE_KEY]!).enabled.baidu).toBe(false);
+
+  await failing.press("id:settings-ocr-move-down-baidu");
+  await failing.waitFor("id:settings-ocr-list-error");
+  expect(JSON.parse(failing.storage()[OCR_STORAGE_KEY]!).order).toEqual(["baidu", "ai"]);
 });
 
 test("ocr settings: unreadable Baidu keys and a failed write leave the binding", async () => {
@@ -975,7 +1057,8 @@ test("ocr settings: unreadable Baidu keys and a failed write leave the binding",
   const broken = makeSeedStorage({
     extra: {
       [OCR_STORAGE_KEY]: ocrRecord({
-        active: "baidu",
+        order: ["baidu", "ai"],
+        enabled: { ai: false, baidu: true },
         baidu: { operation: "general", credentialRef: ref },
       }),
       [baiduCredentialStorageKey(ref)]: JSON.stringify({ apiKey: 1 }),
@@ -984,6 +1067,10 @@ test("ocr settings: unreadable Baidu keys and a failed write leave the binding",
   const app = await open(APP_ENTRY, { ...viewport, storage: broken });
   await app.press("id:nav-settings");
   await app.press("id:settings-nav-ocr");
+  await app.waitFor("id:settings-ocr-summary-baidu");
+  expect(app.texts()).toContain("The saved Baidu keys could not be read. Enter both keys.");
+
+  await app.press("id:settings-ocr-channel-baidu");
   await app.waitFor("id:settings-ocr-baidu-keys-missing");
   expect(app.enabled("id:settings-ocr-save")).toBe(false);
   await app.type("id:settings-ocr-baidu-api-key", "replacement-api-key");
@@ -1004,6 +1091,7 @@ test("ocr settings: unreadable Baidu keys and a failed write leave the binding",
   });
   await failing.press("id:nav-settings");
   await failing.press("id:settings-nav-ocr");
+  await failing.press("id:settings-ocr-channel-baidu");
   await failing.waitFor("id:settings-ocr-baidu-keys-missing");
   await failing.type("id:settings-ocr-baidu-api-key", "replacement-api-key");
   await failing.type("id:settings-ocr-baidu-secret-key", "replacement-secret-key");
@@ -1013,4 +1101,52 @@ test("ocr settings: unreadable Baidu keys and a failed write leave the binding",
   expect(failing.value("id:settings-ocr-baidu-api-key")).toBe("replacement-api-key");
   expect(failing.value("id:settings-ocr-baidu-secret-key")).toBe("replacement-secret-key");
   expect(failing.requests()).toHaveLength(0);
+});
+
+test("ocr settings: renders cleanly at minimum viewport in dark mode with reduced motion", async () => {
+  const ref = "compact-baidu-ref";
+  const app = await open(APP_ENTRY, {
+    ...viewport,
+    width: 720,
+    height: 520,
+    colorScheme: "dark",
+    reducedMotion: true,
+    storage: makeSeedStorage({
+      channels: [makeChannel({ id: "ch-openai", displayName: "OpenAI Main", enabled: true })],
+      models: [
+        makeModel({
+          id: "m-vision",
+          providerId: "ch-openai",
+          modelKey: "gpt-4.1",
+          enabled: true,
+          capabilities: { text: true, image: true, pdf: false, video: false },
+        }),
+      ],
+      extra: {
+        "settings.language": "zh-CN",
+        [OCR_STORAGE_KEY]: ocrRecord({
+          order: ["ai", "baidu"],
+          enabled: { ai: true, baidu: true },
+          modelId: "m-vision",
+          baidu: { operation: "accurate", credentialRef: ref },
+        }),
+        [baiduCredentialStorageKey(ref)]: JSON.stringify({
+          apiKey: "saved-api-key",
+          secretKey: "saved-secret-key",
+        }),
+      },
+    }),
+  });
+
+  await app.press("id:nav-settings");
+  await app.press("id:settings-nav-ocr");
+  await app.waitFor("id:settings-ocr-card");
+  expect(app.texts()).toContain("首选");
+  expect(app.texts()).toContain("备用");
+
+  await app.press("id:settings-ocr-channel-ai");
+  await app.waitFor("id:settings-ocr-detail-card");
+  expect(app.shows("id:settings-ocr-breadcrumb")).toBe(true);
+  await app.press("id:settings-ocr-breadcrumb-root");
+  await app.waitFor("id:settings-ocr-card");
 });

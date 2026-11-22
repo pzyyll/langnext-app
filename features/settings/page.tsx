@@ -3,9 +3,11 @@ import { Radio, RadioGroup } from "nsh/base";
 import { t } from "nsh/i18n";
 import { SplitPane } from "../../components/layout/split-pane";
 import { motion } from "../../components/motion";
+import { Breadcrumb } from "../../components/ui/breadcrumb";
 import { Button } from "../../components/ui/button";
 import { Card, SectionHeading } from "../../components/ui/card";
 import { Switch } from "../../components/ui/switch";
+import type { OcrServiceKind } from "../ocr/settings";
 import { appearance, appearanceError, selectAppearance, type Appearance } from "./appearance";
 import { language, languageError, selectLanguage, type LanguagePreference } from "./language";
 import { LanguageDetectionSection } from "./language-detection-section";
@@ -182,6 +184,16 @@ export function SettingsPage(props: {
   const compact = () => windowSize().width < 860;
   const currentOs = () => props.platformOs ?? platform.os;
   const activeSectionLabelKey = () => sectionLabelKey(selectedSection());
+  const selectedOcrChannel = signal<OcrServiceKind | null>(null);
+  const showingOcrBreadcrumb = () => selectedSection() === "ocr" && selectedOcrChannel() !== null;
+  const headerPaddingClass = () =>
+    compact()
+      ? showingOcrBreadcrumb()
+        ? "pl-2 pr-4"
+        : "px-4"
+      : showingOcrBreadcrumb()
+        ? "pl-4 pr-6"
+        : "px-6";
 
   return (
     <SplitPane
@@ -221,7 +233,10 @@ export function SettingsPage(props: {
                               size="nav"
                               selected={isSelected()}
                               label={t(item().labelKey)}
-                              onPress={() => selectedSection.set(item().id)}
+                              onPress={() => {
+                                selectedSection.set(item().id);
+                                selectedOcrChannel.set(null);
+                              }}
                               class="w-full"
                             />
                           );
@@ -239,11 +254,37 @@ export function SettingsPage(props: {
         <View testID="settings-detail" class="min-w-0 flex-1 bg-background">
           <View class="shrink-0">
             <View
-              class={`mx-auto h-14 w-full max-w-4xl flex-row items-center justify-between gap-3 ${compact() ? "px-4" : "px-6"}`}
+              class={`mx-auto h-14 w-full max-w-4xl flex-row items-center justify-between gap-3 ${headerPaddingClass()}`}
             >
-              <Text role="header" class="min-w-0 truncate text-lg font-semibold text-foreground">
-                {t(activeSectionLabelKey())}
-              </Text>
+              <If
+                when={selectedSection() === "ocr" ? selectedOcrChannel() : null}
+                else={
+                  <Text
+                    role="header"
+                    class="min-w-0 truncate text-lg font-semibold text-foreground"
+                  >
+                    {t(activeSectionLabelKey())}
+                  </Text>
+                }
+              >
+                {(channel) => (
+                  <Breadcrumb
+                    testID="settings-ocr-breadcrumb"
+                    accessibilityLabel={t("settings.ocr.breadcrumbLabel")}
+                    items={[
+                      {
+                        label: t("settings.sections.ocr"),
+                        testID: "settings-ocr-breadcrumb-root",
+                        onPress: () => selectedOcrChannel.set(null),
+                      },
+                      {
+                        label: t(`settings.ocr.${channel()}`),
+                        testID: "settings-ocr-detail-title",
+                      },
+                    ]}
+                  />
+                )}
+              </If>
             </View>
           </View>
           <Scroll class="min-h-0 flex-1">
@@ -273,6 +314,8 @@ export function SettingsPage(props: {
                 <OcrSection
                   compact={compact()}
                   platformOs={currentOs()}
+                  selectedChannel={selectedOcrChannel()}
+                  onSelectChannel={(channel) => selectedOcrChannel.set(channel)}
                   onManageModels={props.onNavigateToModels}
                 />
               </If>

@@ -55,41 +55,49 @@ function createMemoryStorage(initial: Record<string, string> = {}) {
 
 const VISION_BINDING: OcrServiceBinding = { kind: "ai", modelId: "vision-model" };
 
-test("ocr store: saves one AI binding and restores it from the same storage", async () => {
+test("ocr store: saves one AI binding, auto-enables it, and restores it from storage", async () => {
   const mem = createMemoryStorage();
   const store1 = createOcrSettingsStore(mem.storage);
 
-  expect(store1.settings()).toBeNull();
+  expect(store1.channelOrder()).toEqual(["ai", "baidu"]);
+  expect(store1.isEnabled("ai")).toBe(false);
+  expect(store1.isEnabled("baidu")).toBe(false);
+  expect(store1.enabledBindings()).toEqual([]);
   expect(store1.savedAiBinding()).toBeNull();
   expect(store1.savedBaiduBinding()).toBeNull();
   expect(store1.loadError()).toBeNull();
 
   await store1.load();
   expect(store1.loadError()).toBeNull();
-  expect(store1.settings()).toBeNull();
+  expect(store1.enabledBindings()).toEqual([]);
 
   const result = await store1.save(VISION_BINDING);
   expect(result.ok).toBe(true);
-  expect(store1.settings()).toEqual(VISION_BINDING);
+  expect(store1.isEnabled("ai")).toBe(true);
+  expect(store1.isEnabled("baidu")).toBe(false);
+  expect(store1.enabledBindings()).toEqual([VISION_BINDING]);
   expect(store1.savedAiBinding()).toEqual(VISION_BINDING);
   expect(store1.savedBaiduBinding()).toBeNull();
 
   const store2 = createOcrSettingsStore(mem.storage);
   await store2.load();
   expect(store2.loadError()).toBeNull();
-  expect(store2.settings()).toEqual(VISION_BINDING);
+  expect(store2.channelOrder()).toEqual(["ai", "baidu"]);
+  expect(store2.isEnabled("ai")).toBe(true);
+  expect(store2.enabledBindings()).toEqual([VISION_BINDING]);
   expect(store2.savedAiBinding()).toEqual(VISION_BINDING);
   expect(store2.savedBaiduBinding()).toBeNull();
 
   expect(JSON.parse(mem.backing[OCR_STORAGE_KEY]!)).toEqual({
-    version: 2,
-    active: "ai",
+    version: 3,
+    order: ["ai", "baidu"],
+    enabled: { ai: true, baidu: false },
     ai: { modelId: "vision-model" },
     baidu: null,
   });
 });
 
-test("ocr store: rejects a blank model ID and keeps the active binding", async () => {
+test("ocr store: rejects a blank model ID and keeps the saved bindings", async () => {
   const mem = createMemoryStorage();
   const store = createOcrSettingsStore(mem.storage);
   await store.save(VISION_BINDING);
@@ -100,11 +108,11 @@ test("ocr store: rejects a blank model ID and keeps the active binding", async (
   if (result.ok) throw new Error("expected a rejected save");
   expect(result.key).toBe("model_id_blank");
   expect(result.message).toBeTruthy();
-  expect(store.settings()).toEqual(VISION_BINDING);
+  expect(store.enabledBindings()).toEqual([VISION_BINDING]);
   expect(mem.getSetCalls()).toBe(1);
 });
 
-test("ocr store: keeps the active binding when the write fails", async () => {
+test("ocr store: keeps the saved bindings when a write fails", async () => {
   const mem = createMemoryStorage();
   const store = createOcrSettingsStore(mem.storage);
   await store.save(VISION_BINDING);
@@ -116,17 +124,17 @@ test("ocr store: keeps the active binding when the write fails", async () => {
   if (result.ok) throw new Error("expected a rejected save");
   expect(result.key).toBe("storage_write_failed");
   expect(result.message).toBeTruthy();
-  expect(store.settings()).toEqual(VISION_BINDING);
+  expect(store.enabledBindings()).toEqual([VISION_BINDING]);
 });
 
-test("ocr store: reports malformed storage and leaves no usable binding", async () => {
+test("ocr store: reports malformed storage and leaves no enabled binding", async () => {
   const raw = "{ not json";
   const mem = createMemoryStorage({ [OCR_STORAGE_KEY]: raw });
   const store = createOcrSettingsStore(mem.storage);
 
   await store.load();
 
-  expect(store.settings()).toBeNull();
+  expect(store.enabledBindings()).toEqual([]);
   expect(store.savedAiBinding()).toBeNull();
   expect(store.savedBaiduBinding()).toBeNull();
   expect(store.loadError()?.key).toBe("storage_malformed");
@@ -137,7 +145,7 @@ test("ocr store: reports malformed storage and leaves no usable binding", async 
 
 test("ocr store: rejects an unknown storage version with a visible load error", async () => {
   const raw = JSON.stringify({
-    version: 3,
+    version: 2,
     active: "ai",
     ai: { modelId: "vision-model" },
     baidu: null,
@@ -147,31 +155,60 @@ test("ocr store: rejects an unknown storage version with a visible load error", 
 
   await store.load();
 
-  expect(store.settings()).toBeNull();
+  expect(store.enabledBindings()).toEqual([]);
   expect(store.loadError()?.key).toBe("storage_unsupported_version");
   expect(mem.backing[OCR_STORAGE_KEY]).toBe(raw);
 });
 
-test("ocr store: rejects a stored AI configuration without a nonblank model", async () => {
-  const raw = JSON.stringify({ version: 2, active: "ai", ai: { modelId: "" }, baidu: null });
-  const mem = createMemoryStorage({ [OCR_STORAGE_KEY]: raw });
-  const store = createOcrSettingsStore(mem.storage);
-
-  await store.load();
-
-  expect(store.settings()).toBeNull();
-  expect(store.loadError()?.key).toBe("storage_malformed");
-  expect(mem.backing[OCR_STORAGE_KEY]).toBe(raw);
-});
-
-test("ocr store: rejects an active service without its saved configuration", async () => {
+test("ocr store: rejects malformed v3 records and enabled channels without saved configs", async () => {
   const records = [
-    { version: 2, active: "ai", ai: null, baidu: null },
-    { version: 2, active: "baidu", ai: { modelId: "vision-model" }, baidu: null },
-    { version: 2, active: "google", ai: null, baidu: null },
     {
-      version: 2,
-      active: "ai",
+      version: 3,
+      order: ["ai", "baidu"],
+      enabled: { ai: true, baidu: false },
+      ai: null,
+      baidu: null,
+    },
+    {
+      version: 3,
+      order: ["ai", "baidu"],
+      enabled: { ai: false, baidu: true },
+      ai: { modelId: "vision-model" },
+      baidu: null,
+    },
+    { version: 3, order: ["ai"], enabled: { ai: false, baidu: false }, ai: null, baidu: null },
+    {
+      version: 3,
+      order: ["ai", "ai"],
+      enabled: { ai: false, baidu: false },
+      ai: null,
+      baidu: null,
+    },
+    {
+      version: 3,
+      order: ["ai", "google"],
+      enabled: { ai: false, baidu: false },
+      ai: null,
+      baidu: null,
+    },
+    {
+      version: 3,
+      order: ["ai", "baidu"],
+      enabled: { ai: "yes", baidu: false },
+      ai: null,
+      baidu: null,
+    },
+    {
+      version: 3,
+      order: ["ai", "baidu"],
+      enabled: { ai: true, baidu: false },
+      ai: { modelId: "" },
+      baidu: null,
+    },
+    {
+      version: 3,
+      order: ["ai", "baidu"],
+      enabled: { ai: true, baidu: false },
       ai: { modelId: "vision-model" },
       baidu: { operation: "premium", credentialRef: "ref-1" },
     },
@@ -182,27 +219,27 @@ test("ocr store: rejects an active service without its saved configuration", asy
       createMemoryStorage({ [OCR_STORAGE_KEY]: JSON.stringify(record) }).storage,
     );
     await store.load();
-    expect(store.settings()).toBeNull();
+    expect(store.enabledBindings()).toEqual([]);
     expect(store.savedAiBinding()).toBeNull();
     expect(store.savedBaiduBinding()).toBeNull();
     expect(store.loadError()?.key).toBe("storage_malformed");
   }
 });
 
-test("ocr store: reports a read failure without a usable binding", async () => {
+test("ocr store: reports a read failure without any enabled binding", async () => {
   const mem = createMemoryStorage();
   mem.setGetError(new Error("unavailable"));
   const store = createOcrSettingsStore(mem.storage);
 
   await store.load();
 
-  expect(store.settings()).toBeNull();
+  expect(store.enabledBindings()).toEqual([]);
   expect(store.loadError()?.key).toBe("storage_read_failed");
   expect(store.loadError()?.message).toBeTruthy();
 });
 
 test("ocr store: a valid save replaces invalid stored data", async () => {
-  const mem = createMemoryStorage({ [OCR_STORAGE_KEY]: '{"version":2,"active":"ai"}' });
+  const mem = createMemoryStorage({ [OCR_STORAGE_KEY]: '{"version":3,"order":["ai"]}' });
   const store = createOcrSettingsStore(mem.storage);
   await store.load();
   expect(store.loadError()?.key).toBe("storage_malformed");
@@ -210,13 +247,13 @@ test("ocr store: a valid save replaces invalid stored data", async () => {
   const result = await store.save(VISION_BINDING);
 
   expect(result.ok).toBe(true);
-  expect(store.settings()).toEqual(VISION_BINDING);
+  expect(store.enabledBindings()).toEqual([VISION_BINDING]);
   expect(store.loadError()).toBeNull();
 
   const reloaded = createOcrSettingsStore(mem.storage);
   await reloaded.load();
   expect(reloaded.loadError()).toBeNull();
-  expect(reloaded.settings()).toEqual(VISION_BINDING);
+  expect(reloaded.enabledBindings()).toEqual([VISION_BINDING]);
 });
 
 test("ocr store: saves a Baidu binding by reference and restores the credential pair", async () => {
@@ -236,19 +273,21 @@ test("ocr store: saves a Baidu binding by reference and restores the credential 
   const ref = result.binding.credentialRef;
   expect(ref.trim().length).toBeGreaterThan(0);
   expect(result.binding).toEqual({ kind: "baidu", operation: "accurate", credentialRef: ref });
-  expect(store1.settings()).toEqual(result.binding);
+  expect(store1.isEnabled("baidu")).toBe(true);
+  expect(store1.enabledBindings()).toEqual([result.binding]);
   expect(store1.savedBaiduBinding()).toEqual(result.binding);
   expect(store1.savedAiBinding()).toBeNull();
   expect(JSON.stringify(result.binding)).not.toContain(apiKey);
   expect(JSON.stringify(result.binding)).not.toContain(secretKey);
-  expect(JSON.stringify(store1.settings())).not.toContain(apiKey);
+  expect(JSON.stringify(store1.enabledBindings())).not.toContain(apiKey);
 
   const raw = mem.backing[OCR_STORAGE_KEY]!;
   expect(raw).not.toContain(apiKey);
   expect(raw).not.toContain(secretKey);
   expect(JSON.parse(raw)).toEqual({
-    version: 2,
-    active: "baidu",
+    version: 3,
+    order: ["ai", "baidu"],
+    enabled: { ai: false, baidu: true },
     ai: null,
     baidu: { operation: "accurate", credentialRef: ref },
   });
@@ -260,7 +299,9 @@ test("ocr store: saves a Baidu binding by reference and restores the credential 
   const store2 = createOcrSettingsStore(mem.storage);
   await store2.load();
   expect(store2.loadError()).toBeNull();
-  expect(store2.settings()).toEqual({ kind: "baidu", operation: "accurate", credentialRef: ref });
+  expect(store2.enabledBindings()).toEqual([
+    { kind: "baidu", operation: "accurate", credentialRef: ref },
+  ]);
   expect(store2.savedBaiduBinding()).toEqual(result.binding);
   expect(await store2.readBaiduCredentials(ref)).toEqual({ apiKey, secretKey });
 });
@@ -298,7 +339,7 @@ test("ocr store: a failed credential write keeps the previous Baidu binding and 
   expect(result.ok).toBe(false);
   if (result.ok) throw new Error("expected a rejected save");
   expect(result.key).toBe("storage_write_failed");
-  expect(store.settings()).toEqual(first);
+  expect(store.enabledBindings()).toEqual([first]);
   expect(mem.backing[OCR_STORAGE_KEY]).toBe(before);
   expect(await store.readBaiduCredentials(first.credentialRef)).toEqual(FIRST_KEYS);
   expect(JSON.stringify(mem.backing)).not.toContain(NEXT_KEYS.apiKey);
@@ -321,7 +362,7 @@ test("ocr store: a failed binding write drops the new pair and keeps the old one
   expect(result.ok).toBe(false);
   if (result.ok) throw new Error("expected a rejected save");
   expect(result.key).toBe("storage_write_failed");
-  expect(store.settings()).toEqual(first);
+  expect(store.enabledBindings()).toEqual([first]);
   expect(mem.backing[OCR_STORAGE_KEY]).toBe(before);
   expect(await store.readBaiduCredentials(first.credentialRef)).toEqual(FIRST_KEYS);
   expect(JSON.stringify(mem.backing)).not.toContain(NEXT_KEYS.apiKey);
@@ -336,34 +377,120 @@ test("ocr store: replacing Baidu keys removes the previous credential entry", as
 
   expect(second.credentialRef).not.toBe(first.credentialRef);
   expect(second.operation).toBe("general");
-  expect(store.settings()).toEqual(second);
+  expect(store.enabledBindings()).toEqual([second]);
   expect(mem.backing["settings.ocr.credentials." + first.credentialRef]).toBeUndefined();
   expect(await store.readBaiduCredentials(first.credentialRef)).toBeNull();
   expect(await store.readBaiduCredentials(second.credentialRef)).toEqual(NEXT_KEYS);
-  expect(JSON.stringify(store.settings())).not.toContain(NEXT_KEYS.apiKey);
+  expect(JSON.stringify(store.enabledBindings())).not.toContain(NEXT_KEYS.apiKey);
 });
 
-test("ocr store: saving AI keeps the saved Baidu configuration and credential pair", async () => {
+test("ocr store: saving both channels keeps both enabled in priority order", async () => {
   const mem = createMemoryStorage();
   const store = createOcrSettingsStore(mem.storage);
-  const first = await saveBaidu(store, FIRST_KEYS);
+  const baidu = await saveBaidu(store, FIRST_KEYS);
+  const ai = await store.save(VISION_BINDING);
 
-  const result = await store.save(VISION_BINDING);
-
-  expect(result.ok).toBe(true);
-  expect(store.settings()).toEqual(VISION_BINDING);
+  expect(ai.ok).toBe(true);
+  expect(store.isEnabled("ai")).toBe(true);
+  expect(store.isEnabled("baidu")).toBe(true);
+  expect(store.enabledBindings()).toEqual([VISION_BINDING, baidu]);
   expect(store.savedAiBinding()).toEqual(VISION_BINDING);
-  expect(store.savedBaiduBinding()).toEqual(first);
-  expect(mem.backing["settings.ocr.credentials." + first.credentialRef]).toBe(
-    JSON.stringify(FIRST_KEYS),
-  );
-  expect(await store.readBaiduCredentials(first.credentialRef)).toEqual(FIRST_KEYS);
+  expect(store.savedBaiduBinding()).toEqual(baidu);
+  expect(await store.readBaiduCredentials(baidu.credentialRef)).toEqual(FIRST_KEYS);
 
   const reloaded = createOcrSettingsStore(mem.storage);
   await reloaded.load();
-  expect(reloaded.settings()).toEqual(VISION_BINDING);
-  expect(reloaded.savedBaiduBinding()).toEqual(first);
-  expect(await reloaded.readBaiduCredentials(first.credentialRef)).toEqual(FIRST_KEYS);
+  expect(reloaded.enabledBindings()).toEqual([VISION_BINDING, baidu]);
+  expect(reloaded.savedBaiduBinding()).toEqual(baidu);
+  expect(await reloaded.readBaiduCredentials(baidu.credentialRef)).toEqual(FIRST_KEYS);
+});
+
+test("ocr store: reordering channels updates priority order and persists", async () => {
+  const mem = createMemoryStorage();
+  const store = createOcrSettingsStore(mem.storage);
+  const baidu = await saveBaidu(store, FIRST_KEYS);
+  await store.save(VISION_BINDING);
+
+  expect(store.enabledBindings()).toEqual([VISION_BINDING, baidu]);
+
+  // Boundary no-ops do not write to storage.
+  const writesBefore = mem.getSetCalls();
+  expect(await store.moveChannel("ai", "up")).toEqual({ ok: true });
+  expect(await store.moveChannel("baidu", "down")).toEqual({ ok: true });
+  expect(mem.getSetCalls()).toBe(writesBefore);
+
+  expect(await store.moveChannel("baidu", "up")).toEqual({ ok: true });
+  expect(store.channelOrder()).toEqual(["baidu", "ai"]);
+  expect(store.enabledBindings()).toEqual([baidu, VISION_BINDING]);
+
+  const reloaded = createOcrSettingsStore(mem.storage);
+  await reloaded.load();
+  expect(reloaded.channelOrder()).toEqual(["baidu", "ai"]);
+  expect(reloaded.enabledBindings()).toEqual([baidu, VISION_BINDING]);
+
+  expect(await reloaded.moveChannel("baidu", "down")).toEqual({ ok: true });
+  expect(reloaded.channelOrder()).toEqual(["ai", "baidu"]);
+  expect(reloaded.enabledBindings()).toEqual([VISION_BINDING, baidu]);
+});
+
+test("ocr store: toggling preserves saved configs, rejects unconfigured enable, and preserves disabled state on edit", async () => {
+  const mem = createMemoryStorage();
+  const store = createOcrSettingsStore(mem.storage);
+
+  const unconfigured = await store.setEnabled("ai", true);
+  expect(unconfigured.ok).toBe(false);
+  if (unconfigured.ok) throw new Error("expected rejection");
+  expect(unconfigured.key).toBe("channel_unconfigured");
+  expect(mem.getSetCalls()).toBe(0);
+
+  const baidu = await saveBaidu(store, FIRST_KEYS, "accurate");
+  await store.save(VISION_BINDING);
+  expect(store.enabledBindings()).toEqual([VISION_BINDING, baidu]);
+
+  // Disabling AI keeps its saved config and drops it from enabledBindings.
+  expect(await store.setEnabled("ai", false)).toEqual({ ok: true });
+  expect(store.isEnabled("ai")).toBe(false);
+  expect(store.savedAiBinding()).toEqual(VISION_BINDING);
+  expect(store.enabledBindings()).toEqual([baidu]);
+
+  // Editing an already-configured disabled channel preserves its disabled state.
+  const editedAi = await store.save({ kind: "ai", modelId: "vision-model-2" });
+  expect(editedAi.ok).toBe(true);
+  expect(store.isEnabled("ai")).toBe(false);
+  expect(store.savedAiBinding()).toEqual({ kind: "ai", modelId: "vision-model-2" });
+  expect(store.enabledBindings()).toEqual([baidu]);
+
+  // Disabling Baidu keeps its credentials; re-enabling both restores full order.
+  expect(await store.setEnabled("baidu", false)).toEqual({ ok: true });
+  expect(store.enabledBindings()).toEqual([]);
+  expect(await store.readBaiduCredentials(baidu.credentialRef)).toEqual(FIRST_KEYS);
+
+  expect(await store.setEnabled("ai", true)).toEqual({ ok: true });
+  expect(await store.setEnabled("baidu", true)).toEqual({ ok: true });
+  expect(store.enabledBindings()).toEqual([{ kind: "ai", modelId: "vision-model-2" }, baidu]);
+});
+
+test("ocr store: failed toggle or reorder write keeps previous state", async () => {
+  const mem = createMemoryStorage();
+  const store = createOcrSettingsStore(mem.storage);
+  const baidu = await saveBaidu(store, FIRST_KEYS);
+  await store.save(VISION_BINDING);
+  const before = mem.backing[OCR_STORAGE_KEY];
+
+  mem.setSetError(new Error("disk full"));
+  const toggleErr = await store.setEnabled("ai", false);
+  expect(toggleErr.ok).toBe(false);
+  if (toggleErr.ok) throw new Error("expected failure");
+  expect(toggleErr.key).toBe("storage_write_failed");
+  expect(store.isEnabled("ai")).toBe(true);
+  expect(mem.backing[OCR_STORAGE_KEY]).toBe(before);
+
+  const moveErr = await store.moveChannel("baidu", "up");
+  expect(moveErr.ok).toBe(false);
+  if (moveErr.ok) throw new Error("expected failure");
+  expect(moveErr.key).toBe("storage_write_failed");
+  expect(store.channelOrder()).toEqual(["ai", "baidu"]);
+  expect(store.enabledBindings()).toEqual([VISION_BINDING, baidu]);
 });
 
 test("ocr store: a cleanup failure keeps the committed binding and omits secrets", async () => {
@@ -380,7 +507,7 @@ test("ocr store: a cleanup failure keeps the committed binding and omits secrets
   try {
     const second = await saveBaidu(store, NEXT_KEYS, "accurate_basic");
     expect(second.credentialRef).not.toBe(first.credentialRef);
-    expect(store.settings()).toEqual(second);
+    expect(store.enabledBindings()).toEqual([second]);
     expect(await store.readBaiduCredentials(second.credentialRef)).toEqual(NEXT_KEYS);
   } finally {
     console.warn = originalWarn;
@@ -414,7 +541,7 @@ test("ocr store: a mode-only save reuses a readable Baidu credential", async () 
     operation: "general_basic",
     credentialRef: first.credentialRef,
   });
-  expect(store.settings()).toEqual(result.binding);
+  expect(store.enabledBindings()).toEqual([result.binding]);
   expect(mem.getSetCalls()).toBe(writesBefore + 1);
   expect(await store.readBaiduCredentials(first.credentialRef)).toEqual(FIRST_KEYS);
   expect(
@@ -424,7 +551,7 @@ test("ocr store: a mode-only save reuses a readable Baidu credential", async () 
   const getsBeforeLoad = mem.getGets().length;
   const reloaded = createOcrSettingsStore(mem.storage);
   await reloaded.load();
-  expect(reloaded.settings()).toEqual(result.binding);
+  expect(reloaded.enabledBindings()).toEqual([result.binding]);
   expect(
     mem
       .getGets()
@@ -450,11 +577,11 @@ test("ocr store: keep requires both keys when the stored pair cannot be read", a
   if (result.ok) throw new Error("expected a rejected save");
   expect(result.key).toBe("baidu_keys_required");
   expect(result.message).toBeTruthy();
-  expect(store.settings()).toEqual(first);
+  expect(store.enabledBindings()).toEqual([first]);
   expect(mem.backing[OCR_STORAGE_KEY]).toBe(before);
 });
 
-test("ocr store: unknown modes, malformed bindings, and a first save without keys stay inactive", async () => {
+test("ocr store: unknown modes and a first save without keys stay inactive", async () => {
   const mem = createMemoryStorage();
   const store = createOcrSettingsStore(mem.storage);
 
@@ -475,7 +602,7 @@ test("ocr store: unknown modes, malformed bindings, and a first save without key
   expect(blank.ok).toBe(false);
   if (blank.ok) throw new Error("expected a rejected save");
   expect(blank.key).toBe("baidu_keys_required");
-  expect(store.settings()).toBeNull();
+  expect(store.enabledBindings()).toEqual([]);
   expect(mem.getSetCalls()).toBe(0);
   expect(mem.backing[OCR_STORAGE_KEY]).toBeUndefined();
 
@@ -487,91 +614,8 @@ test("ocr store: unknown modes, malformed bindings, and a first save without key
   expect(unknown.ok).toBe(false);
   if (unknown.ok) throw new Error("expected a rejected save");
   expect(unknown.key).toBe("baidu_operation_invalid");
-  expect(store.settings()).toBeNull();
+  expect(store.enabledBindings()).toEqual([]);
   expect(mem.getSetCalls()).toBe(0);
-
-  const badMode = JSON.stringify({
-    version: 2,
-    active: "baidu",
-    ai: null,
-    baidu: { operation: "premium", credentialRef: "ref-1" },
-  });
-  const badStore = createOcrSettingsStore(
-    createMemoryStorage({ [OCR_STORAGE_KEY]: badMode }).storage,
-  );
-  await badStore.load();
-  expect(badStore.settings()).toBeNull();
-  expect(badStore.loadError()?.key).toBe("storage_malformed");
-
-  const blankRef = JSON.stringify({
-    version: 2,
-    active: "baidu",
-    ai: null,
-    baidu: { operation: "accurate", credentialRef: " " },
-  });
-  const blankRefStore = createOcrSettingsStore(
-    createMemoryStorage({ [OCR_STORAGE_KEY]: blankRef }).storage,
-  );
-  await blankRefStore.load();
-  expect(blankRefStore.settings()).toBeNull();
-  expect(blankRefStore.loadError()?.key).toBe("storage_malformed");
-});
-
-test("ocr store: each service keeps its own configuration across switches", async () => {
-  const mem = createMemoryStorage();
-  const store = createOcrSettingsStore(mem.storage);
-  const baidu = await saveBaidu(store, FIRST_KEYS, "accurate");
-
-  const ai = await store.save(VISION_BINDING);
-  expect(ai.ok).toBe(true);
-  expect(store.settings()).toEqual(VISION_BINDING);
-  expect(store.savedBaiduBinding()).toEqual(baidu);
-  expect(JSON.parse(mem.backing[OCR_STORAGE_KEY]!).active).toBe("ai");
-
-  const reloaded = createOcrSettingsStore(mem.storage);
-  await reloaded.load();
-  expect(reloaded.settings()).toEqual(VISION_BINDING);
-  expect(reloaded.savedAiBinding()).toEqual(VISION_BINDING);
-  expect(reloaded.savedBaiduBinding()).toEqual(baidu);
-
-  const kept = await reloaded.save({
-    kind: "baidu",
-    operation: "general_basic",
-    credentials: { kind: "keep" },
-  });
-  expect(kept.ok).toBe(true);
-  if (!kept.ok || kept.binding.kind !== "baidu") throw new Error("expected a Baidu binding");
-  expect(kept.binding.credentialRef).toBe(baidu.credentialRef);
-  expect(kept.binding.operation).toBe("general_basic");
-  expect(reloaded.savedAiBinding()).toEqual(VISION_BINDING);
-  expect(await reloaded.readBaiduCredentials(baidu.credentialRef)).toEqual(FIRST_KEYS);
-
-  const raw = JSON.parse(mem.backing[OCR_STORAGE_KEY]!);
-  expect(raw.active).toBe("baidu");
-  expect(raw.ai).toEqual({ modelId: "vision-model" });
-  expect(raw.baidu).toEqual({
-    operation: "general_basic",
-    credentialRef: baidu.credentialRef,
-  });
-
-  const third = createOcrSettingsStore(mem.storage);
-  await third.load();
-  expect(third.settings()).toEqual(kept.binding);
-  expect(third.savedAiBinding()).toEqual(VISION_BINDING);
-});
-
-test("ocr store: replacing Baidu keys keeps the saved AI configuration", async () => {
-  const mem = createMemoryStorage();
-  const store = createOcrSettingsStore(mem.storage);
-  await store.save(VISION_BINDING);
-  const first = await saveBaidu(store, FIRST_KEYS);
-  const second = await saveBaidu(store, NEXT_KEYS, "general");
-
-  expect(second.credentialRef).not.toBe(first.credentialRef);
-  expect(store.savedAiBinding()).toEqual(VISION_BINDING);
-  expect(store.savedBaiduBinding()).toEqual(second);
-  expect(await store.readBaiduCredentials(second.credentialRef)).toEqual(NEXT_KEYS);
-  expect(JSON.parse(mem.backing[OCR_STORAGE_KEY]!).ai).toEqual({ modelId: "vision-model" });
 });
 
 test("ocr store: readBaiduCredentials returns null when the pair is missing, invalid, or unreadable", async () => {

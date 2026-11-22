@@ -91,7 +91,19 @@ settings:
     saveError: Could not save the double-copy setting. Check storage and try again.
   ocr:
     title: OCR
-    service: OCR service
+    priorityHint: Enabled channels run in order from top to bottom. Later ones act as backups.
+    notConfigured: Not configured
+    saved: OCR channel saved
+    breadcrumbLabel: OCR navigation
+    configureBeforeEnable: Configure this channel before enabling it.
+    configureLabel: Configure %{name}
+    enableLabel: Enable %{name}
+    moveUp: Move %{name} up
+    moveDown: Move %{name} down
+    itemLabel: "%{name} (%{status})"
+    role:
+      primary: Primary
+      backup: Backup
     ai: AI OCR
     baidu: Baidu OCR
     model: Model
@@ -114,6 +126,7 @@ settings:
       modelIdBlank: Choose a model for OCR.
       baiduKeysRequired: Enter both the API Key and the Secret Key.
       baiduOperationInvalid: Choose a Baidu OCR mode.
+      channelUnconfigured: Configure this channel before enabling it.
   languageDetection:
     title: Language Detection
     detection: Detection

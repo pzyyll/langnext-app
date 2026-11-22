@@ -10,12 +10,12 @@ initializeAiModules();
 interface HarnessParams {
   /** PNG bytes as Base64: what the OS capture boundary would return. */
   pngBase64?: string;
-  /** Model IDs to recognize with, in order; the saved OCR binding when absent. */
+  /** Model IDs to recognize with individually; when absent, uses saved `enabledBindings()`. */
   modelIds?: string[];
   /** Report readiness and skip recognition. */
   readinessOnly?: boolean;
-  /** Replace the loaded binding with this AI model before recognition. */
-  swapToAiModelId?: string;
+  /** Disable Baidu right after checking readiness to verify mid-capture toggle safety. */
+  disableBaiduBeforeRecognize?: boolean;
   timeoutMs?: number;
   abortAfterMs?: number;
 }
@@ -42,41 +42,34 @@ function RecognizeHarnessApp() {
       await loadModelsState();
       await ocrSettingsStore.load();
 
-      const saved = ocrSettingsStore.settings();
-      if (saved?.kind === "baidu" && !(params.modelIds && params.modelIds.length > 0)) {
-        const readiness = await checkOcrReadiness(saved);
-        if (!params.readinessOnly) {
-          if (params.swapToAiModelId) {
-            await ocrSettingsStore.save({ kind: "ai", modelId: params.swapToAiModelId });
-          }
+      if (params.modelIds && params.modelIds.length > 0) {
+        for (const modelId of params.modelIds) {
           outcomes.push(
-            await recognizeScreenshot(saved, bytes, {
+            await recognizeScreenshot([{ kind: "ai", modelId }], bytes, {
               signal: controller.signal,
               ...(params.timeoutMs !== undefined ? { timeoutMs: params.timeoutMs } : {}),
             }),
           );
         }
-        outcomesJson.set(JSON.stringify({ readiness, outcomes }));
+        outcomesJson.set(JSON.stringify({ outcomes }));
         status.set("done");
         return;
       }
 
-      const modelIds =
-        params.modelIds && params.modelIds.length > 0
-          ? params.modelIds
-          : saved?.kind === "ai"
-            ? [saved.modelId]
-            : [];
-
-      for (const modelId of modelIds) {
+      const bindings = ocrSettingsStore.enabledBindings();
+      const readiness = await checkOcrReadiness(bindings);
+      if (!params.readinessOnly) {
+        if (params.disableBaiduBeforeRecognize) {
+          await ocrSettingsStore.setEnabled("baidu", false);
+        }
         outcomes.push(
-          await recognizeScreenshot({ kind: "ai", modelId }, bytes, {
+          await recognizeScreenshot(bindings, bytes, {
             signal: controller.signal,
             ...(params.timeoutMs !== undefined ? { timeoutMs: params.timeoutMs } : {}),
           }),
         );
       }
-      outcomesJson.set(JSON.stringify({ outcomes }));
+      outcomesJson.set(JSON.stringify({ readiness, outcomes }));
       status.set("done");
     } catch (error) {
       outcomesJson.set(

@@ -1222,7 +1222,7 @@ test("double copy: shell seam delivers copied text to a newly mounted popup, tra
 });
 
 const HARNESS_OCR_CAPTURE_KEY = "__test.qt.ocrCapture";
-const OCR_STORAGE_KEY = "settings.ocr.v2";
+const OCR_STORAGE_KEY = "settings.ocr.v3";
 const OCR_TEXT = "Screen line one\n第二行";
 const OCR_CAPTION = "Drag to select · Tab switches display · Space and Enter confirm · Esc cancels";
 const OCR_BUTTON = "id:quick-translate-header >> id:quick-translate-ocr";
@@ -1261,8 +1261,9 @@ function ocrSeed(extra: Record<string, string> = {}) {
       cards: [{ id: "card-1", presetId: "preset-1", templateId: null, collapsed: false }],
     }),
     [OCR_STORAGE_KEY]: JSON.stringify({
-      version: 2,
-      active: "ai",
+      version: 3,
+      order: ["ai", "baidu"],
+      enabled: { ai: true, baidu: false },
       ai: { modelId: "m-vision" },
       baidu: null,
     }),
@@ -1742,8 +1743,9 @@ const BAIDU_OCR_URL =
 function baiduOcrSeed(extra: Record<string, string> = {}) {
   return ocrSeed({
     [OCR_STORAGE_KEY]: JSON.stringify({
-      version: 2,
-      active: "baidu",
+      version: 3,
+      order: ["baidu", "ai"],
+      enabled: { ai: false, baidu: true },
       ai: null,
       baidu: { operation: "accurate", credentialRef: BAIDU_REF },
     }),
@@ -1859,4 +1861,42 @@ test("quick ocr: Baidu cancellation, a late result, and a quota error keep the d
   expect(quota.requests().filter((request) => request.url.includes("api.openai.com"))).toHaveLength(
     0,
   );
+});
+
+test("quick ocr: falls back from primary Baidu quota failure to backup AI and translates once", async () => {
+  const app = await open(HARNESS_ENTRY, {
+    ...viewport,
+    storage: baiduOcrSeed({
+      [OCR_STORAGE_KEY]: JSON.stringify({
+        version: 3,
+        order: ["baidu", "ai"],
+        enabled: { ai: true, baidu: true },
+        ai: { modelId: "m-vision" },
+        baidu: { operation: "accurate", credentialRef: BAIDU_REF },
+      }),
+    }),
+    network: {
+      ...baiduOcrRoutes({ quota: true }),
+      ...ocrRoutes(JSON.stringify({ text: OCR_TEXT })),
+    },
+  });
+
+  await app.press("id:harness-tray-quick-translate");
+  await app.waitFor("id:quick-translate-source");
+  await app.press("id:quick-translate-pin");
+  await app.type("id:quick-translate-source", "old draft");
+
+  await app.press(OCR_BUTTON);
+  await app.waitUntil(() => app.value("id:quick-translate-source") === OCR_TEXT);
+  await app.waitUntil(() =>
+    app.requests().some((request) => request.url.includes("api.openai.com")),
+  );
+
+  expect(app.requests().map((request) => request.url)).toEqual([
+    "https://aip.baidubce.com/oauth/2.0/token",
+    "https://aip.baidubce.com/rest/2.0/ocr/v1/accurate?access_token=fixture-token",
+    "https://vision.example.com/v1/responses",
+    "https://api.openai.com/v1/chat/completions",
+  ]);
+  expect(app.texts()).toContain("翻译结果");
 });

@@ -3,28 +3,76 @@ import { expect, open, test } from "nsh/test";
 import { initializeAiModules } from "../../app/ai-setup";
 import { makeChannel, makeModel, makeSeedStorage } from "../models/__tests__/fixtures";
 import { OCR_MAX_IMAGE_BYTES, recognizeScreenshot } from "./recognize";
-import { baiduCredentialStorageKey, OCR_STORAGE_KEY } from "./settings";
+import {
+  baiduCredentialStorageKey,
+  OCR_STORAGE_KEY,
+  type BaiduOcrOperation,
+  type OcrServiceKind,
+} from "./settings";
 
 initializeAiModules();
 
-/** Smallest valid PNG payload; recognition treats the bytes as opaque. */
+/** Smallest valid PNG payload (1x1); recognition treats the bytes as opaque. */
 const PNG_BASE64 =
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8DwHwAFAAH/q842iQAAAABJRU5ErkJggg==";
 const PNG_BYTES = Uint8Array.from(Buffer.from(PNG_BASE64, "base64"));
 const VISION_MODEL_ID = "vision-model";
+const BAIDU_PNG_BASE64 = "iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAAAAAA6mKC9AAAAAElFTkSuQmCC";
+const BAIDU_REF = "baidu-ref";
+
+const BAIDU_TOKEN = "POST https://aip.baidubce.com/oauth/2.0/token";
+const BAIDU_OCR =
+  "POST https://aip.baidubce.com/rest/2.0/ocr/v1/accurate?access_token=fixture-token";
+
+function ocrSeedRecord(options: {
+  order?: readonly OcrServiceKind[];
+  enabled?: Partial<Record<OcrServiceKind, boolean>>;
+  aiModelId?: string | null;
+  baidu?: { operation: BaiduOcrOperation; credentialRef: string } | null;
+}): Record<string, string> {
+  const ai = options.aiModelId ? { modelId: options.aiModelId } : null;
+  const baidu = options.baidu ?? null;
+  const extra: Record<string, string> = {
+    [OCR_STORAGE_KEY]: JSON.stringify({
+      version: 3,
+      order: options.order ?? ["ai", "baidu"],
+      enabled: {
+        ai: options.enabled?.ai ?? ai !== null,
+        baidu: options.enabled?.baidu ?? baidu !== null,
+      },
+      ai,
+      baidu,
+    }),
+  };
+  if (baidu) {
+    extra[baiduCredentialStorageKey(baidu.credentialRef)] = JSON.stringify({
+      apiKey: "synthetic-api-key",
+      secretKey: "synthetic-secret-key",
+    });
+  }
+  return extra;
+}
 
 function ocrBindingStorage(modelId: string): Record<string, string> {
+  return ocrSeedRecord({ aiModelId: modelId });
+}
+
+function baiduBindingStorage(): Record<string, string> {
+  return ocrSeedRecord({
+    order: ["baidu", "ai"],
+    enabled: { ai: false, baidu: true },
+    baidu: { operation: "accurate", credentialRef: BAIDU_REF },
+  });
+}
+
+function baiduNetwork(ocrBody: unknown) {
   return {
-    [OCR_STORAGE_KEY]: JSON.stringify({
-      version: 2,
-      active: "ai",
-      ai: { modelId },
-      baidu: null,
-    }),
+    [BAIDU_TOKEN]: { status: 200, body: { access_token: "fixture-token" } },
+    [BAIDU_OCR]: { status: 200, body: ocrBody },
   };
 }
 
-/** Vision-capable reply: one JSON object with the two transcribed lines. */
+/** Vision-capable reply: one JSON object with the transcribed lines. */
 function recognitionBody(text: string): unknown {
   return {
     output: [
@@ -37,7 +85,7 @@ function recognitionBody(text: string): unknown {
   };
 }
 
-test("ocr recognize: returns the recognized lines from a saved image model", async () => {
+function visionSeedStorage(extra: Record<string, string> = {}) {
   const channel = makeChannel({
     id: "ch-vision",
     presetId: "openai",
@@ -51,15 +99,17 @@ test("ocr recognize: returns the recognized lines from a saved image model", asy
     enabled: true,
     capabilities: { text: true, image: true, pdf: false, video: false },
   });
-  const storage = makeSeedStorage({
+  return makeSeedStorage({
     channels: [channel],
     models: [model],
     credentials: { "ch-vision": "sk-vision" },
-    extra: ocrBindingStorage(VISION_MODEL_ID),
+    extra,
   });
+}
 
+test("ocr recognize: returns the recognized lines from a saved image model", async () => {
   const app = await open("./__tests__/recognize-app.tsx", {
-    storage,
+    storage: visionSeedStorage(ocrBindingStorage(VISION_MODEL_ID)),
     host: { params: { pngBase64: PNG_BASE64 } },
     network: {
       "POST https://vision.example.com/v1/responses": {
@@ -235,27 +285,8 @@ test("ocr recognize: an ineligible binding uploads nothing", async () => {
 });
 
 test("ocr recognize: a valid no-text answer reports no text", async () => {
-  const channel = makeChannel({
-    id: "ch-vision",
-    presetId: "openai",
-    adapterId: "openai-responses",
-    baseUrl: "https://vision.example.com/v1",
-  });
-  const model = makeModel({
-    id: VISION_MODEL_ID,
-    providerId: "ch-vision",
-    modelKey: "gpt-4.1",
-    enabled: true,
-    capabilities: { text: true, image: true, pdf: false, video: false },
-  });
-
   const app = await open("./__tests__/recognize-app.tsx", {
-    storage: makeSeedStorage({
-      channels: [channel],
-      models: [model],
-      credentials: { "ch-vision": "sk-vision" },
-      extra: ocrBindingStorage(VISION_MODEL_ID),
-    }),
+    storage: visionSeedStorage(ocrBindingStorage(VISION_MODEL_ID)),
     host: { params: { pngBase64: PNG_BASE64 } },
     network: {
       "POST https://vision.example.com/v1/responses": {
@@ -271,25 +302,7 @@ test("ocr recognize: a valid no-text answer reports no text", async () => {
 });
 
 test("ocr recognize: refuses prose and Markdown instead of importing them as text", async () => {
-  const channel = makeChannel({
-    id: "ch-vision",
-    presetId: "openai",
-    adapterId: "openai-responses",
-    baseUrl: "https://vision.example.com/v1",
-  });
-  const model = makeModel({
-    id: VISION_MODEL_ID,
-    providerId: "ch-vision",
-    modelKey: "gpt-4.1",
-    enabled: true,
-    capabilities: { text: true, image: true, pdf: false, video: false },
-  });
-  const storage = makeSeedStorage({
-    channels: [channel],
-    models: [model],
-    credentials: { "ch-vision": "sk-vision" },
-    extra: ocrBindingStorage(VISION_MODEL_ID),
-  });
+  const storage = visionSeedStorage(ocrBindingStorage(VISION_MODEL_ID));
   const answers = ["Here is the text: first line", '```json\n{"text":"first line"}\n```'];
 
   for (const answer of answers) {
@@ -317,44 +330,25 @@ test("ocr recognize: refuses prose and Markdown instead of importing them as tex
 
 test("ocr recognize: rejects an invalid or oversized PNG before resolving a model", async () => {
   const invalid = await recognizeScreenshot(
-    { kind: "ai", modelId: "any-model" },
+    [{ kind: "ai", modelId: "any-model" }],
     new Uint8Array([1, 2, 3]),
   );
   expect(invalid).toEqual({ status: "failed", message: t("ocr.failure.invalidImage") });
 
   const oversized = new Uint8Array(OCR_MAX_IMAGE_BYTES + 1);
   oversized.set(PNG_BYTES);
-  const tooLarge = await recognizeScreenshot({ kind: "ai", modelId: "any-model" }, oversized);
+  const tooLarge = await recognizeScreenshot([{ kind: "ai", modelId: "any-model" }], oversized);
   expect(tooLarge).toEqual({ status: "failed", message: t("ocr.failure.imageTooLarge") });
 });
 
-test("ocr recognize: an unsaved binding is unavailable without a request", async () => {
-  const outcome = await recognizeScreenshot(null, PNG_BYTES);
+test("ocr recognize: an empty channel list is unavailable without a request", async () => {
+  const outcome = await recognizeScreenshot([], PNG_BYTES);
   expect(outcome).toEqual({ status: "unavailable", reason: t("ocr.failure.unconfigured") });
 });
 
 test("ocr recognize: reports a timeout without importing text", async () => {
-  const channel = makeChannel({
-    id: "ch-vision",
-    presetId: "openai",
-    adapterId: "openai-responses",
-    baseUrl: "https://vision.example.com/v1",
-  });
-  const model = makeModel({
-    id: VISION_MODEL_ID,
-    providerId: "ch-vision",
-    modelKey: "gpt-4.1",
-    enabled: true,
-    capabilities: { text: true, image: true, pdf: false, video: false },
-  });
-
   const app = await open("./__tests__/recognize-app.tsx", {
-    storage: makeSeedStorage({
-      channels: [channel],
-      models: [model],
-      credentials: { "ch-vision": "sk-vision" },
-      extra: ocrBindingStorage(VISION_MODEL_ID),
-    }),
+    storage: visionSeedStorage(ocrBindingStorage(VISION_MODEL_ID)),
     host: { params: { pngBase64: PNG_BASE64, timeoutMs: 30 } },
     network: {
       "POST https://vision.example.com/v1/responses": {
@@ -371,27 +365,8 @@ test("ocr recognize: reports a timeout without importing text", async () => {
 });
 
 test("ocr recognize: a cancelled request reports cancellation without text", async () => {
-  const channel = makeChannel({
-    id: "ch-vision",
-    presetId: "openai",
-    adapterId: "openai-responses",
-    baseUrl: "https://vision.example.com/v1",
-  });
-  const model = makeModel({
-    id: VISION_MODEL_ID,
-    providerId: "ch-vision",
-    modelKey: "gpt-4.1",
-    enabled: true,
-    capabilities: { text: true, image: true, pdf: false, video: false },
-  });
-
   const app = await open("./__tests__/recognize-app.tsx", {
-    storage: makeSeedStorage({
-      channels: [channel],
-      models: [model],
-      credentials: { "ch-vision": "sk-vision" },
-      extra: ocrBindingStorage(VISION_MODEL_ID),
-    }),
+    storage: visionSeedStorage(ocrBindingStorage(VISION_MODEL_ID)),
     host: { params: { pngBase64: PNG_BASE64, abortAfterMs: 20 } },
     network: {
       "POST https://vision.example.com/v1/responses": {
@@ -407,24 +382,6 @@ test("ocr recognize: a cancelled request reports cancellation without text", asy
   expect(result.outcomes[0]).toEqual({ status: "cancelled" });
 });
 
-const BAIDU_PNG_BASE64 = "iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAAAAAA6mKC9AAAAAElFTkSuQmCC";
-const BAIDU_REF = "baidu-ref";
-
-function baiduBindingStorage(): Record<string, string> {
-  return {
-    [OCR_STORAGE_KEY]: JSON.stringify({
-      version: 2,
-      active: "baidu",
-      ai: null,
-      baidu: { operation: "accurate", credentialRef: BAIDU_REF },
-    }),
-    [baiduCredentialStorageKey(BAIDU_REF)]: JSON.stringify({
-      apiKey: "synthetic-api-key",
-      secretKey: "synthetic-secret-key",
-    }),
-  };
-}
-
 test("ocr recognize: a saved Baidu binding is ready without requests and returns the lines", async () => {
   const storage = makeSeedStorage({ extra: baiduBindingStorage() });
   const ready = await open("./__tests__/recognize-app.tsx", {
@@ -439,19 +396,10 @@ test("ocr recognize: a saved Baidu binding is ready without requests and returns
   const app = await open("./__tests__/recognize-app.tsx", {
     storage,
     host: { params: { pngBase64: BAIDU_PNG_BASE64 } },
-    network: {
-      "POST https://aip.baidubce.com/oauth/2.0/token": {
-        status: 200,
-        body: { access_token: "fixture-token" },
-      },
-      "POST https://aip.baidubce.com/rest/2.0/ocr/v1/accurate?access_token=fixture-token": {
-        status: 200,
-        body: {
-          words_result: [{ words: "First line" }, { words: "\u7b2c\u4e8c\u884c" }],
-          words_result_num: 2,
-        },
-      },
-    },
+    network: baiduNetwork({
+      words_result: [{ words: "First line" }, { words: "\u7b2c\u4e8c\u884c" }],
+      words_result_num: 2,
+    }),
   });
   await app.waitUntil(() => app.texts()[0] !== "running");
   const result = JSON.parse(app.texts()[1]!);
@@ -465,17 +413,6 @@ test("ocr recognize: a saved Baidu binding is ready without requests and returns
   expect(requests[1]!.url).toContain("/rest/2.0/ocr/v1/accurate");
   expect(new URLSearchParams(requests[1]!.body ?? "").get("language_type")).toBe("auto_detect");
 });
-
-const BAIDU_TOKEN = "POST https://aip.baidubce.com/oauth/2.0/token";
-const BAIDU_OCR =
-  "POST https://aip.baidubce.com/rest/2.0/ocr/v1/accurate?access_token=fixture-token";
-
-function baiduNetwork(ocrBody: unknown) {
-  return {
-    [BAIDU_TOKEN]: { status: 200, body: { access_token: "fixture-token" } },
-    [BAIDU_OCR]: { status: 200, body: ocrBody },
-  };
-}
 
 test("ocr recognize: Baidu cancellation, empty text, and bad responses stay out of the draft", async () => {
   const storage = makeSeedStorage({ extra: baiduBindingStorage() });
@@ -527,12 +464,13 @@ test("ocr recognize: Baidu cancellation, empty text, and bad responses stay out 
   expect(credentials.requests()).toHaveLength(1);
 });
 
-test("ocr recognize: unreadable Baidu keys and a changed binding send nothing", async () => {
+test("ocr recognize: unreadable Baidu keys and a disabled binding send nothing", async () => {
   const broken = makeSeedStorage({
     extra: {
       [OCR_STORAGE_KEY]: JSON.stringify({
-        version: 2,
-        active: "baidu",
+        version: 3,
+        order: ["baidu", "ai"],
+        enabled: { ai: false, baidu: true },
         ai: null,
         baidu: { operation: "accurate", credentialRef: BAIDU_REF },
       }),
@@ -555,15 +493,245 @@ test("ocr recognize: unreadable Baidu keys and a changed binding send nothing", 
   });
   expect(unreadable.requests()).toHaveLength(0);
 
-  const swapped = await open("./__tests__/recognize-app.tsx", {
+  const disabled = await open("./__tests__/recognize-app.tsx", {
     storage: makeSeedStorage({ extra: baiduBindingStorage() }),
-    host: { params: { pngBase64: BAIDU_PNG_BASE64, swapToAiModelId: "other-model" } },
+    host: { params: { pngBase64: BAIDU_PNG_BASE64, disableBaiduBeforeRecognize: true } },
     network: baiduNetwork({ words_result: [{ words: "Nope" }] }),
   });
-  await swapped.waitUntil(() => swapped.texts()[0] !== "running");
-  expect(JSON.parse(swapped.texts()[1]!).outcomes[0]).toEqual({
+  await disabled.waitUntil(() => disabled.texts()[0] !== "running");
+  expect(JSON.parse(disabled.texts()[1]!).outcomes[0]).toEqual({
     status: "unavailable",
     reason: t("ocr.failure.unconfigured"),
   });
-  expect(swapped.requests()).toHaveLength(0);
+  expect(disabled.requests()).toHaveLength(0);
+});
+
+test("ocr recognize: falls back from primary Baidu failure to backup AI", async () => {
+  const storage = visionSeedStorage(
+    ocrSeedRecord({
+      order: ["baidu", "ai"],
+      enabled: { ai: true, baidu: true },
+      aiModelId: VISION_MODEL_ID,
+      baidu: { operation: "accurate", credentialRef: BAIDU_REF },
+    }),
+  );
+  const app = await open("./__tests__/recognize-app.tsx", {
+    storage,
+    host: { params: { pngBase64: BAIDU_PNG_BASE64 } },
+    network: {
+      ...baiduNetwork({ error_code: 17, error_msg: "quota exceeded" }),
+      "POST https://vision.example.com/v1/responses": {
+        status: 200,
+        body: recognitionBody("fallback ai text"),
+      },
+    },
+  });
+
+  await app.waitUntil(() => app.texts()[0] !== "running");
+  const result = JSON.parse(app.texts()[1]!);
+  expect(result.outcomes[0]).toEqual({ status: "recognized", text: "fallback ai text" });
+  expect(app.requests().map((req) => req.url)).toEqual([
+    "https://aip.baidubce.com/oauth/2.0/token",
+    "https://aip.baidubce.com/rest/2.0/ocr/v1/accurate?access_token=fixture-token",
+    "https://vision.example.com/v1/responses",
+  ]);
+});
+
+test("ocr recognize: falls back from primary AI failure to backup Baidu", async () => {
+  const storage = visionSeedStorage(
+    ocrSeedRecord({
+      order: ["ai", "baidu"],
+      enabled: { ai: true, baidu: true },
+      aiModelId: VISION_MODEL_ID,
+      baidu: { operation: "accurate", credentialRef: BAIDU_REF },
+    }),
+  );
+  const app = await open("./__tests__/recognize-app.tsx", {
+    storage,
+    host: { params: { pngBase64: BAIDU_PNG_BASE64 } },
+    network: {
+      "POST https://vision.example.com/v1/responses": {
+        status: 500,
+        body: { error: "upstream error" },
+      },
+      ...baiduNetwork({
+        words_result: [{ words: "backup baidu text" }],
+        words_result_num: 1,
+      }),
+    },
+  });
+
+  await app.waitUntil(() => app.texts()[0] !== "running");
+  const result = JSON.parse(app.texts()[1]!);
+  expect(result.outcomes[0]).toEqual({ status: "recognized", text: "backup baidu text" });
+  expect(app.requests().map((req) => req.url)).toEqual([
+    "https://vision.example.com/v1/responses",
+    "https://aip.baidubce.com/oauth/2.0/token",
+    "https://aip.baidubce.com/rest/2.0/ocr/v1/accurate?access_token=fixture-token",
+  ]);
+});
+
+test("ocr recognize: skips unavailable primary AI model and succeeds via backup Baidu", async () => {
+  const storage = makeSeedStorage({
+    extra: ocrSeedRecord({
+      order: ["ai", "baidu"],
+      enabled: { ai: true, baidu: true },
+      aiModelId: "deleted-model",
+      baidu: { operation: "accurate", credentialRef: BAIDU_REF },
+    }),
+  });
+  const ready = await open("./__tests__/recognize-app.tsx", {
+    storage,
+    host: { params: { pngBase64: BAIDU_PNG_BASE64, readinessOnly: true } },
+  });
+  await ready.waitUntil(() => ready.texts()[0] !== "running");
+  expect(JSON.parse(ready.texts()[1]!).readiness).toEqual({ ready: true, reason: null });
+  expect(ready.requests()).toHaveLength(0);
+
+  const app = await open("./__tests__/recognize-app.tsx", {
+    storage,
+    host: { params: { pngBase64: BAIDU_PNG_BASE64 } },
+    network: baiduNetwork({
+      words_result: [{ words: "baidu backup" }],
+      words_result_num: 1,
+    }),
+  });
+  await app.waitUntil(() => app.texts()[0] !== "running");
+  const result = JSON.parse(app.texts()[1]!);
+  expect(result.outcomes[0]).toEqual({ status: "recognized", text: "baidu backup" });
+  expect(app.requests()).toHaveLength(2);
+});
+
+test("ocr recognize: skips disabled first channel and runs enabled backup directly", async () => {
+  const storage = visionSeedStorage(
+    ocrSeedRecord({
+      order: ["baidu", "ai"],
+      enabled: { ai: true, baidu: false },
+      aiModelId: VISION_MODEL_ID,
+      baidu: { operation: "accurate", credentialRef: BAIDU_REF },
+    }),
+  );
+  const app = await open("./__tests__/recognize-app.tsx", {
+    storage,
+    host: { params: { pngBase64: BAIDU_PNG_BASE64 } },
+    network: {
+      ...baiduNetwork({ words_result: [{ words: "should not run" }] }),
+      "POST https://vision.example.com/v1/responses": {
+        status: 200,
+        body: recognitionBody("direct ai"),
+      },
+    },
+  });
+
+  await app.waitUntil(() => app.texts()[0] !== "running");
+  const result = JSON.parse(app.texts()[1]!);
+  expect(result.outcomes[0]).toEqual({ status: "recognized", text: "direct ai" });
+  expect(app.requests().map((req) => req.url)).toEqual(["https://vision.example.com/v1/responses"]);
+});
+
+test("ocr recognize: stops on primary no_text or cancellation without calling backup", async () => {
+  const storage = visionSeedStorage(
+    ocrSeedRecord({
+      order: ["baidu", "ai"],
+      enabled: { ai: true, baidu: true },
+      aiModelId: VISION_MODEL_ID,
+      baidu: { operation: "accurate", credentialRef: BAIDU_REF },
+    }),
+  );
+
+  const noText = await open("./__tests__/recognize-app.tsx", {
+    storage,
+    host: { params: { pngBase64: BAIDU_PNG_BASE64 } },
+    network: {
+      ...baiduNetwork({ words_result: [], words_result_num: 0 }),
+      "POST https://vision.example.com/v1/responses": {
+        status: 200,
+        body: recognitionBody("should not run"),
+      },
+    },
+  });
+  await noText.waitUntil(() => noText.texts()[0] !== "running");
+  expect(JSON.parse(noText.texts()[1]!).outcomes[0]).toEqual({ status: "no_text" });
+  expect(noText.requests().some((req) => req.url.includes("vision.example.com"))).toBe(false);
+
+  const cancelled = await open("./__tests__/recognize-app.tsx", {
+    storage,
+    host: { params: { pngBase64: BAIDU_PNG_BASE64, abortAfterMs: 20 } },
+    network: {
+      [BAIDU_TOKEN]: { status: 200, body: { access_token: "fixture-token" }, delay: 2_000 },
+      "POST https://vision.example.com/v1/responses": {
+        status: 200,
+        body: recognitionBody("should not run"),
+      },
+    },
+  });
+  await cancelled.waitUntil(() => cancelled.texts()[0] !== "running");
+  expect(JSON.parse(cancelled.texts()[1]!).outcomes[0]).toEqual({ status: "cancelled" });
+  expect(cancelled.requests().some((req) => req.url.includes("vision.example.com"))).toBe(false);
+});
+
+test("ocr recognize: falls back past Baidu local dimension failure to AI and surfaces final failure when all fail", async () => {
+  const storage = visionSeedStorage(
+    ocrSeedRecord({
+      order: ["baidu", "ai"],
+      enabled: { ai: true, baidu: true },
+      aiModelId: VISION_MODEL_ID,
+      baidu: { operation: "accurate", credentialRef: BAIDU_REF },
+    }),
+  );
+
+  // 1x1 PNG is below Baidu's 15px minimum side, so Baidu fails locally and AI succeeds.
+  const tinyFallback = await open("./__tests__/recognize-app.tsx", {
+    storage,
+    host: { params: { pngBase64: PNG_BASE64 } },
+    network: {
+      ...baiduNetwork({ words_result: [{ words: "unreachable" }] }),
+      "POST https://vision.example.com/v1/responses": {
+        status: 200,
+        body: recognitionBody("tiny image recognized by ai"),
+      },
+    },
+  });
+  await tinyFallback.waitUntil(() => tinyFallback.texts()[0] !== "running");
+  expect(JSON.parse(tinyFallback.texts()[1]!).outcomes[0]).toEqual({
+    status: "recognized",
+    text: "tiny image recognized by ai",
+  });
+  expect(tinyFallback.requests().map((req) => req.url)).toEqual([
+    "https://vision.example.com/v1/responses",
+  ]);
+
+  // Both fail -> returns failed without text.
+  const bothFail = await open("./__tests__/recognize-app.tsx", {
+    storage,
+    host: { params: { pngBase64: BAIDU_PNG_BASE64 } },
+    network: {
+      ...baiduNetwork({ error_code: 17, error_msg: "quota" }),
+      "POST https://vision.example.com/v1/responses": {
+        status: 500,
+        body: { error: "busy" },
+      },
+    },
+  });
+  await bothFail.waitUntil(() => bothFail.texts()[0] !== "running");
+  expect(JSON.parse(bothFail.texts()[1]!).outcomes[0].status).toBe("failed");
+
+  // Baidu fails with quota, backup AI model is deleted -> preserves Baidu's quota failure.
+  const baiduFailsAiUnavailable = await open("./__tests__/recognize-app.tsx", {
+    storage: makeSeedStorage({
+      extra: ocrSeedRecord({
+        order: ["baidu", "ai"],
+        enabled: { ai: true, baidu: true },
+        aiModelId: "deleted-model",
+        baidu: { operation: "accurate", credentialRef: BAIDU_REF },
+      }),
+    }),
+    host: { params: { pngBase64: BAIDU_PNG_BASE64 } },
+    network: baiduNetwork({ error_code: 17, error_msg: "quota" }),
+  });
+  await baiduFailsAiUnavailable.waitUntil(() => baiduFailsAiUnavailable.texts()[0] !== "running");
+  expect(JSON.parse(baiduFailsAiUnavailable.texts()[1]!).outcomes[0]).toEqual({
+    status: "failed",
+    message: t("ocr.failure.baiduQuota"),
+  });
 });

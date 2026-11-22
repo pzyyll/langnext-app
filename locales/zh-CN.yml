@@ -91,7 +91,19 @@ settings:
     saveError: 无法保存双击复制设置，请重试。
   ocr:
     title: OCR
-    service: OCR 服务
+    priorityHint: 已启用的渠道按从上到下的顺序使用，其余作为备用。
+    notConfigured: 未配置
+    saved: OCR 渠道已保存
+    breadcrumbLabel: OCR 导航
+    configureBeforeEnable: 请先配置此渠道再启用。
+    configureLabel: 配置 %{name}
+    enableLabel: 启用 %{name}
+    moveUp: 上移 %{name}
+    moveDown: 下移 %{name}
+    itemLabel: "%{name}（%{status}）"
+    role:
+      primary: 首选
+      backup: 备用
     ai: AI OCR
     baidu: 百度 OCR
     model: 模型
@@ -114,6 +126,7 @@ settings:
       modelIdBlank: 请为 OCR 选择模型。
       baiduKeysRequired: 请同时填写 API Key 和 Secret Key。
       baiduOperationInvalid: 请选择百度 OCR 模式。
+      channelUnconfigured: 请先配置此渠道再启用。
   languageDetection:
     title: 语言检测
     detection: 检测

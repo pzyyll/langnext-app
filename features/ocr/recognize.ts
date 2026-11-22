@@ -8,7 +8,12 @@ import {
   type BaiduOcrFailureReason,
   type BaiduOcrRecognition,
 } from "./baidu";
-import { ocrSettingsStore, type OcrServiceBinding } from "./settings";
+import {
+  ocrSettingsStore,
+  type OcrAiBinding,
+  type OcrBaiduBinding,
+  type OcrServiceBinding,
+} from "./settings";
 
 /** Largest PNG accepted for one upload; a bigger selection asks for a smaller region. */
 export const OCR_MAX_IMAGE_BYTES = 3 * 1024 * 1024;
@@ -35,7 +40,7 @@ export type OcrRecognitionOutcome =
   | { status: "recognized"; text: string }
   | { status: "no_text" }
   | { status: "cancelled" }
-  /** The saved service or its model cannot recognize now; `reason` is user-facing. */
+  /** The saved services or their models cannot recognize now; `reason` is user-facing. */
   | { status: "unavailable"; reason: string }
   | { status: "failed"; message: string };
 
@@ -46,7 +51,7 @@ export interface OcrReadiness {
 
 export interface RecognizeScreenshotOptions {
   signal?: AbortSignal;
-  /** Bounds one recognition request; the default is `OCR_TIMEOUT_MS`. */
+  /** Bounds one recognition request per channel; the default is `OCR_TIMEOUT_MS`. */
   timeoutMs?: number;
 }
 
@@ -105,29 +110,23 @@ function parseRecognitionAnswer(raw: string): ParsedAnswer {
 }
 
 /** Resolves an AI binding to a route and credential; the only image-purpose seam. */
-async function resolveAiOcr(
-  binding: OcrServiceBinding | null,
-): Promise<SavedModelRequestResolution> {
-  if (!binding || binding.kind !== "ai")
-    return { ok: false, reason: t("ocr.failure.unconfigured") };
+async function resolveAiOcr(binding: OcrAiBinding): Promise<SavedModelRequestResolution> {
   return resolveSavedModelRequest(binding.modelId, "image");
 }
 
-function sameBaiduBinding(
-  current: OcrServiceBinding | null,
-  snapshot: Extract<OcrServiceBinding, { kind: "baidu" }>,
-): boolean {
-  return (
-    current?.kind === "baidu" &&
-    current.operation === snapshot.operation &&
-    current.credentialRef === snapshot.credentialRef
-  );
+function hasEnabledBaiduBinding(snapshot: OcrBaiduBinding): boolean {
+  return ocrSettingsStore
+    .enabledBindings()
+    .some(
+      (entry) =>
+        entry.kind === "baidu" &&
+        entry.operation === snapshot.operation &&
+        entry.credentialRef === snapshot.credentialRef,
+    );
 }
 
-async function baiduReadiness(
-  binding: Extract<OcrServiceBinding, { kind: "baidu" }>,
-): Promise<OcrReadiness> {
-  if (!sameBaiduBinding(ocrSettingsStore.settings(), binding)) {
+async function baiduReadiness(binding: OcrBaiduBinding): Promise<OcrReadiness> {
+  if (!hasEnabledBaiduBinding(binding)) {
     return { ready: false, reason: t("ocr.failure.unconfigured") };
   }
   const pair = await ocrSettingsStore.readBaiduCredentials(binding.credentialRef);
@@ -172,20 +171,17 @@ function mapBaiduResult(result: BaiduOcrRecognition): OcrRecognitionOutcome {
 }
 
 async function recognizeWithBaidu(
-  binding: Extract<OcrServiceBinding, { kind: "baidu" }>,
+  binding: OcrBaiduBinding,
   png: Uint8Array,
   options: RecognizeScreenshotOptions,
 ): Promise<OcrRecognitionOutcome> {
   if (options.signal?.aborted) return { status: "cancelled" };
-  const failure = rawPngFailure(png);
-  if (failure) return failure;
-  if (options.signal?.aborted) return { status: "cancelled" };
-  if (!sameBaiduBinding(ocrSettingsStore.settings(), binding)) {
+  if (!hasEnabledBaiduBinding(binding)) {
     return { status: "unavailable", reason: t("ocr.failure.unconfigured") };
   }
   const pair = await ocrSettingsStore.readBaiduCredentials(binding.credentialRef);
   if (options.signal?.aborted) return { status: "cancelled" };
-  if (!pair || !sameBaiduBinding(ocrSettingsStore.settings(), binding)) {
+  if (!pair || !hasEnabledBaiduBinding(binding)) {
     return { status: "unavailable", reason: t("ocr.failure.unconfigured") };
   }
 
@@ -196,35 +192,20 @@ async function recognizeWithBaidu(
   return mapBaiduResult(result);
 }
 
-/**
- * Checks the saved binding before capture starts: no request, no upload, just the same
- * image-purpose rule the recognition itself runs.
- */
-export async function checkOcrReadiness(binding: OcrServiceBinding | null): Promise<OcrReadiness> {
-  if (binding?.kind === "baidu") return baiduReadiness(binding);
-  const resolved = await resolveAiOcr(binding);
-  return resolved.ok ? { ready: true, reason: null } : { ready: false, reason: resolved.reason };
-}
-
-/**
- * Recognizes the text in one cropped PNG through the saved OCR service. A blank answer, a
- * malformed answer, and a provider failure never yield partial text.
- */
-export async function recognizeScreenshot(
-  binding: OcrServiceBinding | null,
+async function recognizeWithAi(
+  binding: OcrAiBinding,
   png: Uint8Array,
-  options: RecognizeScreenshotOptions = {},
+  options: RecognizeScreenshotOptions,
 ): Promise<OcrRecognitionOutcome> {
   if (options.signal?.aborted) return { status: "cancelled" };
-  if (binding?.kind === "baidu") return recognizeWithBaidu(binding, png, options);
 
-  const encoded = encodePngForUpload(png);
-  if (isRecognitionOutcome(encoded)) return encoded;
-
-  // Revalidated here so a model removed or disabled during capture cannot receive the image.
+  // Revalidated before encoding so an ineligible or removed model avoids Base64 work and receives nothing.
   const resolved = await resolveAiOcr(binding);
   if (options.signal?.aborted) return { status: "cancelled" };
   if (!resolved.ok) return { status: "unavailable", reason: resolved.reason };
+
+  const encoded = encodePngForUpload(png);
+  if (isRecognitionOutcome(encoded)) return encoded;
 
   let raw: string;
   try {
@@ -259,4 +240,77 @@ export async function recognizeScreenshot(
   if (answer.kind === "text") return { status: "recognized", text: answer.text };
   if (answer.kind === "no_text") return { status: "no_text" };
   return { status: "failed", message: t("ocr.failure.malformedAnswer") };
+}
+
+/**
+ * Checks enabled OCR channels in priority order before capture starts: no request, no upload,
+ * ready as soon as at least one enabled channel can run.
+ */
+export async function checkOcrReadiness(
+  bindings: readonly OcrServiceBinding[],
+): Promise<OcrReadiness> {
+  if (bindings.length === 0) {
+    return { ready: false, reason: t("ocr.failure.unconfigured") };
+  }
+  let firstReason: string | null = null;
+  for (const binding of bindings) {
+    const readiness =
+      binding.kind === "baidu"
+        ? await baiduReadiness(binding)
+        : await resolveAiOcr(binding).then((resolved) =>
+            resolved.ok ? { ready: true, reason: null } : { ready: false, reason: resolved.reason },
+          );
+    if (readiness.ready) return { ready: true, reason: null };
+    firstReason ??= readiness.reason;
+  }
+  return { ready: false, reason: firstReason ?? t("ocr.failure.unconfigured") };
+}
+
+/**
+ * Recognizes the text in one cropped PNG across enabled OCR channels in priority order.
+ * Stops immediately on recognized text, explicit no-text, or cancellation, and falls back to
+ * the next enabled channel when a channel is unavailable or fails.
+ */
+export async function recognizeScreenshot(
+  bindings: readonly OcrServiceBinding[],
+  png: Uint8Array,
+  options: RecognizeScreenshotOptions = {},
+): Promise<OcrRecognitionOutcome> {
+  if (options.signal?.aborted) return { status: "cancelled" };
+  if (bindings.length === 0) {
+    return { status: "unavailable", reason: t("ocr.failure.unconfigured") };
+  }
+
+  const pngFailure = rawPngFailure(png);
+  if (pngFailure) return pngFailure;
+
+  let lastFailure: OcrRecognitionOutcome | null = null;
+  let firstUnavailable: OcrRecognitionOutcome | null = null;
+
+  for (const binding of bindings) {
+    if (options.signal?.aborted) return { status: "cancelled" };
+
+    const outcome =
+      binding.kind === "baidu"
+        ? await recognizeWithBaidu(binding, png, options)
+        : await recognizeWithAi(binding, png, options);
+
+    if (
+      outcome.status === "recognized" ||
+      outcome.status === "no_text" ||
+      outcome.status === "cancelled"
+    ) {
+      return outcome;
+    }
+    if (outcome.status === "failed") {
+      lastFailure = outcome;
+    } else {
+      firstUnavailable ??= outcome;
+    }
+  }
+
+  return (
+    lastFailure ??
+    firstUnavailable ?? { status: "unavailable", reason: t("ocr.failure.unconfigured") }
+  );
 }
