@@ -20,7 +20,11 @@ import { loadTransparency } from "./features/settings/transparency";
 async function startApp() {
   initializeAiModules();
   try {
-    await cleanupTtsPlaybackFiles();
+    try {
+      await cleanupTtsPlaybackFiles();
+    } catch {
+      // Best-effort. A missing data directory must not keep the shell from mounting.
+    }
     await Promise.all([
       loadAppearance(),
       loadLanguage(),

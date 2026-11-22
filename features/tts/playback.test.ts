@@ -1,5 +1,9 @@
 import { expect, test } from "nsh/test";
-import { TTS_PLAYBACK_FILE_NAME } from "./playback";
+import { TTS_PLAYBACK_FILE_NAME, ttsPlaybackDirectory } from "./playback";
+
+test("tts playback: a missing data directory does not throw", () => {
+  expect(ttsPlaybackDirectory()).toBe(null);
+});
 
 test("tts playback: cleanup names are only generated mp3 clips", () => {
   expect(TTS_PLAYBACK_FILE_NAME.test("tts-11111111-1111-1111-1111-111111111111.mp3")).toBe(true);

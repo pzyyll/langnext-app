@@ -1,7 +1,6 @@
 import { AudioPlayer } from "nsh";
 import { mkdir, readdir, unlink, writeFile } from "fs/promises";
 import { join } from "path";
-import process from "process";
 import { pathToFileURL } from "url";
 
 /** App-owned directory under the data directory. Playback files live only here. */
@@ -22,9 +21,17 @@ export interface Mp3PlaybackHandle {
 }
 
 export function ttsPlaybackDirectory(): string | null {
-  const root = process.dataDir;
-  if (root === null || root.length === 0) return null;
+  const root = appDataDirectory();
+  if (root === null) return null;
   return join(root, TTS_PLAYBACK_DIRECTORY);
+}
+
+function appDataDirectory(): string | null {
+  // The bundled default import of `process` does not carry the live dataDir getter.
+  const runtime = (globalThis as { process?: { dataDir?: string | null } }).process;
+  const root = runtime?.dataDir;
+  if (typeof root !== "string" || root.length === 0) return null;
+  return root;
 }
 
 /** Whether this device can open a local player. A missing data directory is not a refusal: the headless test engine keeps no files. */
