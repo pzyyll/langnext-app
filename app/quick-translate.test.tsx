@@ -117,12 +117,12 @@ test("quick window fits cards and translation content within the display work ar
 
   await app.press("id:harness-tray-quick-translate");
   await app.waitFor(firstCard);
-  expect(app.shows("id:quick-translate-header >> id:quick-translate-add-preset")).toBe(true);
+  expect(app.shows("id:quick-translate-footer >> id:quick-translate-add-preset")).toBe(true);
   await app.waitUntil(() => height() > 0 && height() < 220);
   const compactHeight = height();
   const width = state().contentBounds.size.width;
 
-  await app.press("id:quick-translate-header >> id:quick-translate-add-preset");
+  await app.press("id:quick-translate-footer >> id:quick-translate-add-preset");
   await app.press("id:quick-translate-add-preset-option-preset-1");
   await app.waitFor(secondCard);
   await app.waitUntil(() => height() > compactHeight);
@@ -252,53 +252,42 @@ test("desktop: quick window Language menu overlay does not trigger blur dismissa
   });
 
   await app.press("id:harness-tray-quick-translate");
-  await app.waitFor("id:quick-translate-language-menu");
-  await app.press("id:quick-translate-language-menu");
   await app.waitFor("id:quick-translate-source-language");
+  await app.press("id:quick-translate-source-language");
+  await app.waitFor("role:option[English]");
   expect(app.window("quick-translate").state()?.visible).toBe(true);
 
-  // Hovering a submenu opens language options inside the popup without blur dismissal.
-  await app.hover("id:quick-translate-source-language");
-  await app.waitFor("id:quick-translate-source-language-en");
-  expect(app.window("quick-translate").state()?.visible).toBe(true);
-
-  // First Escape closes submenu, second closes menu; window stays open throughout.
+  // Escape closes the language Select dropdown without closing the window.
   await app.keyboard.press("escape");
-  await app.waitUntil(() => !app.shows("id:quick-translate-source-language-en"));
-  expect(app.shows("id:quick-translate-source-language")).toBe(true);
+  await app.waitUntil(() => !app.shows("role:option[English]"));
   expect(app.window("quick-translate").state()?.visible).toBe(true);
 
-  await app.keyboard.press("escape");
-  await app.waitUntil(() => !app.shows("id:quick-translate-source-language"));
-  expect(app.window("quick-translate").state()?.visible).toBe(true);
-
-  // Reopen menu, pick a target language via submenu, and translate by pressing Enter.
-  await app.press("id:quick-translate-language-menu");
-  await app.waitFor("id:quick-translate-target-language");
-  await app.hover("id:quick-translate-target-language");
-  await app.waitFor("id:quick-translate-target-language-ja");
-  await app.press("id:quick-translate-target-language-ja");
-  await app.waitUntil(() => !app.shows("id:quick-translate-target-language"));
-  expect(app.shows("label:Languages (English → Japanese)")).toBe(true);
+  // Pick a target language from the header bar and translate by pressing Enter.
+  await app.press("id:quick-translate-target-language");
+  await app.waitFor("role:option[German]");
+  await app.press("role:option[German]");
+  await app.waitUntil(() => !app.shows("role:option[German]"));
+  expect(app.shows("id:quick-translate-source-language >> text:English")).toBe(true);
+  expect(app.shows("id:quick-translate-target-language >> text:German")).toBe(true);
 
   await app.type("id:quick-translate-source", "Hello");
   await app.keyboard.press("enter");
   await app.waitFor("id:quick-translate-card-card-1 >> id:quick-translate-result-text");
   expect(app.texts()).toContain("こんにちは");
 
-  // Reopen Add preset menu in the title bar and confirm Escape closes it without blur dismissal.
-  await app.press("id:quick-translate-header >> id:quick-translate-add-preset");
+  // Reopen Add preset menu in the footer and confirm Escape closes it without blur dismissal.
+  await app.press("id:quick-translate-footer >> id:quick-translate-add-preset");
   await app.waitFor("id:quick-translate-add-preset-option-preset-1");
   expect(app.window("quick-translate").state()?.visible).toBe(true);
   await app.keyboard.press("escape");
   await app.waitUntil(() => !app.shows("id:quick-translate-add-preset-option-preset-1"));
   expect(app.window("quick-translate").state()?.visible).toBe(true);
 
-  // Reopen menu without submenu and confirm Escape dismisses menu, then Escape closes window.
-  await app.press("id:quick-translate-language-menu");
-  await app.waitFor("id:quick-translate-source-language");
+  // Reopen language Select and confirm Escape dismisses dropdown, then Escape closes window.
+  await app.press("id:quick-translate-source-language");
+  await app.waitFor("role:option[English]");
   await app.keyboard.press("escape");
-  await app.waitUntil(() => !app.shows("id:quick-translate-source-language"));
+  await app.waitUntil(() => !app.shows("role:option[English]"));
   expect(app.window("quick-translate").state()?.visible).toBe(true);
 
   await app.keyboard.press("escape");

@@ -7,15 +7,20 @@ import {
   type Accessor,
   type Align,
   type InputRef,
+  type Placement,
 } from "nsh";
 import { t } from "nsh/i18n";
 import { Button } from "../../components/ui/button";
 import { Card } from "../../components/ui/card";
+import { LARGEST_FONT_STEP } from "../../components/ui/font-step";
 import { Icon } from "../../components/ui/icon";
+import { Kbd } from "../../components/ui/kbd";
 import { Menu, MenuItem } from "../../components/ui/menu";
 import { Select, type SelectItem } from "../../components/ui/select";
-import { LARGEST_FONT_STEP } from "../../components/ui/font-step";
 import { Textarea } from "../../components/ui/textarea";
+import { ProviderMark } from "../../modules/ai/ui/provider-mark";
+import { providerSettingsRegistry } from "../../modules/ai/ui/registry";
+import { modelsStore } from "../models/store";
 import { getLanguageLabel } from "../presets/languages";
 import type { TranslationPreset } from "../presets/types";
 import type { CardViewItem, QuickTranslateSession, SourceDetectionState } from "./session";
@@ -57,7 +62,7 @@ function RetryIconButton(props: { testID: string; onPress: () => void }) {
   return (
     <Button
       testID={props.testID}
-      size="icon-sm"
+      size="icon-xs"
       variant="ghost"
       tooltip={t("common.retry")}
       accessibilityLabel={t("common.retry")}
@@ -70,31 +75,41 @@ function RetryIconButton(props: { testID: string; onPress: () => void }) {
 
 export interface QuickTranslateAddPresetMenuProps {
   session: QuickTranslateSession;
+  placement?: Placement;
   align?: Align;
 }
 
-/** Renders the icon-only add-preset button so Menu triggers receive the Button element directly. */
+/** Renders the labeled add-preset trigger so Menu receives the Button element directly. */
 function renderAddPresetButton(options: { disabled?: boolean; selected?: boolean }) {
   return (
     <Button
       testID="quick-translate-add-preset"
-      size="icon-sm"
+      size="xs"
       variant="ghost"
       disabled={options.disabled}
       selected={options.selected}
-      tooltip={t("quickTranslate.addPreset")}
       accessibilityLabel={t("quickTranslate.addPreset")}
+      class="gap-1 px-1.5"
     >
       <Icon
         name="plus"
         tone={options.selected ? "foreground" : "muted-foreground"}
-        class="size-3.5"
+        class="size-3"
       />
+      <Text
+        class={
+          options.selected
+            ? "text-xs font-medium text-foreground"
+            : "text-xs font-medium text-muted-foreground"
+        }
+      >
+        {t("quickTranslate.addPreset")}
+      </Text>
     </Button>
   );
 }
 
-/** Header-ready trigger menu for appending an enabled preset card to the Quick Translate popup. */
+/** Footer-ready trigger menu for appending an enabled preset card to the Quick Translate popup. */
 export function QuickTranslateAddPresetMenu(props: QuickTranslateAddPresetMenuProps) {
   const addMenuOpen = signal(false);
 
@@ -106,7 +121,7 @@ export function QuickTranslateAddPresetMenu(props: QuickTranslateAddPresetMenuPr
           addMenuOpen.set(open);
           props.session.notifyOverlayOpenChange("add-preset", open);
         }}
-        placement="bottom"
+        placement={props.placement ?? "top"}
         align={props.align ?? "start"}
         popupClass="min-w-44 max-h-60"
         trigger={renderAddPresetButton({ selected: addMenuOpen() })}
@@ -122,6 +137,56 @@ export function QuickTranslateAddPresetMenu(props: QuickTranslateAddPresetMenuPr
           )}
         </Each>
       </Menu>
+    </If>
+  );
+}
+
+/** Persistent Quick Translate footer with the Add preset menu and keyboard shortcut hints. */
+export function QuickTranslateFooter(props: { session: QuickTranslateSession }) {
+  return (
+    <View
+      testID="quick-translate-footer"
+      class="shrink-0 flex-row items-center justify-between gap-2 border-t border-border bg-surface-subtle px-4 py-2"
+    >
+      <QuickTranslateAddPresetMenu session={props.session} placement="top" align="start" />
+      <View class="shrink-0 flex-row items-center gap-3">
+        <View class="flex-row items-center gap-1">
+          <Kbd>↵</Kbd>
+          <Text class="text-xs text-muted-foreground">{t("quickTranslate.shortcutTranslate")}</Text>
+        </View>
+        <View class="flex-row items-center gap-1">
+          <Kbd>Esc</Kbd>
+          <Text class="text-xs text-muted-foreground">{t("quickTranslate.shortcutHide")}</Text>
+        </View>
+      </View>
+    </View>
+  );
+}
+
+/** Visual engine indicator on the preset chip: DeepL mark, known AI provider mark, or brand dot. */
+function PresetLeadingMark(props: { preset: TranslationPreset | null }) {
+  const providerIcon = () => {
+    const preset = props.preset;
+    if (!preset || preset.engine.kind !== "ai") return null;
+    const primaryModelId = preset.engine.modelIds[0];
+    if (!primaryModelId) return null;
+    const model = modelsStore.models().find((item) => item.id === primaryModelId);
+    if (!model) return null;
+    const channel = modelsStore.channels().find((item) => item.id === model.providerId);
+    if (!channel || channel.presetId === "custom") return null;
+    return providerSettingsRegistry.find(channel.presetId)?.icon ?? null;
+  };
+
+  return (
+    <If
+      when={props.preset?.engine.kind === "deepl"}
+      else={
+        <If when={providerIcon()} else={<View class="size-1.5 shrink-0 rounded-full bg-brand" />}>
+          {(asset) => <ProviderMark icon={asset()} class="size-3 shrink-0" />}
+        </If>
+      }
+    >
+      <Icon name="deepl" tone="foreground" class="size-3 shrink-0" />
     </If>
   );
 }
@@ -157,43 +222,50 @@ function PresetCardRow(props: PresetCardRowProps) {
   const hasBody = () => !props.card().collapsed && props.card().result.status !== "idle";
 
   return (
-    <Card testID={`quick-translate-card-${props.card().id}`} class="gap-0 p-0">
+    <Card testID={`quick-translate-card-${props.card().id}`} variant="subtle">
       <View
-        class={`flex-row items-center gap-1.5 pl-3 pr-1.5 pt-2.5 ${hasBody() ? "pb-2" : "pb-2.5"}`}
+        class={`flex-row items-center justify-between gap-2 px-3 pt-2.5 ${hasBody() ? "pb-2" : "pb-2.5"}`}
       >
-        <Select
-          testID="quick-translate-preset"
-          size="sm"
-          class="min-w-0 flex-1"
-          items={props.presetItems()}
-          value={props.card().presetId}
-          placeholder={t("quickTranslate.presetPlaceholder")}
-          accessibilityLabel={t("quickTranslate.presetLabel")}
-          disabled={props.presetItems().length === 0}
-          onOpenChange={(open) => props.onOverlayOpenChange(`card-preset-${props.card().id}`, open)}
-          onChange={(value) => props.onSelectPreset(props.card().id, value)}
-        />
-        <If when={hasTemplates()}>
+        <View class="min-w-0 flex-1 flex-row items-center gap-1.5">
           <Select
-            testID="quick-translate-template"
-            size="sm"
-            class="min-w-0 flex-1"
-            items={templateItems()}
-            value={activeTemplateValue()}
-            placeholder={t("quickTranslate.templateLabel")}
-            accessibilityLabel={t("quickTranslate.templateLabel")}
-            disabled={templateItems().length === 0}
+            testID="quick-translate-preset"
+            variant="chip"
+            class="min-w-0 shrink"
+            labelClass="font-semibold"
+            leading={<PresetLeadingMark preset={resolvedPreset()} />}
+            items={props.presetItems()}
+            value={props.card().presetId}
+            placeholder={t("quickTranslate.presetPlaceholder")}
+            accessibilityLabel={t("quickTranslate.presetLabel")}
+            disabled={props.presetItems().length === 0}
             onOpenChange={(open) =>
-              props.onOverlayOpenChange(`card-template-${props.card().id}`, open)
+              props.onOverlayOpenChange(`card-preset-${props.card().id}`, open)
             }
-            onChange={(value) => props.onSelectTemplate(props.card().id, value)}
+            onChange={(value) => props.onSelectPreset(props.card().id, value)}
           />
-        </If>
-        <View class="flex-row items-center gap-1">
+          <If when={hasTemplates()}>
+            <Select
+              testID="quick-translate-template"
+              variant="chip"
+              class="min-w-0 shrink"
+              labelClass="font-medium text-muted-foreground"
+              items={templateItems()}
+              value={activeTemplateValue()}
+              placeholder={t("quickTranslate.templateLabel")}
+              accessibilityLabel={t("quickTranslate.templateLabel")}
+              disabled={templateItems().length === 0}
+              onOpenChange={(open) =>
+                props.onOverlayOpenChange(`card-template-${props.card().id}`, open)
+              }
+              onChange={(value) => props.onSelectTemplate(props.card().id, value)}
+            />
+          </If>
+        </View>
+        <View class="shrink-0 flex-row items-center gap-0.5">
           <Button
             testID="quick-translate-collapse"
             variant="ghost"
-            size="icon-sm"
+            size="icon-xs"
             tooltip={
               props.card().collapsed
                 ? t("quickTranslate.expandCard")
@@ -215,7 +287,7 @@ function PresetCardRow(props: PresetCardRowProps) {
           <Button
             testID="quick-translate-remove"
             variant="ghost"
-            size="icon-sm"
+            size="icon-xs"
             tooltip={t("quickTranslate.removeCard")}
             accessibilityLabel={t("quickTranslate.removeCard")}
             onPress={() => props.onRemove(props.card().id)}
@@ -239,7 +311,7 @@ function PresetCardRow(props: PresetCardRowProps) {
             <View selectable>
               <Text
                 testID="quick-translate-result-text"
-                class="text-sm leading-relaxed text-card-foreground"
+                class="text-base leading-relaxed text-card-foreground"
               >
                 {(() => {
                   const res = props.card().result;
@@ -252,7 +324,7 @@ function PresetCardRow(props: PresetCardRowProps) {
 
         <If when={props.card().result.status === "error"}>
           <View>
-            <View class="gap-1.5 px-3">
+            <View class="gap-1.5 px-3 pb-2.5">
               <If
                 when={(() => {
                   const res = props.card().result;
@@ -262,7 +334,7 @@ function PresetCardRow(props: PresetCardRowProps) {
                 <View selectable>
                   <Text
                     testID="quick-translate-partial-text"
-                    class="text-sm leading-relaxed text-card-foreground"
+                    class="text-base leading-relaxed text-card-foreground"
                   >
                     {(() => {
                       const res = props.card().result;
@@ -278,7 +350,7 @@ function PresetCardRow(props: PresetCardRowProps) {
                 })()}
               </Text>
             </View>
-            <View class="flex-row items-center justify-end px-1.5 pb-1.5 pt-0.5">
+            <View class="flex-row items-center justify-end border-t border-border/60 px-2 py-1.5">
               <RetryIconButton
                 testID="quick-translate-retry"
                 onPress={() => props.onRetry(props.card().id)}
@@ -289,10 +361,10 @@ function PresetCardRow(props: PresetCardRowProps) {
 
         <If when={props.card().result.status === "success"}>
           <View>
-            <View selectable class="px-3">
+            <View selectable class="px-3 pb-2.5">
               <Text
                 testID="quick-translate-result-text"
-                class="text-sm leading-relaxed text-card-foreground"
+                class="text-base leading-relaxed text-card-foreground"
               >
                 {(() => {
                   const res = props.card().result;
@@ -300,10 +372,10 @@ function PresetCardRow(props: PresetCardRowProps) {
                 })()}
               </Text>
             </View>
-            <View class="flex-row items-center justify-between gap-2 px-1.5 pb-1.5 pt-0.5">
+            <View class="flex-row items-center justify-between gap-2 border-t border-border/60 px-2 py-1.5">
               <Button
                 testID="quick-translate-copy"
-                size="icon-sm"
+                size="icon-xs"
                 variant="ghost"
                 tooltip={
                   props.card().copied ? t("quickTranslate.copied") : t("quickTranslate.copy")
@@ -325,7 +397,7 @@ function PresetCardRow(props: PresetCardRowProps) {
               />
             </View>
             <If when={props.card().copyError !== null}>
-              <View class="px-3 pb-3">
+              <View class="px-3 pb-2.5">
                 <Text
                   testID="quick-translate-copy-error"
                   role="alert"
@@ -407,16 +479,59 @@ export function QuickTranslatePopup(props: QuickTranslatePopupProps) {
   const showOcrError = () => ocrMessage() !== null;
   const showOcrBusy = () => !showOcrError() && ocrRecognizing();
   const showSourceDetection = () => !showOcrError() && !showOcrBusy() && detectionLabel() !== null;
+  const hasToolbarStatus = () => showOcrError() || showOcrBusy() || showSourceDetection();
 
-  const renderSourceToolbar = () => (
-    <View
-      testID="quick-translate-source-toolbar"
-      class="min-h-7 flex-row items-end justify-between gap-2"
-    >
+  const renderSourceActions = (extraClass = "") => (
+    <If when={hasSourceText()}>
       <View
-        class="min-h-7 min-w-0 flex-1 justify-center py-1 pl-1.5"
-        classList={{ "pr-1.5": !hasSourceText() }}
+        testID="quick-translate-source-actions"
+        class={`shrink-0 flex-row items-center gap-0.5 ${extraClass}`}
       >
+        <Button
+          testID="quick-translate-collapse-source"
+          size="icon-xs"
+          variant="ghost"
+          tooltip={
+            isSourceCollapsed()
+              ? t("quickTranslate.editSource")
+              : t("quickTranslate.collapseSource")
+          }
+          accessibilityLabel={
+            isSourceCollapsed()
+              ? t("quickTranslate.editSource")
+              : t("quickTranslate.collapseSource")
+          }
+          onPress={() => {
+            if (isSourceCollapsed()) {
+              expandSource();
+              return;
+            }
+            sourceCollapsed.set(true);
+          }}
+        >
+          <Icon
+            name={isSourceCollapsed() ? "edit" : "collapse-text-input"}
+            tone="muted-foreground"
+            class="size-3.5"
+          />
+        </Button>
+        <Button
+          testID="quick-translate-clear"
+          size="icon-xs"
+          variant="ghost"
+          tooltip={t("common.clearInput")}
+          accessibilityLabel={t("common.clearInput")}
+          onPress={() => props.session.handleClearSource()}
+        >
+          <Icon name="close-circle" tone="muted-foreground" class="size-3.5" />
+        </Button>
+      </View>
+    </If>
+  );
+
+  const renderSourceStatus = () => (
+    <If when={hasToolbarStatus()}>
+      <View testID="quick-translate-source-toolbar" class="mt-1">
         <If when={showOcrError()}>
           <Text testID="quick-translate-ocr-status" role="alert" class="text-xs text-destructive">
             {ocrMessage() ?? ""}
@@ -436,60 +551,18 @@ export function QuickTranslatePopup(props: QuickTranslatePopupProps) {
           </Text>
         </If>
       </View>
-      <If when={hasSourceText()}>
-        <View class="shrink-0 flex-row items-center gap-1">
-          <Button
-            testID="quick-translate-collapse-source"
-            size="icon-sm"
-            variant="ghost"
-            tooltip={
-              isSourceCollapsed()
-                ? t("quickTranslate.editSource")
-                : t("quickTranslate.collapseSource")
-            }
-            accessibilityLabel={
-              isSourceCollapsed()
-                ? t("quickTranslate.editSource")
-                : t("quickTranslate.collapseSource")
-            }
-            onPress={() => {
-              if (isSourceCollapsed()) {
-                expandSource();
-                return;
-              }
-              sourceCollapsed.set(true);
-            }}
-          >
-            <Icon
-              name={isSourceCollapsed() ? "edit" : "collapse-text-input"}
-              tone="muted-foreground"
-              class="size-3.5"
-            />
-          </Button>
-          <Button
-            testID="quick-translate-clear"
-            size="icon-sm"
-            variant="ghost"
-            tooltip={t("common.clearInput")}
-            accessibilityLabel={t("common.clearInput")}
-            onPress={() => props.session.handleClearSource()}
-          >
-            <Icon name="clear" tone="muted-foreground" class="size-3.5" />
-          </Button>
-        </View>
-      </If>
-    </View>
+    </If>
   );
 
   return (
-    <View class="gap-2 p-3">
+    <View class="gap-3 px-4 pt-3.5 pb-3">
       <If
         when={
           props.session.presetsStatus().kind === "idle" ||
           props.session.presetsStatus().kind === "loading"
         }
       >
-        <Card testID="quick-translate-presets-loading" class="gap-1.5 p-3">
+        <Card testID="quick-translate-presets-loading" variant="subtle" class="gap-1.5 p-3">
           <Text class="text-xs text-muted-foreground">{t("quickTranslate.presetsLoading")}</Text>
         </Card>
       </If>
@@ -497,7 +570,8 @@ export function QuickTranslatePopup(props: QuickTranslatePopupProps) {
       <If when={props.session.presetsStatus().kind === "error"}>
         <Card
           testID="quick-translate-presets-error"
-          class="flex-row items-center justify-between gap-2 border-destructive/40 py-2 pl-3 pr-1.5"
+          variant="subtle"
+          class="flex-row items-center justify-between gap-2 border-destructive/40 py-2 pl-3 pr-2"
         >
           <Text role="alert" class="min-w-0 flex-1 text-xs text-destructive">
             {(() => {
@@ -518,64 +592,69 @@ export function QuickTranslatePopup(props: QuickTranslatePopupProps) {
           props.session.enabledPresets().length === 0
         }
       >
-        <Card testID="quick-translate-no-presets" class="p-3">
+        <Card testID="quick-translate-no-presets" variant="subtle" class="p-3">
           <Text class="text-xs text-muted-foreground">{t("quickTranslate.noEnabledPresets")}</Text>
         </Card>
       </If>
 
-      <If
-        when={isSourceCollapsed()}
-        else={
-          <Textarea
-            testID="quick-translate-source"
-            variant="card"
-            autoFocus
-            submitBehavior="submit"
-            fontScale="stepped"
-            initialFontStep={sourceFontStep()}
-            onFontStep={(step) => {
-              if (sourceFontStep() !== step) sourceFontStep.set(step);
-            }}
-            value={sourceText()}
-            placeholder={t("quickTranslate.sourcePlaceholder")}
-            accessibilityLabel={t("quickTranslate.sourceLabel")}
-            inputClass={sourceInputClass}
-            footer={renderSourceToolbar()}
-            onChange={(nextText) => props.session.handleSourceChange(nextText)}
-            onSubmit={() => {
-              if (isComposing()) return;
-              props.session.handleSourceSubmit();
-            }}
-            onCompositionChange={({ composing }) => isComposing.set(composing)}
-            ref={(node) => {
-              sourceInputRef.set(node);
-              props.onAttachSourceInput?.(node);
-            }}
-          />
-        }
-      >
-        {/* Same surface as the card variant of <Textarea>, with a one-line preview instead of the editor. */}
-        <View class="rounded-xl border border-border bg-card">
-          <Button
-            testID="quick-translate-source-preview"
-            variant="ghost"
-            size="row"
-            accessibilityLabel={t("quickTranslate.editSource")}
-            class="h-10 min-h-0 w-full min-w-0 justify-start rounded-t-xl rounded-b-none px-3"
-            onPress={() => expandSource()}
-          >
-            <View class="min-w-0 flex-1 flex-row items-center gap-1.5">
-              <Text class="min-w-0 flex-1 truncate text-sm text-card-foreground">
-                {sourceFirstLine()}
-              </Text>
-              <If when={sourceHasMultipleLines()}>
-                <Icon name="chevron-down" tone="muted-foreground" class="size-3.5 shrink-0" />
-              </If>
+      <View testID="quick-translate-source-section">
+        <If
+          when={isSourceCollapsed()}
+          else={
+            <View class="flex-row items-start justify-between gap-2">
+              <Textarea
+                testID="quick-translate-source"
+                variant="frameless"
+                class="min-w-0 flex-1"
+                autoFocus
+                submitBehavior="submit"
+                fontScale="stepped"
+                initialFontStep={sourceFontStep()}
+                onFontStep={(step) => {
+                  if (sourceFontStep() !== step) sourceFontStep.set(step);
+                }}
+                value={sourceText()}
+                placeholder={t("quickTranslate.sourcePlaceholder")}
+                accessibilityLabel={t("quickTranslate.sourceLabel")}
+                inputClass={sourceInputClass}
+                onChange={(nextText) => props.session.handleSourceChange(nextText)}
+                onSubmit={() => {
+                  if (isComposing()) return;
+                  props.session.handleSourceSubmit();
+                }}
+                onCompositionChange={({ composing }) => isComposing.set(composing)}
+                ref={(node) => {
+                  sourceInputRef.set(node);
+                  props.onAttachSourceInput?.(node);
+                }}
+              />
+              {renderSourceActions("pt-0.5")}
             </View>
-          </Button>
-          <View class="px-1.5 pb-1.5">{renderSourceToolbar()}</View>
-        </View>
-      </If>
+          }
+        >
+          <View class="flex-row items-center justify-between gap-2">
+            <Button
+              testID="quick-translate-source-preview"
+              variant="ghost"
+              size="row"
+              accessibilityLabel={t("quickTranslate.editSource")}
+              class="h-8 min-h-0 min-w-0 flex-1 justify-start rounded-lg bg-surface-subtle px-2.5 hover:bg-accent"
+              onPress={() => expandSource()}
+            >
+              <View class="min-w-0 flex-1 flex-row items-center gap-1.5">
+                <Text class="min-w-0 flex-1 truncate text-sm text-foreground">
+                  {sourceFirstLine()}
+                </Text>
+                <If when={sourceHasMultipleLines()}>
+                  <Icon name="chevron-down" tone="muted-foreground" class="size-3.5 shrink-0" />
+                </If>
+              </View>
+            </Button>
+            {renderSourceActions()}
+          </View>
+        </If>
+        {renderSourceStatus()}
+      </View>
 
       <If when={props.session.prefsSaveError() !== null}>
         <Text
@@ -588,7 +667,7 @@ export function QuickTranslatePopup(props: QuickTranslatePopupProps) {
       </If>
 
       <If when={props.session.cards().length > 0}>
-        <View class="gap-2">
+        <View class="gap-2.5">
           <Each of={props.session.cards()} key={(card) => card.id}>
             {(card) => (
               <PresetCardRow

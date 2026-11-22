@@ -542,8 +542,15 @@ quickTranslate:
   presetPlaceholder: 选择预设…
   presetsLoading: 正在加载预设…
   noEnabledPresets: 暂无已启用的预设，请在“预设”中启用。
-  addPreset: 添加预设
+  addPreset: 添加翻译预设
   languages: "语言（%{source} → %{target}）"
+  sourceLanguageLabel: 源语言
+  targetLanguageLabel: 目标语言
+  autoDetect: 自动检测
+  autoDetectDetected: "自动检测 (%{language})"
+  swapLanguages: 交换语言
+  shortcutTranslate: 翻译
+  shortcutHide: 隐藏
   sourceMenuItem: "源语言：%{language}"
   targetMenuItem: "目标语言：%{language}"
   templateLabel: 提示词模板

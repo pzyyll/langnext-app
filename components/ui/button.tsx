@@ -8,6 +8,7 @@ export type ButtonVariant =
   | "secondary"
   | "outline"
   | "ghost"
+  | "brand-ghost"
   | "nav"
   | "destructive"
   | "destructive-outline"
@@ -49,6 +50,8 @@ const VARIANT_CLASSES: Record<ButtonVariant, string> = {
     "border border-input bg-background hover:bg-accent active:bg-border selected:bg-accent focus-visible:ring-2 focus-visible:ring-ring",
   ghost:
     "hover:bg-accent active:bg-border selected:bg-accent focus-visible:ring-2 focus-visible:ring-ring",
+  "brand-ghost":
+    "hover:bg-brand-soft active:bg-brand/15 selected:bg-brand-soft focus-visible:ring-2 focus-visible:ring-ring",
   nav: "group hover:bg-accent/60 active:bg-accent selected:bg-accent selected:hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring",
   destructive:
     "border border-destructive bg-destructive hover:bg-destructive/90 active:bg-destructive/80 focus-visible:ring-2 focus-visible:ring-ring",
@@ -63,6 +66,7 @@ const TEXT_COLOR_CLASSES: Record<ButtonVariant, string> = {
   secondary: "font-medium text-secondary-foreground",
   outline: "font-medium text-foreground",
   ghost: "font-medium text-foreground",
+  "brand-ghost": "font-medium text-brand",
   nav: "min-w-0 flex-1 truncate font-normal text-foreground/80 group-hover:text-foreground group-selected:font-medium group-selected:text-accent-foreground",
   destructive: "font-medium text-destructive-foreground",
   "destructive-outline": "font-medium text-destructive",
@@ -75,7 +79,7 @@ const SIZE_CLASSES: Record<ButtonSize, string> = {
   xs: "h-6 flex-row items-center justify-center gap-1 rounded-md px-2",
   icon: "size-8 items-center justify-center rounded-lg",
   "icon-sm": "size-7 items-center justify-center rounded-md",
-  "icon-xs": "size-5 items-center justify-center rounded-sm",
+  "icon-xs": "size-6 items-center justify-center rounded-md",
   step: "h-4 w-7 items-center justify-center rounded-sm",
   nav: "min-h-8 flex-row items-center justify-start gap-2 rounded-lg px-2 py-1.5",
   row: "min-h-11 flex-row items-center justify-start gap-2.5 rounded-lg px-2 py-1.5",

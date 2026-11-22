@@ -33,12 +33,8 @@ import type {
   TranslateWithPresetResult,
 } from "../translate";
 import { translateWithPreset } from "../translate";
-import { QuickTranslateLanguageMenu } from "../language-menu";
-import {
-  QuickTranslateAddPresetMenu,
-  QuickTranslatePopup,
-  type QuickTranslateOcrStatus,
-} from "../popup";
+import { QuickTranslateLanguageBar } from "../language-menu";
+import { QuickTranslateFooter, QuickTranslatePopup, type QuickTranslateOcrStatus } from "../popup";
 import { createQuickTranslateSession, type QuickTranslateSessionOptions } from "../session";
 
 export type HarnessMode =
@@ -74,24 +70,24 @@ function PopupSessionView(
 ) {
   const session = createQuickTranslateSession(props);
   return (
-    <Card class="min-h-0 flex-1 overflow-hidden p-0">
-      <View class="shrink-0 flex-row items-center justify-between border-b border-border px-3 py-1.5">
-        <Text class="text-xs font-medium text-foreground">{t("quickTranslate.title")}</Text>
-        <View class="flex-row items-center gap-1">
-          <QuickTranslateAddPresetMenu session={session} align="end" />
-          <QuickTranslateLanguageMenu
-            align="end"
-            sourceLanguage={session.sourceLanguage()}
-            targetLanguage={session.targetLanguage()}
-            onSelectSourceLanguage={(language) => session.handleSourceLanguageChange(language)}
-            onSelectTargetLanguage={(language) => session.handleTargetLanguageChange(language)}
-            onOpenChange={(open) => session.notifyOverlayOpenChange("language-menu", open)}
-          />
-        </View>
+    <Card class="min-h-0 flex-1 gap-0 overflow-hidden p-0">
+      <View class="shrink-0 flex-row items-center justify-between border-b border-border px-4 py-2">
+        <QuickTranslateLanguageBar
+          sourceLanguage={session.sourceLanguage()}
+          targetLanguage={session.targetLanguage()}
+          sourceDetection={session.sourceDetection()}
+          canSwap={session.canSwapLanguages()}
+          onSelectSourceLanguage={(language) => session.handleSourceLanguageChange(language)}
+          onSelectTargetLanguage={(language) => session.handleTargetLanguageChange(language)}
+          onSwapLanguages={() => session.handleSwapLanguages()}
+          onSourceOpenChange={(open) => session.notifyOverlayOpenChange("source-language", open)}
+          onTargetOpenChange={(open) => session.notifyOverlayOpenChange("target-language", open)}
+        />
       </View>
       <Scroll class="min-h-0 flex-1">
         <QuickTranslatePopup session={session} ocrState={props.ocrState} />
       </Scroll>
+      <QuickTranslateFooter session={session} />
     </Card>
   );
 }

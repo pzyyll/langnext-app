@@ -1,4 +1,4 @@
-import { Text, View, type ViewRef } from "nsh";
+import { Text, View, type JSX, type ViewRef } from "nsh";
 import { Select as BaseSelect, type SelectItem } from "nsh/base";
 import { t } from "nsh/i18n";
 import { motion } from "../motion";
@@ -8,13 +8,17 @@ import { buildTooltip } from "./tooltip";
 export type { SelectItem };
 
 export type SelectSize = "sm" | "md";
+export type SelectVariant = "default" | "chip" | "inline";
 
 interface SelectProps {
   items: SelectItem[];
   value: string | null;
   placeholder?: string;
+  displayLabel?: string;
   prefix?: string;
+  leading?: JSX.Element;
   tooltip?: string;
+  variant?: SelectVariant;
   size?: SelectSize;
   disabled?: boolean;
   accessibilityLabel?: string;
@@ -24,18 +28,36 @@ interface SelectProps {
   align?: "start" | "end";
   class?: string;
   triggerClass?: string;
+  labelClass?: string;
   onChange: (value: string | null) => void;
   onOpenChange?: (open: boolean) => void;
 }
 
+const TRIGGER_VARIANT_CLASSES: Record<SelectVariant, string> = {
+  default:
+    "justify-between gap-2 rounded-lg border border-input bg-background px-3 hover:bg-accent/50",
+  chip: "h-6 justify-between gap-1 rounded-md border border-border bg-surface-control px-2 hover:bg-accent/60 active:bg-accent",
+  inline:
+    "h-6 justify-between gap-1 rounded-full bg-transparent px-2 hover:bg-surface-control/80 active:bg-surface-control",
+};
+
 /** Single-choice dropdown built over nsh/base Select with theme tokens. */
 export function Select(props: SelectProps) {
+  const variant = () => props.variant ?? "default";
+  const isCompact = () => variant() !== "default";
   const selectedTitle = () => {
     const match = props.items.find((item) => item.value === props.value);
     return match ? match.title : null;
   };
-  const heightClass = () => (props.size === "sm" ? "h-8" : "h-9");
-  const textSizeClass = () => (props.size === "sm" ? "text-xs" : "text-sm");
+  const shownLabel = () =>
+    props.displayLabel ?? selectedTitle() ?? props.placeholder ?? t("common.selectPlaceholder");
+  const hasActiveValue = () => props.displayLabel !== undefined || selectedTitle() !== null;
+  const heightClass = () => {
+    if (isCompact()) return "";
+    return props.size === "sm" ? "h-8" : "h-9";
+  };
+  const textSizeClass = () => (props.size === "sm" || isCompact() ? "text-xs" : "text-sm");
+  const contentFlexClass = () => (isCompact() ? "min-w-0 shrink" : "min-w-0 flex-1");
 
   return (
     <BaseSelect
@@ -47,6 +69,7 @@ export function Select(props: SelectProps) {
       placement={props.placement ?? "bottom"}
       align={props.align ?? "start"}
       offset={4}
+      margin={8}
       onChange={({ value }) => props.onChange(value)}
       onOpenChange={({ open }) => props.onOpenChange?.(open)}
       class={props.class}
@@ -70,23 +93,24 @@ export function Select(props: SelectProps) {
           testID={props.testID}
           ref={(node) => props.ref?.(node)}
           tooltip={props.tooltip ? buildTooltip(props.tooltip, "top") : undefined}
-          class={`flex-row items-center justify-between gap-2 rounded-lg border border-input bg-background px-3 hover:bg-accent/50 focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-50 ${heightClass()} ${motion.navigationFeedback} ${props.triggerClass ?? ""}`}
+          class={`flex-row items-center focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-50 ${TRIGGER_VARIANT_CLASSES[variant()]} ${heightClass()} ${motion.navigationFeedback} ${props.triggerClass ?? ""}`}
         >
-          <View class="min-w-0 flex-1 flex-row items-center gap-1.5">
+          <View class={`${contentFlexClass()} flex-row items-center gap-1.5`}>
+            <If when={props.leading !== undefined}>{props.leading}</If>
             <If when={props.prefix !== undefined}>
               <Text class="shrink-0 text-xs text-muted-foreground">{props.prefix}</Text>
             </If>
             <Text
-              class={
-                selectedTitle() !== null
-                  ? `min-w-0 flex-1 truncate text-foreground ${textSizeClass()}`
-                  : `min-w-0 flex-1 truncate text-muted-foreground ${textSizeClass()}`
-              }
+              class={`${contentFlexClass()} truncate ${hasActiveValue() ? "text-foreground" : "text-muted-foreground"} ${textSizeClass()} ${props.labelClass ?? ""}`}
             >
-              {selectedTitle() ?? props.placeholder ?? t("common.selectPlaceholder")}
+              {shownLabel()}
             </Text>
           </View>
-          <Icon name="chevron-down" tone="muted-foreground" class="size-3.5 shrink-0" />
+          <Icon
+            name="chevron-down"
+            tone="muted-foreground"
+            class={isCompact() ? "size-3 shrink-0" : "size-3.5 shrink-0"}
+          />
         </View>
       }
     />

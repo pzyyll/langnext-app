@@ -15,11 +15,8 @@ import { t } from "nsh/i18n";
 import { Button } from "../components/ui/button";
 import { Icon } from "../components/ui/icon";
 import { toast } from "../components/ui/toast";
-import { QuickTranslateLanguageMenu } from "../features/quick-translate/language-menu";
-import {
-  QuickTranslateAddPresetMenu,
-  QuickTranslatePopup,
-} from "../features/quick-translate/popup";
+import { QuickTranslateLanguageBar } from "../features/quick-translate/language-menu";
+import { QuickTranslateFooter, QuickTranslatePopup } from "../features/quick-translate/popup";
 import {
   autoTranslatePreference,
   doubleCopyEnabled,
@@ -171,6 +168,7 @@ const ROOT_BORDER_HEIGHT = 2;
 function QuickTranslateWindowBody(props: { controller: QuickTranslateController }) {
   const headerHeight = signal(0);
   const contentHeight = signal(0);
+  const footerHeight = signal(0);
   const ocrAction = signal<ViewRef | null>(null);
   let handledOcrFocusSeq = props.controller.ocrFocusSeq();
   const session = createQuickTranslateSession({
@@ -197,10 +195,11 @@ function QuickTranslateWindowBody(props: { controller: QuickTranslateController 
   effect(() => {
     const header = headerHeight();
     const content = contentHeight();
-    if (!readyToFit() || header <= 0 || content <= 0) return;
+    const footer = footerHeight();
+    if (!readyToFit() || header <= 0 || content <= 0 || footer <= 0) return;
     // Coalesce layout events and resize outside the native layout pass.
     const frame = requestAnimationFrame(() =>
-      props.controller.fitContentHeight(header + content + ROOT_BORDER_HEIGHT),
+      props.controller.fitContentHeight(header + content + footer + ROOT_BORDER_HEIGHT),
     );
     cleanup(() => cancelAnimationFrame(frame));
   });
@@ -208,31 +207,37 @@ function QuickTranslateWindowBody(props: { controller: QuickTranslateController 
   return (
     <View
       testID="quick-translate-surface"
-      class="flex-1 overflow-hidden rounded-2xl border border-border bg-background text-foreground"
+      class="flex-1 overflow-hidden rounded-3xl border border-border bg-background text-foreground"
     >
       <View
         testID="quick-translate-header"
         onLayout={({ bounds }) => headerHeight.set(bounds.size.height)}
         desktop={{ windowDrag: true }}
-        class="shrink-0 flex-row items-center justify-between gap-2 border-b border-border"
-        // Runtime platform titleBar() insets clear native caption buttons; 12 pt matches the p-3 body inset.
+        class="shrink-0 flex-row items-center justify-between gap-2 border-b border-border/80"
+        // Runtime platform titleBar() insets clear native caption buttons; 16 pt matches the px-4 body spine.
         style={{
-          height: Math.max(40, titleBar().height),
-          paddingLeft: titleBar().left + 12,
-          paddingRight: titleBar().right + 12,
+          height: Math.max(44, titleBar().height),
+          paddingLeft: titleBar().left + 16,
+          paddingRight: titleBar().right + 16,
         }}
       >
-        <View desktop={{ windowDrag: false }} class="flex-row items-center gap-1">
-          <QuickTranslateLanguageMenu
+        <View desktop={{ windowDrag: false }} class="min-w-0 shrink flex-row items-center">
+          <QuickTranslateLanguageBar
             sourceLanguage={session.sourceLanguage()}
             targetLanguage={session.targetLanguage()}
+            sourceDetection={session.sourceDetection()}
+            canSwap={session.canSwapLanguages()}
             onSelectSourceLanguage={(language) => session.handleSourceLanguageChange(language)}
             onSelectTargetLanguage={(language) => session.handleTargetLanguageChange(language)}
-            onOpenChange={(open) => session.notifyOverlayOpenChange("language-menu", open)}
+            onSwapLanguages={() => session.handleSwapLanguages()}
+            onSourceOpenChange={(open) => session.notifyOverlayOpenChange("source-language", open)}
+            onTargetOpenChange={(open) => session.notifyOverlayOpenChange("target-language", open)}
           />
+        </View>
+        <View desktop={{ windowDrag: false }} class="shrink-0 flex-row items-center gap-1">
           <Button
             testID="quick-translate-auto-toggle"
-            variant="ghost"
+            variant="brand-ghost"
             size="icon-sm"
             selected={props.controller.autoTranslate()}
             tooltip={
@@ -249,11 +254,10 @@ function QuickTranslateWindowBody(props: { controller: QuickTranslateController 
           >
             <Icon
               name={props.controller.autoTranslate() ? "lightning-solid" : "lightning"}
-              tone={props.controller.autoTranslate() ? "foreground" : "muted-foreground"}
+              tone={props.controller.autoTranslate() ? "brand" : "muted-foreground"}
               class="size-3.5"
             />
           </Button>
-          <QuickTranslateAddPresetMenu session={session} />
           <If when={canCaptureScreen(platform.os)}>
             <Button
               testID="quick-translate-ocr"
@@ -268,11 +272,9 @@ function QuickTranslateWindowBody(props: { controller: QuickTranslateController 
               <Icon name="scanning" tone="muted-foreground" class="size-3.5" />
             </Button>
           </If>
-        </View>
-        <View desktop={{ windowDrag: false }} class="flex-row items-center gap-1">
           <Button
             testID="quick-translate-pin"
-            variant="ghost"
+            variant="brand-ghost"
             size="icon-sm"
             selected={props.controller.isPinned()}
             tooltip={
@@ -285,14 +287,15 @@ function QuickTranslateWindowBody(props: { controller: QuickTranslateController 
           >
             <Icon
               name={props.controller.isPinned() ? "pin-solid" : "pin"}
-              tone={props.controller.isPinned() ? "foreground" : "muted-foreground"}
+              tone={props.controller.isPinned() ? "brand" : "muted-foreground"}
               class="size-3.5"
             />
           </Button>
           <If when={titleBar().right === 0}>
+            <View class="mx-0.5 h-3.5 w-px bg-border" />
             <Button
               testID="quick-translate-close"
-              variant="ghost"
+              variant="destructive-ghost"
               size="icon-sm"
               tooltip={t("quickTranslate.close")}
               accessibilityLabel={t("quickTranslate.close")}
@@ -313,6 +316,9 @@ function QuickTranslateWindowBody(props: { controller: QuickTranslateController 
           />
         </View>
       </Scroll>
+      <View class="shrink-0" onLayout={({ bounds }) => footerHeight.set(bounds.size.height)}>
+        <QuickTranslateFooter session={session} />
+      </View>
     </View>
   );
 }

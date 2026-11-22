@@ -196,6 +196,7 @@ export interface QuickTranslateSession {
   sourceLanguage: Accessor<SourceLanguageId>;
   targetLanguage: Accessor<TargetLanguageId>;
   sourceDetection: Accessor<SourceDetectionState>;
+  canSwapLanguages: Accessor<boolean>;
   cards: Accessor<readonly CardViewItem[]>;
   enabledPresets: Accessor<readonly TranslationPreset[]>;
   presetItems: Accessor<SelectItem[]>;
@@ -208,6 +209,7 @@ export interface QuickTranslateSession {
   handleClearSource: () => void;
   handleSourceLanguageChange: (language: SourceLanguageId) => void;
   handleTargetLanguageChange: (language: TargetLanguageId) => void;
+  handleSwapLanguages: () => void;
   handleAddPresetCard: (presetId: string) => void;
   handleSelectCardPreset: (cardId: string, presetId: string | null) => void;
   handleSelectCardTemplate: (cardId: string, templateId: string | null) => void;
@@ -719,6 +721,30 @@ export function createQuickTranslateSession(
     scheduleAutoTranslate();
   };
 
+  const resolveEffectiveSourceLanguage = (): LanguageId | null => {
+    const src = sourceLanguage();
+    if (src !== AUTO_LANGUAGE) return src;
+    const detected = sourceDetection();
+    return detected.status === "detected" ? detected.language : null;
+  };
+
+  const canSwapLanguages = () => {
+    const effective = resolveEffectiveSourceLanguage();
+    return effective !== null && effective !== targetLanguage();
+  };
+
+  const handleSwapLanguages = () => {
+    const effective = resolveEffectiveSourceLanguage();
+    const nextSource = targetLanguage();
+    if (effective === null || effective === nextSource) return;
+    batch(() => {
+      sourceLanguage.set(nextSource);
+      targetLanguage.set(effective);
+    });
+    persistPreferencesState();
+    scheduleAutoTranslate();
+  };
+
   const handleAddPresetCard = (presetId: string) => {
     const preset = enabledPresets().find((item) => item.id === presetId);
     if (!preset) return;
@@ -888,6 +914,7 @@ export function createQuickTranslateSession(
     sourceLanguage: () => sourceLanguage(),
     targetLanguage: () => targetLanguage(),
     sourceDetection: () => sourceDetection(),
+    canSwapLanguages,
     cards: () => cards(),
     enabledPresets,
     presetItems,
@@ -900,6 +927,7 @@ export function createQuickTranslateSession(
     handleClearSource,
     handleSourceLanguageChange,
     handleTargetLanguageChange,
+    handleSwapLanguages,
     handleAddPresetCard,
     handleSelectCardPreset,
     handleSelectCardTemplate,

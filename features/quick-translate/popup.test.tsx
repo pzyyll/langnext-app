@@ -102,7 +102,7 @@ test("desktop: quick popup translates on Enter, preserves Shift+Enter newline, a
 
   await app.waitFor("id:quick-translate-source");
   expect(app.shows("id:quick-translate-submit")).toBe(false);
-  expect(app.shows("id:quick-translate-swap-languages")).toBe(false);
+  expect(app.shows("id:quick-translate-swap-languages")).toBe(true);
   expect(app.shows("id:quick-translate-copy")).toBe(false);
 
   // Whitespace-only Enter shows blank validation error and sends 0 requests.
@@ -150,13 +150,13 @@ test("quick popup: collapses a non-empty source into a one-line preview and retu
   await app.hover("id:quick-translate-collapse-source");
   await app.waitFor(`text:${t("quickTranslate.collapseSource")}`);
 
-  // Collapsed: one preview line, the toolbar stays, and no translation starts.
+  // Collapsed: one preview line, the source actions stay, and no translation starts.
   await app.press("id:quick-translate-collapse-source");
   await app.waitFor("id:quick-translate-source-preview");
   expect(app.shows("id:quick-translate-source")).toBe(false);
   expect(app.texts()).toContain("First line");
   expect(app.texts()).not.toContain("Second line");
-  expect(app.shows("id:quick-translate-source-toolbar")).toBe(true);
+  expect(app.shows("id:quick-translate-source-actions")).toBe(true);
   expect(app.requests()).toHaveLength(0);
 
   await app.hover("id:quick-translate-collapse-source");
@@ -230,8 +230,8 @@ test("quick popup: shows localized tooltips for icon-only toolbar and card actio
   await app.hover("id:quick-translate-clear");
   await app.waitFor(`text:${t("common.clearInput")}`);
 
-  await app.hover("id:quick-translate-add-preset");
-  await app.waitFor(`text:${t("quickTranslate.addPreset")}`);
+  await app.hover("id:quick-translate-swap-languages");
+  await app.waitFor(`text:${t("quickTranslate.swapLanguages")}`);
 
   await app.hover("id:quick-translate-retry");
   await app.waitFor(`text:${t("common.retry")}`);
@@ -355,12 +355,10 @@ test("quick popup: debounces 500ms opt-in auto-translate, preserves Shift+Enter 
   await app.clock!.runFor(1);
   expect(app.requests()).toHaveLength(2);
 
-  // Language change from title-bar menu re-runs after 500 ms.
-  await app.press("id:quick-translate-language-menu");
-  await app.waitFor("id:quick-translate-target-language");
-  await app.hover("id:quick-translate-target-language");
-  await app.waitFor("id:quick-translate-target-language-ja");
-  await app.press("id:quick-translate-target-language-ja");
+  // Language change from header bar re-runs after 500 ms.
+  await app.press("id:quick-translate-target-language");
+  await app.waitFor(`role:option[${getTargetLanguageLabel("ja")}]`);
+  await app.press(`role:option[${getTargetLanguageLabel("ja")}]`);
   expect(app.shows("id:quick-translate-copy")).toBe(false);
   expect(app.requests()).toHaveLength(2);
   await app.clock!.runFor(200);
@@ -671,11 +669,12 @@ test("preset cards: automatic mode schedules eligible cards on shared input and 
   expect(autoApp.requests()).toHaveLength(2);
 
   // Shared language remains preserved across preset card add/change.
-  expect(autoApp.shows("label:Languages (English → French)")).toBe(true);
-  await autoApp.press("id:quick-translate-language-menu");
-  await autoApp.waitFor("id:quick-translate-source-language >> text:Source: English");
-  expect(autoApp.shows("id:quick-translate-target-language >> text:Target: French")).toBe(true);
-  await autoApp.keyboard.press("escape");
+  expect(
+    autoApp.shows(`id:quick-translate-source-language >> text:${getLanguageLabel("en")}`),
+  ).toBe(true);
+  expect(
+    autoApp.shows(`id:quick-translate-target-language >> text:${getTargetLanguageLabel("fr")}`),
+  ).toBe(true);
 
   // Change template override ONLY on card 1 -> runs ONLY card 1 (total 3 requests).
   await autoApp.press("id:quick-translate-card-card-1 >> id:quick-translate-template");
@@ -860,16 +859,12 @@ test("quick reopen: restores valid cards, fallback template, languages, and auto
   });
 
   await session1.waitFor("id:quick-translate-card-card-1");
-  await session1.press("id:quick-translate-language-menu");
-  await session1.waitFor("id:quick-translate-source-language");
-  await session1.hover("id:quick-translate-source-language");
-  await session1.waitFor("id:quick-translate-source-language-en");
-  await session1.press("id:quick-translate-source-language-en");
-  await session1.press("id:quick-translate-language-menu");
-  await session1.waitFor("id:quick-translate-target-language");
-  await session1.hover("id:quick-translate-target-language");
-  await session1.waitFor("id:quick-translate-target-language-ja");
-  await session1.press("id:quick-translate-target-language-ja");
+  await session1.press("id:quick-translate-source-language");
+  await session1.waitFor(`role:option[${getLanguageLabel("en")}]`);
+  await session1.press(`role:option[${getLanguageLabel("en")}]`);
+  await session1.press("id:quick-translate-target-language");
+  await session1.waitFor(`role:option[${getTargetLanguageLabel("ja")}]`);
+  await session1.press(`role:option[${getTargetLanguageLabel("ja")}]`);
   await session1.press("id:harness-toggle-auto");
   await session1.press("id:quick-translate-card-card-1 >> id:quick-translate-template");
   await session1.waitFor("role:option[Formal]");
@@ -912,11 +907,12 @@ test("quick reopen: restores valid cards, fallback template, languages, and auto
 
   await session2.waitFor("id:quick-translate-card-card-1");
   expect(session2.shows("id:quick-translate-card-card-2")).toBe(false);
-  expect(session2.shows("label:Languages (English → Japanese)")).toBe(true);
-  await session2.press("id:quick-translate-language-menu");
-  await session2.waitFor("id:quick-translate-source-language >> text:Source: English");
-  expect(session2.shows("id:quick-translate-target-language >> text:Target: Japanese")).toBe(true);
-  await session2.keyboard.press("escape");
+  expect(
+    session2.shows(`id:quick-translate-source-language >> text:${getLanguageLabel("en")}`),
+  ).toBe(true);
+  expect(
+    session2.shows(`id:quick-translate-target-language >> text:${getTargetLanguageLabel("ja")}`),
+  ).toBe(true);
   expect(session2.texts()).toContain("Disable automatic translation");
   expect(session2.value("id:quick-translate-source")).toBe("");
   expect(session2.shows("id:quick-translate-result-text")).toBe(false);
@@ -932,11 +928,9 @@ test("quick reopen: restores valid cards, fallback template, languages, and auto
 
   // Failed explicit save surfaces localized error alert without claiming saved.
   await session2.press("id:harness-toggle-prefs-write-fail");
-  await session2.press("id:quick-translate-language-menu");
-  await session2.waitFor("id:quick-translate-target-language");
-  await session2.hover("id:quick-translate-target-language");
-  await session2.waitFor("id:quick-translate-target-language-fr");
-  await session2.press("id:quick-translate-target-language-fr");
+  await session2.press("id:quick-translate-target-language");
+  await session2.waitFor(`role:option[${getTargetLanguageLabel("fr")}]`);
+  await session2.press(`role:option[${getTargetLanguageLabel("fr")}]`);
   await session2.waitFor("id:quick-translate-preferences-error");
   expect(session2.texts()).toContain(t("quickTranslate.error.savePreferences"));
 
@@ -955,15 +949,20 @@ test("quick reopen: restores valid cards, fallback template, languages, and auto
   );
 });
 
-/** The title-bar trigger label proves which pair the popup currently holds. */
-function languageMenuLabel(
+/** Checks whether the header language bar shows the expected source and target labels. */
+function showsLanguagePair(
+  app: Awaited<ReturnType<typeof open>>,
   sourceLanguage: Parameters<typeof getLanguageLabel>[0],
   targetLanguage: Parameters<typeof getTargetLanguageLabel>[0],
-): string {
-  return t("quickTranslate.languages", {
-    source: getLanguageLabel(sourceLanguage),
-    target: getTargetLanguageLabel(targetLanguage),
-  });
+): boolean {
+  const sourceText =
+    sourceLanguage === "auto" ? t("quickTranslate.autoDetect") : getLanguageLabel(sourceLanguage);
+  return (
+    app.shows(`id:quick-translate-source-language >> text:${sourceText}`) &&
+    app.shows(
+      `id:quick-translate-target-language >> text:${getTargetLanguageLabel(targetLanguage)}`,
+    )
+  );
 }
 
 test("quick languages: owns its saved pair regardless of presets or cards", async () => {
@@ -989,8 +988,8 @@ test("quick languages: owns its saved pair regardless of presets or cards", asyn
   });
 
   await fresh.waitFor("id:quick-translate-card-card-1");
-  expect(fresh.shows(`label:${languageMenuLabel("auto", "auto")}`)).toBe(true);
-  expect(fresh.shows(`label:${languageMenuLabel("en", "fr")}`)).toBe(false);
+  expect(showsLanguagePair(fresh, "auto", "auto")).toBe(true);
+  expect(showsLanguagePair(fresh, "en", "fr")).toBe(false);
 
   // Saved selections come back even when no preset is enabled to supply cards.
   const savedPairApp = await open(POPUP_HARNESS, {
@@ -998,7 +997,7 @@ test("quick languages: owns its saved pair regardless of presets or cards", asyn
     storage: seedWithPresets([makePreset({ id: "preset-off", name: "Off", enabled: false })]),
   });
   await savedPairApp.waitFor("id:quick-translate-no-presets");
-  expect(savedPairApp.shows(`label:${languageMenuLabel("en", "fr")}`)).toBe(true);
+  expect(showsLanguagePair(savedPairApp, "en", "fr")).toBe(true);
 
   // Switching presets keeps the saved pair and the next request uses it.
   const switchApp = await open(POPUP_HARNESS, {
@@ -1028,7 +1027,7 @@ test("quick languages: owns its saved pair regardless of presets or cards", asyn
   await switchApp.press("id:quick-translate-preset");
   await switchApp.waitFor("role:option[Beta]");
   await switchApp.press("role:option[Beta]");
-  expect(switchApp.shows(`label:${languageMenuLabel("en", "fr")}`)).toBe(true);
+  expect(showsLanguagePair(switchApp, "en", "fr")).toBe(true);
   await switchApp.submit("id:quick-translate-source");
   await switchApp.waitUntil(() => switchApp.requests().length === 2);
   const secondBody = JSON.parse(switchApp.requests()[1]!.body!) as {
@@ -1155,7 +1154,7 @@ test("language resolution: one detection request serves both expanded cards", as
   expect(app.shows("id:quick-translate-source-detection")).toBe(false);
 
   await app.type("id:quick-translate-source", "Bonjour");
-  expect(app.shows("id:quick-translate-source-toolbar >> id:quick-translate-clear")).toBe(true);
+  expect(app.shows("id:quick-translate-source-actions >> id:quick-translate-clear")).toBe(true);
   await app.keyboard.press("enter");
   await app.waitUntil(() => app.texts().some((text) => text.includes("detects=1|")));
 
@@ -1701,4 +1700,57 @@ test("quick popup: renders OCR status and source detection in one bottom-left to
   expect(app.texts()).toContain(
     t("quickTranslate.detectedLanguage", { language: getLanguageLabel("fr") }),
   );
+});
+
+test("quick popup: swap button swaps explicit or auto-detected languages and ignores unresolved auto", async () => {
+  const app = await open(POPUP_HARNESS, {
+    ...viewport,
+    storage: seedAutoPair([false], "ocr-status"),
+    network: {
+      [TRANSLATE_URL]: { status: 200, body: { choices: [{ message: { content: "译文" } }] } },
+    },
+  });
+
+  await app.waitFor("id:quick-translate-card-card-1");
+  // Set target to English while source remains unresolved auto; swap must remain disabled.
+  await app.press("id:quick-translate-target-language");
+  await app.waitFor(`role:option[${getTargetLanguageLabel("en")}]`);
+  await app.press(`role:option[${getTargetLanguageLabel("en")}]`);
+  expect(app.enabled("id:quick-translate-swap-languages")).toBe(false);
+  expect(showsLanguagePair(app, "auto", "en")).toBe(true);
+
+  // Setting source to English makes source === target, so swap stays disabled.
+  await app.press("id:quick-translate-source-language");
+  await app.waitFor(`role:option[${getLanguageLabel("en")}]`);
+  await app.press(`role:option[${getLanguageLabel("en")}]`);
+  expect(app.enabled("id:quick-translate-swap-languages")).toBe(false);
+  expect(showsLanguagePair(app, "en", "en")).toBe(true);
+
+  // Changing target to German enables swap and exchanges them cleanly.
+  await app.press("id:quick-translate-target-language");
+  await app.waitFor(`role:option[${getTargetLanguageLabel("de")}]`);
+  await app.press(`role:option[${getTargetLanguageLabel("de")}]`);
+  expect(app.enabled("id:quick-translate-swap-languages")).toBe(true);
+  await app.press("id:quick-translate-swap-languages");
+  expect(showsLanguagePair(app, "de", "en")).toBe(true);
+
+  // Auto-detected source resolves effective language for swapping.
+  await app.press("id:quick-translate-source-language");
+  await app.waitFor(`role:option[${t("quickTranslate.autoDetect")}]`);
+  await app.press(`role:option[${t("quickTranslate.autoDetect")}]`);
+  expect(app.enabled("id:quick-translate-swap-languages")).toBe(false);
+  await app.type("id:quick-translate-source", "Bonjour");
+  await app.keyboard.press("enter");
+  await app.waitUntil(() => app.texts().some((text) => text.includes("detects=1|")));
+  await app.press("id:harness-resolve-language-fr");
+  await app.waitFor("id:quick-translate-source-toolbar >> id:quick-translate-source-detection");
+  expect(
+    app.shows(
+      `id:quick-translate-source-language >> text:${t("quickTranslate.autoDetectDetected", { language: getLanguageLabel("fr") })}`,
+    ),
+  ).toBe(true);
+  expect(app.enabled("id:quick-translate-swap-languages")).toBe(true);
+
+  await app.press("id:quick-translate-swap-languages");
+  expect(showsLanguagePair(app, "en", "fr")).toBe(true);
 });

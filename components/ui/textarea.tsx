@@ -26,7 +26,7 @@ import {
   usesNaturalLineHeight,
 } from "./font-step";
 
-export type TextareaVariant = "default" | "card";
+export type TextareaVariant = "default" | "card" | "frameless";
 export type TextareaFontScale = "fixed" | "stepped";
 
 interface TextareaProps {
@@ -58,26 +58,30 @@ interface TextareaProps {
 }
 
 const SURFACE_CLASSES: Record<TextareaVariant, string> = {
-  default: "rounded-lg border border-input bg-background",
-  card: "rounded-xl border border-border bg-card",
+  default:
+    "rounded-lg border border-input bg-background focus-within:border-ring focus-within:ring-2 focus-within:ring-ring",
+  card: "rounded-xl border border-border bg-card focus-within:border-ring focus-within:ring-2 focus-within:ring-ring",
+  frameless: "bg-transparent",
 };
 
 const TEXT_CLASSES: Record<TextareaVariant, string> = {
   default: "text-foreground",
   card: "text-card-foreground",
+  frameless: "text-foreground",
 };
 
 function FontProbe(props: {
   text: string;
   width: number;
   stepClass: string;
+  weightClass: string;
   measureClass: string;
   onHeight: (height: number, measured: string) => void;
 }) {
   return (
     <Text
       accessibilityElementsHidden
-      class={`${props.stepClass} ${props.measureClass}`}
+      class={`${props.stepClass} ${props.weightClass} ${props.measureClass}`}
       style={{
         position: "fixed",
         top: 0,
@@ -101,9 +105,11 @@ function FontProbe(props: {
 function FontProbes(props: {
   text: string;
   width: number;
+  frameless: boolean;
   measureClass: string;
   onHeight: (index: number, height: number, measured: string) => void;
 }) {
+  const stepWeight = (index: number) => (props.frameless && index >= 2 ? "font-medium" : "");
   return (
     <View accessibilityElementsHidden style={{ position: "absolute", width: 0, height: 0 }}>
       {/* One probe per FONT_SIZE_STEPS entry; recordProbe waits until every one has a height. */}
@@ -111,6 +117,7 @@ function FontProbes(props: {
         text={props.text}
         width={props.width}
         stepClass={FONT_SIZE_STEPS[0]}
+        weightClass={stepWeight(0)}
         measureClass={props.measureClass}
         onHeight={(height, measured) => props.onHeight(0, height, measured)}
       />
@@ -118,6 +125,7 @@ function FontProbes(props: {
         text={props.text}
         width={props.width}
         stepClass={FONT_SIZE_STEPS[1]}
+        weightClass={stepWeight(1)}
         measureClass={props.measureClass}
         onHeight={(height, measured) => props.onHeight(1, height, measured)}
       />
@@ -125,6 +133,7 @@ function FontProbes(props: {
         text={props.text}
         width={props.width}
         stepClass={FONT_SIZE_STEPS[2]}
+        weightClass={stepWeight(2)}
         measureClass={props.measureClass}
         onHeight={(height, measured) => props.onHeight(2, height, measured)}
       />
@@ -132,6 +141,7 @@ function FontProbes(props: {
         text={props.text}
         width={props.width}
         stepClass={FONT_SIZE_STEPS[3]}
+        weightClass={stepWeight(3)}
         measureClass={props.measureClass}
         onHeight={(height, measured) => props.onHeight(3, height, measured)}
       />
@@ -152,6 +162,8 @@ export function Textarea(props: TextareaProps) {
     stepped() ? clampFontStep(props.initialFontStep ?? LARGEST_FONT_STEP) : SMALLEST_FONT_STEP,
   );
   const fontClass = () => (stepped() ? FONT_SIZE_STEPS[clampFontStep(fontStep())] : "text-sm");
+  const fontWeightClass = () =>
+    stepped() && variant() === "frameless" && clampFontStep(fontStep()) >= 2 ? "font-medium" : "";
   const showProbes = () => stepped() && contentWidth() >= 1 && sourceText().length > 0;
 
   let sampleKey = "";
@@ -161,7 +173,7 @@ export function Textarea(props: TextareaProps) {
   let ceiling = LARGEST_FONT_STEP;
 
   const containerPadding = () => {
-    if (props.footer !== undefined) return "";
+    if (props.footer !== undefined || variant() === "frameless") return "";
     return variant() === "card" ? "p-3" : "px-3 py-2";
   };
 
@@ -229,10 +241,12 @@ export function Textarea(props: TextareaProps) {
 
   return (
     <View
-      class={`${SURFACE_CLASSES[variant()]} focus-within:border-ring focus-within:ring-2 focus-within:ring-ring ${containerPadding()} ${props.disabled || props.readonly ? "opacity-60" : ""} ${motion.navigationFeedback} ${props.class ?? ""}`}
+      class={`${SURFACE_CLASSES[variant()]} ${containerPadding()} ${props.disabled || props.readonly ? "opacity-60" : ""} ${motion.navigationFeedback} ${props.class ?? ""}`}
     >
       {/* Keep NSH's measured text overflow out of any enclosing Scroll. */}
-      <View class={`overflow-hidden ${props.footer === undefined ? "w-full" : "px-3 pt-2"}`}>
+      <View
+        class={`overflow-hidden ${variant() === "frameless" || props.footer === undefined ? "w-full" : "px-3 pt-2"}`}
+      >
         <BaseInput
           testID={props.testID}
           ref={(node) => props.ref?.(node)}
@@ -256,7 +270,7 @@ export function Textarea(props: TextareaProps) {
             contentWidth.set(next);
           }}
           style={naturalLineHeight() ? { lineHeight: 0 } : undefined}
-          class={`min-h-24 w-full bg-transparent ${fontClass()} placeholder:text-muted-foreground ${TEXT_CLASSES[variant()]} ${props.inputClass ?? ""}`}
+          class={`min-h-24 w-full bg-transparent ${fontClass()} ${fontWeightClass()} placeholder:text-muted-foreground ${TEXT_CLASSES[variant()]} ${props.inputClass ?? ""}`}
         />
       </View>
       <If when={props.footer !== undefined}>
@@ -266,6 +280,7 @@ export function Textarea(props: TextareaProps) {
         <FontProbes
           text={sourceText()}
           width={contentWidth()}
+          frameless={variant() === "frameless"}
           measureClass={measureClass()}
           onHeight={(index, height, measured) => recordProbe(index, height, measured)}
         />

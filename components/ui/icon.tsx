@@ -9,9 +9,11 @@ import chevronRightIcon from "../../assets/icons/chevron-right.svg";
 import chevronUpIcon from "../../assets/icons/chevron-up.svg";
 import clearIcon from "../../assets/icons/clear.svg";
 import collapseTextInputIcon from "../../assets/icons/icon-park-outline--collapse-text-input.svg";
+import closeCircleIcon from "../../assets/icons/close-circle.svg";
 import closeIcon from "../../assets/icons/close.svg";
 import copyIcon from "../../assets/icons/copy.svg";
 import cubeOutlineIcon from "../../assets/icons/cube-outline.svg";
+import deeplIcon from "../../assets/icons/deepl.svg";
 import deleteIcon from "../../assets/icons/delete.svg";
 import editIcon from "../../assets/icons/edit.svg";
 import englishIcon from "../../assets/icons/icon-park-outline--english.svg";
@@ -42,9 +44,11 @@ const ICONS = {
   "chevron-up": chevronUpIcon,
   clear: clearIcon,
   close: closeIcon,
+  "close-circle": closeCircleIcon,
   "collapse-text-input": collapseTextInputIcon,
   copy: copyIcon,
   "cube-outline": cubeOutlineIcon,
+  deepl: deeplIcon,
   delete: deleteIcon,
   edit: editIcon,
   english: englishIcon,
@@ -75,6 +79,7 @@ export type IconTone =
   | "primary-foreground"
   | "secondary-foreground"
   | "accent-foreground"
+  | "brand"
   | "destructive"
   | "destructive-foreground"
   | "success"

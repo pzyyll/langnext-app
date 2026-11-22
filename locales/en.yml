@@ -544,6 +544,13 @@ quickTranslate:
   noEnabledPresets: No enabled presets. Enable a preset in Presets.
   addPreset: Add preset
   languages: "Languages (%{source} → %{target})"
+  sourceLanguageLabel: Source language
+  targetLanguageLabel: Target language
+  autoDetect: Auto
+  autoDetectDetected: "Auto (%{language})"
+  swapLanguages: Swap languages
+  shortcutTranslate: Translate
+  shortcutHide: Hide
   sourceMenuItem: "Source: %{language}"
   targetMenuItem: "Target: %{language}"
   templateLabel: Template
