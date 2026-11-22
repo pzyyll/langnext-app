@@ -1931,6 +1931,168 @@ test("quick tts: speaks the full source before translation and one selected resu
   expect(result.requests().some((request) => request.url.includes("chat/completions"))).toBe(true);
 });
 
+const AZURE_QUICK_TTS_URL = "https://eastus.tts.speech.microsoft.com/cognitiveservices/v1";
+
+function azureActiveStorage(): Record<string, string> {
+  return {
+    [TTS_STORAGE_KEY]: JSON.stringify({
+      version: 1,
+      googleCloud: { enabled: false, credentialRef: "google-ref" },
+      azure: { enabled: true, credentialRef: "azure-ref", region: "eastus" },
+    }),
+    [ttsCredentialStorageKey("google-ref")]: JSON.stringify({ apiKey: "google-key" }),
+    [ttsCredentialStorageKey("azure-ref")]: JSON.stringify({ apiKey: "azure-key" }),
+  };
+}
+
+test("quick tts: speaks through Azure and shows a rate limit without fallback", async () => {
+  const source = await open(POPUP_HARNESS, {
+    ...viewport,
+    storage: seedWithPresets([makePreset()], azureActiveStorage()),
+    network: { ["POST " + AZURE_QUICK_TTS_URL]: { status: 200, body: "ID3azure" } },
+  });
+  await source.waitFor("id:quick-translate-source");
+  await source.type("id:quick-translate-source", "Hello");
+  await source.keyboard.press("shift+enter");
+  await source.type("id:quick-translate-source", "world");
+  await source.waitUntil(() => source.enabled("id:quick-translate-speak-source"));
+  await source.hover("id:quick-translate-speak-source");
+  await source.waitUntil(() => source.texts().includes("Sends this text to Azure Speech."));
+  await source.press("id:quick-translate-speak-source");
+  await source.waitUntil(() => source.requests().length === 1);
+  const spoken = source.requests()[0]!;
+  expect(spoken.url).toBe(AZURE_QUICK_TTS_URL);
+  expect(spoken.body).toContain("Hello\nworld");
+  expect(spoken.body).toContain("en-US-JennyNeural");
+  expect(
+    spoken.headers["ocp-apim-subscription-key"] ?? spoken.headers["Ocp-Apim-Subscription-Key"],
+  ).toBe("azure-key");
+  expect(source.requests().some((request) => request.url === GOOGLE_CLOUD_TTS_URL)).toBe(false);
+
+  const result = await open(POPUP_HARNESS, {
+    ...viewport,
+    storage: seedWithPresets([makePreset()], azureActiveStorage()),
+    network: {
+      "POST https://api.openai.com/v1/chat/completions": {
+        status: 200,
+        body: { choices: [{ message: { content: "Bonjour" } }] },
+      },
+      ["POST " + AZURE_QUICK_TTS_URL]: { status: 200, body: "ID3azure" },
+    },
+  });
+  await result.waitFor("id:quick-translate-source");
+  await result.type("id:quick-translate-source", "Hello");
+  await result.keyboard.press("enter");
+  await result.waitFor("id:quick-translate-card-card-1 >> id:quick-translate-speak-result");
+  expect(result.requests().some((request) => request.url === AZURE_QUICK_TTS_URL)).toBe(false);
+  await result.press("id:quick-translate-card-card-1 >> id:quick-translate-speak-result");
+  await result.waitUntil(() =>
+    result.requests().some((request) => request.url === AZURE_QUICK_TTS_URL),
+  );
+  const speech = result.requests().filter((request) => request.url === AZURE_QUICK_TTS_URL);
+  expect(speech).toHaveLength(1);
+  expect(speech[0]!.body).toContain("Bonjour");
+  expect(speech[0]!.body).toContain("fr-FR-DeniseNeural");
+  expect(result.requests().some((request) => request.url === GOOGLE_CLOUD_TTS_URL)).toBe(false);
+
+  const limited = await open(POPUP_HARNESS, {
+    ...viewport,
+    storage: seedWithPresets([makePreset()], azureActiveStorage()),
+    network: {
+      ["POST " + AZURE_QUICK_TTS_URL]: { status: 429, body: "quota exceeded secret" },
+    },
+  });
+  await limited.waitFor("id:quick-translate-source");
+  await limited.type("id:quick-translate-source", "Hello");
+  await limited.press("id:quick-translate-speak-source");
+  await limited.waitUntil(() => limited.texts().includes("Azure is limiting requests. Try again later."));
+  expect(limited.texts()).not.toContain("quota exceeded secret");
+  expect(limited.texts().join(" ")).not.toMatch(/allowance/i);
+  expect(limited.audio()).toEqual([]);
+  expect(limited.requests().some((request) => request.url === GOOGLE_CLOUD_TTS_URL)).toBe(false);
+});
+
+test("quick tts: switching channels drops a late Azure response and stops playback", async () => {
+  const storage = seedWithPresets([makePreset()], {
+    ...azureActiveStorage(),
+    [POPUP_HARNESS_MODE_KEY]: "tts-switch",
+  });
+  const loading = await open(POPUP_HARNESS, {
+    ...viewport,
+    storage,
+    network: {
+      ["POST " + AZURE_QUICK_TTS_URL]: { status: 200, delay: 800, body: "ID3late" },
+    },
+  });
+  await loading.waitFor("id:quick-translate-source");
+  await loading.type("id:quick-translate-source", "Hello");
+  await loading.waitUntil(() => loading.enabled("id:quick-translate-speak-source"));
+  await loading.press("id:quick-translate-speak-source");
+  await loading.waitFor("role:button[Cancel]");
+  await loading.press("id:harness-activate-google-tts");
+  await loading.waitFor("role:button[Read aloud]");
+  await loading.wait(900);
+  expect(loading.audio().some((call) => call.command === "open")).toBe(false);
+  expect(loading.texts()).not.toContain("Could not play the audio. Try again.");
+  expect(loading.requests().some((request) => request.url === GOOGLE_CLOUD_TTS_URL)).toBe(false);
+
+  const playing = await open(POPUP_HARNESS, {
+    ...viewport,
+    storage,
+    network: {
+      ["POST " + AZURE_QUICK_TTS_URL]: { status: 200, body: "ID3azure" },
+    },
+  });
+  await playing.waitFor("id:quick-translate-source");
+  await playing.type("id:quick-translate-source", "Hello");
+  await playing.waitUntil(() => playing.enabled("id:quick-translate-speak-source"));
+  await playing.press("id:quick-translate-speak-source");
+  await playing.waitFor("role:button[Stop]");
+  await playing.press("id:harness-activate-google-tts");
+  await playing.waitFor("role:button[Read aloud]");
+  expect(playing.audio().some((call) => call.command === "close")).toBe(true);
+  expect(playing.requests().some((request) => request.url === GOOGLE_CLOUD_TTS_URL)).toBe(false);
+  expect(playing.requests().filter((request) => request.url === AZURE_QUICK_TTS_URL)).toHaveLength(1);
+
+  const inactive = await open(POPUP_HARNESS, {
+    ...viewport,
+    storage,
+    network: {
+      ["POST " + AZURE_QUICK_TTS_URL]: { status: 200, body: "ID3azure" },
+    },
+  });
+  await inactive.waitFor("id:quick-translate-source");
+  await inactive.type("id:quick-translate-source", "Hello");
+  await inactive.waitUntil(() => inactive.enabled("id:quick-translate-speak-source"));
+  await inactive.press("id:quick-translate-speak-source");
+  await inactive.waitFor("role:button[Stop]");
+  await inactive.press("id:harness-save-inactive-google");
+  await inactive.wait(300);
+  expect(inactive.shows("role:button[Stop]")).toBe(true);
+  expect(inactive.audio().some((call) => call.command === "close")).toBe(false);
+  expect(inactive.requests().filter((request) => request.url === AZURE_QUICK_TTS_URL)).toHaveLength(
+    1,
+  );
+});
+
+test("quick tts: Azure authentication stays next to the text and does not open a player", async () => {
+  const auth = await open(POPUP_HARNESS, {
+    ...viewport,
+    storage: seedWithPresets([makePreset()], azureActiveStorage()),
+    network: {
+      ["POST " + AZURE_QUICK_TTS_URL]: { status: 401, body: "provider secret text" },
+    },
+  });
+  await auth.waitFor("id:quick-translate-source");
+  await auth.type("id:quick-translate-source", "Hello");
+  await auth.press("id:quick-translate-speak-source");
+  await auth.waitFor("id:quick-translate-speak-source-error");
+  expect(auth.texts()).toContain("Check the Speech resource key and region.");
+  expect(auth.texts()).not.toContain("provider secret text");
+  expect(auth.audio()).toEqual([]);
+  expect(auth.requests().some((request) => request.url === GOOGLE_CLOUD_TTS_URL)).toBe(false);
+});
+
 test("quick tts: refuses a disabled channel, an unsupported language, and unresolved Auto", async () => {
   const off = await open(POPUP_HARNESS, {
     ...viewport,
