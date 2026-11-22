@@ -2005,7 +2005,9 @@ test("quick tts: speaks through Azure and shows a rate limit without fallback", 
   await limited.waitFor("id:quick-translate-source");
   await limited.type("id:quick-translate-source", "Hello");
   await limited.press("id:quick-translate-speak-source");
-  await limited.waitUntil(() => limited.texts().includes("Azure is limiting requests. Try again later."));
+  await limited.waitUntil(() =>
+    limited.texts().includes("Azure is limiting requests. Try again later."),
+  );
   expect(limited.texts()).not.toContain("quota exceeded secret");
   expect(limited.texts().join(" ")).not.toMatch(/allowance/i);
   expect(limited.audio()).toEqual([]);
@@ -2052,7 +2054,9 @@ test("quick tts: switching channels drops a late Azure response and stops playba
   await playing.waitFor("role:button[Read aloud]");
   expect(playing.audio().some((call) => call.command === "close")).toBe(true);
   expect(playing.requests().some((request) => request.url === GOOGLE_CLOUD_TTS_URL)).toBe(false);
-  expect(playing.requests().filter((request) => request.url === AZURE_QUICK_TTS_URL)).toHaveLength(1);
+  expect(playing.requests().filter((request) => request.url === AZURE_QUICK_TTS_URL)).toHaveLength(
+    1,
+  );
 
   const inactive = await open(POPUP_HARNESS, {
     ...viewport,

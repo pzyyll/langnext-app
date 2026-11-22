@@ -156,9 +156,7 @@ function parseAzure(value: unknown): AzureStored | null | "malformed" {
   return { enabled: value.enabled, credentialRef, region: value.region };
 }
 
-type ParsedStorage =
-  | { ok: true; record: ChannelRecord }
-  | { ok: false; key: TtsSettingsErrorKey };
+type ParsedStorage = { ok: true; record: ChannelRecord } | { ok: false; key: TtsSettingsErrorKey };
 
 function parseStoredSettings(raw: string): ParsedStorage {
   let parsed: unknown;
@@ -324,7 +322,8 @@ export function createTtsSettingsStore(storage: TtsSettingsStorage): TtsSettings
       enqueueWrite(async () => {
         const current = cloneRecord(settingsSignal());
         const target = channel === "azure" ? current.azure : current.googleCloud;
-        if (target === null) return enabled ? failure("channel_unconfigured") : { ok: true as const };
+        if (target === null)
+          return enabled ? failure("channel_unconfigured") : { ok: true as const };
         if (target.enabled === enabled) return { ok: true as const };
         if (enabled) {
           const key = await readStoredKey(target.credentialRef);

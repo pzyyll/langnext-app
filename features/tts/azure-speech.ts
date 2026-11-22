@@ -221,8 +221,7 @@ export function createAzureSpeechTtsClient(
         controller.abort();
       }, callOptions?.timeoutMs ?? AZURE_TTS_DEFAULT_TIMEOUT_MS);
       const abort = trackAbort(controller.signal);
-      const stopped = (): TtsSynthesis =>
-        timedOut ? failed("timeout") : { status: "cancelled" };
+      const stopped = (): TtsSynthesis => (timedOut ? failed("timeout") : { status: "cancelled" });
 
       try {
         let response: HttpResponseLike;

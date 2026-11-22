@@ -243,7 +243,11 @@ function previewFailureMessage(channel: TtsChannelId, failure: TtsFailure): stri
   return t("settings.tts.failure.playback");
 }
 
-function ChannelDetail(props: { channel: TtsChannelId; compact: boolean; credentialState: CredentialState }) {
+function ChannelDetail(props: {
+  channel: TtsChannelId;
+  compact: boolean;
+  credentialState: CredentialState;
+}) {
   const entrance = createMotion({ enter: motion.pageEnter });
   const apiKeyDraft = signal("");
   const regionDraft = signal("");
@@ -458,7 +462,9 @@ function ChannelDetail(props: { channel: TtsChannelId; compact: boolean; credent
               apiKeyField = node;
             }}
             value={apiKeyDraft()}
-            placeholder={props.credentialState === "readable" ? t("settings.tts.savedKey") : undefined}
+            placeholder={
+              props.credentialState === "readable" ? t("settings.tts.savedKey") : undefined
+            }
             masked={true}
             disabled={controlsLocked()}
             accessibilityLabel={t("settings.tts.apiKey")}

@@ -27,7 +27,7 @@ export function ttsPlaybackDirectory(): string | null {
 }
 
 function encodeBase64(bytes: Uint8Array): string {
-  const alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/"
+  const alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
   let encoded = "";
   for (let index = 0; index < bytes.length; index += 3) {
     const first = bytes[index] ?? 0;

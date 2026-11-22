@@ -7,10 +7,7 @@ import { googleVoiceForLanguage } from "./google-voices";
 import { createTtsSettingsStore, ttsSettingsStore } from "./settings";
 import type { TtsChannelId, TtsFailure, TtsSynthesisRequest } from "./synthesis";
 
-type SpeechSettings = Pick<
-  ReturnType<typeof createTtsSettingsStore>,
-  "activeBinding" | "readKey"
->;
+type SpeechSettings = Pick<ReturnType<typeof createTtsSettingsStore>, "activeBinding" | "readKey">;
 
 export interface PreparedQuickSpeech {
   request: TtsSynthesisRequest;

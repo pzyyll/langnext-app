@@ -1843,15 +1843,15 @@ test("tts preview: plays an Azure sample without changing the active channel", a
   const request = app.requests()[0]!;
   expect(request.method).toBe("POST");
   expect(request.url).toBe(azureUrl);
-  expect(request.headers["ocp-apim-subscription-key"] ?? request.headers["Ocp-Apim-Subscription-Key"]).toBe(
-    "azure-key",
-  );
+  expect(
+    request.headers["ocp-apim-subscription-key"] ?? request.headers["Ocp-Apim-Subscription-Key"],
+  ).toBe("azure-key");
   expect(request.body).toContain(TTS_SAMPLE_TEXT);
   expect(request.body).toContain("en-US-JennyNeural");
   expect(app.requests().some((item) => String(item.url).includes("texttospeech"))).toBe(false);
-  expect(app.audio().some((call) => call.command === "open" && call.src.includes("tts-playback"))).toBe(
-    true,
-  );
+  expect(
+    app.audio().some((call) => call.command === "open" && call.src.includes("tts-playback")),
+  ).toBe(true);
   const saved = JSON.parse(app.storage()[TTS_STORAGE_KEY]!) as {
     googleCloud: { enabled: boolean };
     azure: { enabled: boolean };

@@ -408,7 +408,11 @@ test("tts store: saves Azure beside an active Google channel and switches exclus
 test("tts store: a first Azure save on an empty store becomes the active channel", async () => {
   const mem = createMemoryStorage();
   const store = createTtsSettingsStore(mem.storage);
-  const saved = await store.saveChannel({ channel: "azure", apiKey: "azure-key", region: "westus2" });
+  const saved = await store.saveChannel({
+    channel: "azure",
+    apiKey: "azure-key",
+    region: "westus2",
+  });
   expect(saved.ok).toBe(true);
   if (!saved.ok) throw new Error("expected the first Azure save to succeed");
   expect(store.activeBinding()).toEqual(saved.binding);
@@ -421,7 +425,11 @@ test("tts store: a failed Azure switch or replacement keeps the previous channel
   const store = createTtsSettingsStore(mem.storage);
   const google = await store.saveChannel({ channel: "google-cloud", apiKey: "google-key" });
   if (!google.ok) throw new Error("expected Google to save");
-  const azure = await store.saveChannel({ channel: "azure", apiKey: "azure-key", region: "eastus" });
+  const azure = await store.saveChannel({
+    channel: "azure",
+    apiKey: "azure-key",
+    region: "eastus",
+  });
   if (!azure.ok) throw new Error("expected Azure to save");
   const before = mem.backing[TTS_STORAGE_KEY];
 

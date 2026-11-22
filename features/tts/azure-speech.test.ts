@@ -189,7 +189,7 @@ test("azure speech tts: escapes xml text and rejects characters xml cannot repre
     await harness.client.synthesize({
       ...ENGLISH,
       text,
-      voice: { languageCode: "en-US", voiceName: "Jen\"ny" },
+      voice: { languageCode: "en-US", voiceName: 'Jen"ny' },
     }),
   ).toEqual({ status: "synthesized", audio: MP3 });
   expect(harness.requests[0]?.body).toBe(
@@ -282,7 +282,9 @@ test("azure speech tts: maps status codes without reading provider bodies or ret
   }
 
   const network = createHarness(() => {
-    throw new Error("connect " + API_KEY + " https://eastus.tts.speech.microsoft.com/cognitiveservices/v1");
+    throw new Error(
+      "connect " + API_KEY + " https://eastus.tts.speech.microsoft.com/cognitiveservices/v1",
+    );
   });
   const networkResult = await network.client.synthesize(ENGLISH);
   expect(networkResult).toEqual({ status: "failed", failure: "network" });
@@ -355,13 +357,21 @@ test("azure speech tts: bounds the mp3 body at 4 mib and rejects an empty body",
   });
 
   const empty = createHarness(() => bytesResponse(new Uint8Array()));
-  expect(await empty.client.synthesize(ENGLISH)).toEqual({ status: "failed", failure: "malformed" });
+  expect(await empty.client.synthesize(ENGLISH)).toEqual({
+    status: "failed",
+    failure: "malformed",
+  });
 
   let missingRead = false;
-  const missing = createHarness(() => responseWith(200, null, undefined, () => {
-    missingRead = true;
-  }));
-  expect(await missing.client.synthesize(ENGLISH)).toEqual({ status: "failed", failure: "malformed" });
+  const missing = createHarness(() =>
+    responseWith(200, null, undefined, () => {
+      missingRead = true;
+    }),
+  );
+  expect(await missing.client.synthesize(ENGLISH)).toEqual({
+    status: "failed",
+    failure: "malformed",
+  });
   expect(missingRead).toBe(false);
 
   const authOversize = createHarness(() =>
@@ -369,7 +379,10 @@ test("azure speech tts: bounds the mp3 body at 4 mib and rejects an empty body",
       "content-length": String(AZURE_TTS_RESPONSE_BYTE_LIMIT + 1),
     }),
   );
-  expect(await authOversize.client.synthesize(ENGLISH)).toEqual({ status: "failed", failure: "auth" });
+  expect(await authOversize.client.synthesize(ENGLISH)).toEqual({
+    status: "failed",
+    failure: "auth",
+  });
 });
 test("azure speech tts: cancellation and timeout return no audio", async () => {
   expect(AZURE_TTS_DEFAULT_TIMEOUT_MS).toBe(15_000);
