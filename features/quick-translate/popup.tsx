@@ -42,6 +42,8 @@ export interface QuickTranslatePopupProps {
   session: QuickTranslateSession;
   /** OCR progress and alerts; the window entry point passes the controller's state. */
   ocrState?: Accessor<QuickTranslateOcrStatus>;
+  /** False while the native window is hidden. Omitted in a harness with no window. */
+  playbackAllowed?: Accessor<boolean>;
   onAttachSourceInput?: (input: InputRef | null) => void;
 }
 
@@ -73,6 +75,8 @@ function SpeakerButton(props: {
   testID: string;
   disabled: boolean;
   tooltip: string;
+  label: string;
+  icon: "speaker-one" | "close-circle";
   onPress: () => void;
 }) {
   return (
@@ -82,10 +86,10 @@ function SpeakerButton(props: {
       variant="ghost"
       disabled={props.disabled}
       tooltip={props.tooltip}
-      accessibilityLabel={props.disabled ? props.tooltip : t("quickTranslate.speak")}
+      accessibilityLabel={props.label}
       onPress={() => props.onPress()}
     >
-      <Icon name="speaker-one" tone="muted-foreground" class="size-3.5" />
+      <Icon name={props.icon} tone="muted-foreground" class="size-3.5" />
     </Button>
   );
 }
@@ -219,8 +223,12 @@ interface PresetCardRowProps {
   onRemove: (cardId: string) => void;
   onRetry: (cardId: string) => void;
   onCopy: (cardId: string) => void;
-  speakEnabled: Accessor<boolean>;
-  speakTooltip: Accessor<string>;
+  speakState: Accessor<{
+    disabled: boolean;
+    tooltip: string;
+    label: string;
+    icon: "speaker-one" | "close-circle";
+  }>;
   speakError: Accessor<string | null>;
   onSpeak: () => void;
 }
@@ -403,8 +411,10 @@ function PresetCardRow(props: PresetCardRowProps) {
                 >
                   <SpeakerButton
                     testID="quick-translate-speak-result"
-                    disabled={!props.speakEnabled()}
-                    tooltip={props.speakTooltip()}
+                    disabled={props.speakState().disabled}
+                    tooltip={props.speakState().tooltip}
+                    label={props.speakState().label}
+                    icon={props.speakState().icon}
                     onPress={() => props.onSpeak()}
                   />
                 </If>
@@ -522,18 +532,72 @@ export function QuickTranslatePopup(props: QuickTranslatePopupProps) {
 
   const sourceSpeechError = signal<string | null>(null);
   const resultSpeechErrors = signal<Readonly<Record<string, string>>>({});
+  const speechPhase = signal<"idle" | "loading" | "playing">("idle");
+  const speechOwner = signal<
+    | { kind: "source"; text: string; language: string }
+    | { kind: "result"; cardId: string; text: string; language: string }
+    | null
+  >(null);
   let speechToken = 0;
   let speechAbort: AbortController | null = null;
   let stopSpeech: (() => void) | null = null;
+  let activeCredential = "";
   const speakEnabled = () => ttsSettingsStore.isEnabled();
   const speakTooltip = () =>
     speakEnabled() ? t("quickTranslate.speakSending") : t("quickTranslate.speakOff");
+  const credentialSignature = () => {
+    const binding = ttsSettingsStore.savedBinding();
+    return binding?.enabled ? binding.credentialRef : "";
+  };
 
-  cleanup(() => {
+  const cancelSpeech = () => {
     speechToken += 1;
     speechAbort?.abort();
+    speechAbort = null;
     stopSpeech?.();
     stopSpeech = null;
+    speechPhase.set("idle");
+    speechOwner.set(null);
+  };
+
+  cleanup(cancelSpeech);
+
+  effect(() => {
+    const owner = speechOwner();
+    if (owner?.kind !== "source" || speechPhase() === "idle") return;
+    const selected = props.session.sourceLanguage();
+    const detected = props.session.sourceDetection();
+    const effective =
+      selected === AUTO_LANGUAGE
+        ? detected.status === "detected"
+          ? detected.language
+          : ""
+        : selected;
+    if (owner.text !== sourceText() || owner.language !== `${selected}:${effective}`) {
+      cancelSpeech();
+    }
+  });
+
+  effect(() => {
+    const owner = speechOwner();
+    if (owner?.kind !== "result" || speechPhase() === "idle") return;
+    const card = props.session.cards().find((item) => item.id === owner.cardId);
+    const result = card?.result;
+    const current =
+      card !== undefined && !card.collapsed && result?.status === "success"
+        ? `${result.text}\0${result.targetLanguage}`
+        : "";
+    if (current !== `${owner.text}\0${owner.language}`) cancelSpeech();
+  });
+
+  effect(() => {
+    if (speechPhase() !== "idle" && credentialSignature() !== activeCredential) cancelSpeech();
+  });
+
+  effect(() => {
+    if (props.playbackAllowed && !props.playbackAllowed() && speechPhase() !== "idle") {
+      cancelSpeech();
+    }
   });
 
   const setResultSpeechError = (cardId: string, message: string | null) => {
@@ -545,7 +609,17 @@ export function QuickTranslatePopup(props: QuickTranslatePopupProps) {
 
   const mountedSpeech = (token: number) => token === speechToken;
 
+  const finishSpeech = (token: number) => {
+    if (!mountedSpeech(token)) return;
+    stopSpeech = null;
+    speechPhase.set("idle");
+    speechOwner.set(null);
+  };
+
   const runSpeech = async (input: {
+    owner:
+      | { kind: "source"; text: string; language: string }
+      | { kind: "result"; cardId: string; text: string; language: string };
     text: string;
     language: LanguageId | null;
     unresolvedAuto: "choose-source" | "translate-first" | null;
@@ -557,6 +631,9 @@ export function QuickTranslatePopup(props: QuickTranslatePopupProps) {
     stopSpeech = null;
     const controller = new AbortController();
     speechAbort = controller;
+    activeCredential = credentialSignature();
+    speechOwner.set(input.owner);
+    speechPhase.set("loading");
     input.report(null);
     const prepared = await prepareQuickSpeech({
       text: input.text,
@@ -565,6 +642,7 @@ export function QuickTranslatePopup(props: QuickTranslatePopupProps) {
     });
     if (!mountedSpeech(token)) return;
     if (!prepared.ok) {
+      finishSpeech(token);
       input.report(prepared.message);
       return;
     }
@@ -577,17 +655,29 @@ export function QuickTranslatePopup(props: QuickTranslatePopupProps) {
       },
       { signal: controller.signal },
     );
-    if (!mountedSpeech(token) || controller.signal.aborted) return;
-    if (synthesized.status === "cancelled") return;
+    if (!mountedSpeech(token)) return;
+    if (controller.signal.aborted || synthesized.status === "cancelled") {
+      finishSpeech(token);
+      return;
+    }
     if (synthesized.status === "failed") {
+      finishSpeech(token);
       input.report(quickSpeechFailureMessage(synthesized.failure));
       return;
     }
-    const playback = playMp3Bytes(synthesized.audio);
+    const playback = playMp3Bytes(synthesized.audio, {
+      onPlaying: () => {
+        if (!mountedSpeech(token)) {
+          playback.stop();
+          return;
+        }
+        speechPhase.set("playing");
+      },
+    });
     stopSpeech = () => playback.stop();
     const played = await playback.result;
     if (!mountedSpeech(token)) return;
-    stopSpeech = null;
+    finishSpeech(token);
     if (played.status === "failed") input.report(t("quickTranslate.speakPlayback"));
   };
 
@@ -607,6 +697,7 @@ export function QuickTranslatePopup(props: QuickTranslatePopupProps) {
           : ("translate-first" as const)
         : null;
     void runSpeech({
+      owner: { kind: "source", text: sourceText(), language: `${selected}:${language ?? ""}` },
       text: sourceText(),
       language,
       unresolvedAuto,
@@ -618,11 +709,52 @@ export function QuickTranslatePopup(props: QuickTranslatePopupProps) {
     const card = props.session.cards().find((item) => item.id === cardId);
     if (card === undefined || card.result.status !== "success") return;
     void runSpeech({
+      owner: {
+        kind: "result",
+        cardId,
+        text: card.result.text,
+        language: card.result.targetLanguage,
+      },
       text: card.result.text,
       language: card.result.targetLanguage,
       unresolvedAuto: null,
       report: (message) => setResultSpeechError(cardId, message),
     });
+  };
+
+  const speechControl = (target: "source" | { cardId: string }) => {
+    const owner = speechOwner();
+    const mine =
+      owner !== null &&
+      (target === "source"
+        ? owner.kind === "source"
+        : owner.kind === "result" && owner.cardId === target.cardId);
+    const phase = mine ? speechPhase() : "idle";
+    if (phase === "loading") {
+      return {
+        disabled: false,
+        tooltip: t("common.cancel"),
+        label: t("common.cancel"),
+        icon: "close-circle" as const,
+        busy: true,
+      };
+    }
+    if (phase === "playing") {
+      return {
+        disabled: false,
+        tooltip: t("settings.tts.stop"),
+        label: t("settings.tts.stop"),
+        icon: "close-circle" as const,
+        busy: true,
+      };
+    }
+    return {
+      disabled: !speakEnabled(),
+      tooltip: speakTooltip(),
+      label: speakEnabled() ? t("quickTranslate.speak") : speakTooltip(),
+      icon: "speaker-one" as const,
+      busy: false,
+    };
   };
 
   const ocrMessage = () => (props.ocrState ? props.ocrState().message : null);
@@ -687,9 +819,14 @@ export function QuickTranslatePopup(props: QuickTranslatePopupProps) {
         <If when={hasSpeakableSource()}>
           <SpeakerButton
             testID="quick-translate-speak-source"
-            disabled={!speakEnabled()}
-            tooltip={speakTooltip()}
-            onPress={() => void speakSource()}
+            disabled={speechControl("source").disabled}
+            tooltip={speechControl("source").tooltip}
+            label={speechControl("source").label}
+            icon={speechControl("source").icon}
+            onPress={() => {
+              if (speechControl("source").busy) cancelSpeech();
+              else speakSource();
+            }}
           />
           <If when={sourceSpeechError() !== null}>
             <Text
@@ -855,10 +992,20 @@ export function QuickTranslatePopup(props: QuickTranslatePopupProps) {
                 onRemove={(cardId) => props.session.handleRemoveCard(cardId)}
                 onRetry={(id) => props.session.handleRetryCard(id)}
                 onCopy={(id) => props.session.handleCopyCard(id)}
-                speakEnabled={speakEnabled}
-                speakTooltip={speakTooltip}
+                speakState={() => {
+                  const state = speechControl({ cardId: card().id });
+                  return {
+                    disabled: state.disabled,
+                    tooltip: state.tooltip,
+                    label: state.label,
+                    icon: state.icon,
+                  };
+                }}
                 speakError={() => resultSpeechErrors()[card().id] ?? null}
-                onSpeak={() => speakResult(card().id)}
+                onSpeak={() => {
+                  if (speechControl({ cardId: card().id }).busy) cancelSpeech();
+                  else speakResult(card().id);
+                }}
               />
             )}
           </Each>

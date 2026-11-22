@@ -14,6 +14,8 @@ import {
   SCREENSHOT_TRANSLATE_SHORTCUT_STORAGE_KEY,
   SELECTION_TRANSLATE_SHORTCUT_STORAGE_KEY,
 } from "../features/settings/shortcuts";
+import { GOOGLE_CLOUD_TTS_URL } from "../features/tts/google-cloud";
+import { TTS_STORAGE_KEY, ttsCredentialStorageKey } from "../features/tts/settings";
 import { createQuickTranslateController, POPUP_MIN_SIZE } from "./quick-translate-controller";
 
 const HARNESS_ENTRY = "./__tests__/quick-translate-harness.tsx";
@@ -1891,4 +1893,68 @@ test("quick ocr: falls back from primary Baidu quota failure to backup AI and tr
     "https://api.openai.com/v1/chat/completions",
   ]);
   expect(app.texts()).toContain("翻译结果");
+});
+
+const QUICK_TTS_URL = "POST " + GOOGLE_CLOUD_TTS_URL;
+const QUICK_TTS_AUDIO = {
+  audioContent: Buffer.from(Uint8Array.from([0xff, 0xfb, 0x90, 0x64, 0x00])).toString("base64"),
+};
+
+function ttsWindowStorage(extra: Record<string, string> = {}) {
+  return ocrSeed({
+    [TTS_STORAGE_KEY]: JSON.stringify({
+      version: 1,
+      googleCloud: { enabled: true, credentialRef: "tts-ref" },
+    }),
+    [ttsCredentialStorageKey("tts-ref")]: JSON.stringify({ apiKey: "tts-key" }),
+    ...extra,
+  });
+}
+
+test("quick tts: closing the window drops a loading request and reopening stays silent", async () => {
+  const app = await open(HARNESS_ENTRY, {
+    ...viewport,
+    storage: ttsWindowStorage(),
+    network: {
+      [QUICK_TTS_URL]: { status: 200, delay: 500, body: QUICK_TTS_AUDIO },
+    },
+  });
+  await app.press("id:harness-tray-quick-translate");
+  await app.waitFor("id:quick-translate-source");
+  await app.type("id:quick-translate-source", "Hello");
+  await app.press("id:quick-translate-speak-source");
+  await app.waitFor("role:button[Cancel]");
+  await app.keyboard.press("escape");
+  await app.waitUntil(() => app.window("quick-translate").state()?.visible !== true);
+  await app.wait(600);
+  expect(app.audio().some((call) => call.command === "open")).toBe(false);
+  await app.press("id:harness-tray-quick-translate");
+  await app.waitFor("id:quick-translate-source");
+  expect(app.audio().some((call) => call.command === "open")).toBe(false);
+  expect(app.texts()).not.toContain("Stop");
+});
+
+test("quick tts: hiding the window for screenshot selection stops playback and does not resume", async () => {
+  const app = await open(HARNESS_ENTRY, {
+    ...viewport,
+    storage: ttsWindowStorage({ [HARNESS_OCR_CAPTURE_KEY]: "wait" }),
+    network: {
+      ...ocrRoutes(OCR_TEXT),
+      [QUICK_TTS_URL]: { status: 200, body: QUICK_TTS_AUDIO },
+    },
+  });
+  await app.press("id:harness-tray-quick-translate");
+  await app.waitFor("id:quick-translate-source");
+  await app.press("id:quick-translate-pin");
+  await app.type("id:quick-translate-source", "Hello");
+  await app.press("id:quick-translate-speak-source");
+  await app.waitFor("role:button[Stop]");
+  expect(app.audio().filter((call) => call.command === "open")).toHaveLength(1);
+  await app.press(OCR_BUTTON);
+  await app.waitUntil(() => app.window("quick-translate").state()?.visible === false);
+  expect(app.audio().some((call) => call.command === "close")).toBe(true);
+  await app.press("id:harness-finish-capture");
+  await app.waitUntil(() => app.window("quick-translate").state()?.visible === true);
+  expect(app.audio().filter((call) => call.command === "open")).toHaveLength(1);
+  expect(app.texts()).not.toContain("Stop");
 });

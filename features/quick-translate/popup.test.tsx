@@ -2034,3 +2034,39 @@ test("quick tts: resolved Auto uses the detected source and the card's stored ta
   await app.press(`role:option[${getLanguageLabel("en")}]`);
   expect(app.requests().filter((request) => request.url === GOOGLE_CLOUD_TTS_URL)).toHaveLength(2);
 });
+
+test("quick tts: a later speaker replaces a delayed request, and Stop closes playback", async () => {
+  const app = await open(POPUP_HARNESS, {
+    ...viewport,
+    storage: seedWithPresets([makePreset()], enabledTtsStorage()),
+    network: {
+      "POST https://api.openai.com/v1/chat/completions": {
+        status: 200,
+        body: { choices: [{ message: { content: "Bonjour" } }] },
+      },
+      [QUICK_TTS_URL]: { status: 200, delay: 400, body: QUICK_TTS_MP3 },
+    },
+  });
+  await app.waitFor("id:quick-translate-source");
+  await app.type("id:quick-translate-source", "Hello");
+  await app.keyboard.press("enter");
+  await app.waitFor("id:quick-translate-card-card-1 >> id:quick-translate-speak-result");
+  await app.press("id:quick-translate-speak-source");
+  await app.waitFor("role:button[Cancel]");
+  await app.press("id:quick-translate-card-card-1 >> id:quick-translate-speak-result");
+  await app.waitFor("id:quick-translate-card-card-1 >> role:button[Stop]");
+  await app.wait(500);
+  const opens = app.audio().filter((call) => call.command === "open");
+  expect(opens).toHaveLength(1);
+  const speech = app.requests().filter((request) => request.url === GOOGLE_CLOUD_TTS_URL);
+  expect(speech.some((request) => JSON.parse(request.body ?? "").input.text === "Bonjour")).toBe(
+    true,
+  );
+  expect(app.texts()).not.toContain(t("quickTranslate.speakPlayback"));
+
+  const beforeStop = app.requests().length;
+  await app.press("id:quick-translate-card-card-1 >> id:quick-translate-speak-result");
+  await app.waitFor("id:quick-translate-card-card-1 >> role:button[Read aloud]");
+  expect(app.requests()).toHaveLength(beforeStop);
+  expect(app.audio().some((call) => call.command === "close")).toBe(true);
+});
