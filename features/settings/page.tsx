@@ -244,7 +244,8 @@ export function SettingsPage(props: {
       };
     }
 
-    if (selectedSection() === "tts" && selectedTtsChannel() !== null) {
+    const ttsChannel = selectedTtsChannel();
+    if (selectedSection() === "tts" && ttsChannel !== null) {
       return {
         testID: "settings-tts-breadcrumb",
         accessibilityLabel: t("settings.tts.breadcrumbLabel"),
@@ -255,7 +256,9 @@ export function SettingsPage(props: {
             onPress: () => selectedTtsChannel.set(null),
           },
           {
-            label: t("settings.tts.channel"),
+            label: t(
+              ttsChannel === "azure" ? "settings.tts.azure.channel" : "settings.tts.channel",
+            ),
             testID: "settings-tts-detail-title",
           },
         ],

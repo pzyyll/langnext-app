@@ -132,6 +132,11 @@ settings:
       channelUnconfigured: Configure this channel before enabling it.
   tts:
     channel: Google Cloud Text-to-Speech
+    azure:
+      channel: Azure Speech
+      region: Region
+      regionExample: eastus
+    switchOffOther: Turn off %{name}
     notConfigured: Not configured
     configured: Configured
     savedKey: "\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022"

@@ -132,6 +132,11 @@ settings:
       channelUnconfigured: 请先配置此渠道再启用。
   tts:
     channel: Google Cloud Text-to-Speech
+    azure:
+      channel: Azure Speech
+      region: 区域
+      regionExample: eastus
+    switchOffOther: 将关闭 %{name}
     notConfigured: 未配置
     configured: 已配置
     savedKey: "\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022"

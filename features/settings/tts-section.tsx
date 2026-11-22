@@ -29,8 +29,11 @@ import {
 } from "../tts/google-cloud";
 import { canPlayTts, playMp3Bytes } from "../tts/playback";
 import { ttsSettingsStore } from "../tts/settings";
+import type { TtsChannelId } from "../tts/synthesis";
 
-export type TtsChannelId = "google-cloud";
+export type { TtsChannelId };
+
+const TTS_CHANNELS = ["google-cloud", "azure"] as const satisfies readonly TtsChannelId[];
 
 interface TtsSectionProps {
   compact: boolean;
@@ -39,6 +42,11 @@ interface TtsSectionProps {
 }
 
 type CredentialState = "unknown" | "readable" | "missing";
+type CredentialStates = Record<TtsChannelId, CredentialState>;
+
+function channelName(channel: TtsChannelId): string {
+  return t(channel === "azure" ? "settings.tts.azure.channel" : "settings.tts.channel");
+}
 
 function GoogleCloudAvatar() {
   return (
@@ -56,45 +64,39 @@ function GoogleCloudAvatar() {
   );
 }
 
+function AzureAvatar() {
+  return (
+    <Avatar
+      size="md"
+      accessibilityLabel=""
+      fallback={<Icon name="speaker-one" tone="muted-foreground" class="size-4" />}
+    />
+  );
+}
+
+function ChannelAvatar(props: { channel: TtsChannelId }) {
+  if (props.channel === "azure") return <AzureAvatar />;
+  return <GoogleCloudAvatar />;
+}
+
 interface TtsChannelListProps {
   compact: boolean;
-  credentialState: CredentialState;
-  onOpenChannel: () => void;
-  onRowRef: (node: ViewRef) => void;
+  credentialState: CredentialStates;
+  onOpenChannel: (channel: TtsChannelId) => void;
+  onRowRef: (channel: TtsChannelId, node: ViewRef) => void;
 }
 
 function TtsChannelList(props: TtsChannelListProps) {
   const entrance = createMotion({ enter: motion.pageEnter });
   const mutating = signal(false);
   const listError = signal<string | null>(null);
-  const name = () => t("settings.tts.channel");
-  const configured = () => ttsSettingsStore.savedBinding("google-cloud") !== null;
-  const enabled = () => ttsSettingsStore.activeBinding()?.channel === "google-cloud";
-  const summary = (): { text: string; toneClass: string } => {
-    if (!configured()) {
-      return { text: t("settings.tts.notConfigured"), toneClass: "text-muted-foreground" };
-    }
-    if (props.credentialState === "missing") {
-      return { text: t("settings.tts.keyUnreadable"), toneClass: "text-destructive" };
-    }
-    return { text: t("settings.tts.configured"), toneClass: "text-muted-foreground" };
-  };
-  const rowLabel = () =>
-    t("settings.tts.itemLabel", {
-      name: name(),
-      status: configured()
-        ? enabled()
-          ? t("models.filter.enabled")
-          : t("models.filter.disabled")
-        : t("settings.tts.notConfigured"),
-    });
 
-  const handleToggle = async (nextEnabled: boolean) => {
+  const handleToggle = async (channel: TtsChannelId, nextEnabled: boolean) => {
     if (mutating()) return;
     listError.set(null);
     mutating.set(true);
     try {
-      const result = await ttsSettingsStore.setEnabled("google-cloud", nextEnabled);
+      const result = await ttsSettingsStore.setEnabled(channel, nextEnabled);
       if (!result.ok) listError.set(result.message);
     } finally {
       mutating.set(false);
@@ -114,60 +116,19 @@ function TtsChannelList(props: TtsChannelListProps) {
       </If>
 
       <Card testID="settings-tts-card" class={props.compact ? "gap-1 p-2" : "gap-1 p-3"}>
-        <View
-          testID="settings-tts-row-google-cloud"
-          class={`flex-row items-center gap-1.5 rounded-lg pr-2 hover:bg-accent/60 active:bg-accent ${motion.navigationFeedback}`}
-        >
-          <Button
-            testID="settings-tts-channel-google-cloud"
-            ref={(node) => props.onRowRef(node)}
-            variant="ghost"
-            size="row"
-            accessibilityLabel={rowLabel()}
-            onPress={() => {
+        {TTS_CHANNELS.map((channel) => (
+          <TtsChannelRow
+            channel={channel}
+            credentialState={props.credentialState[channel]}
+            mutating={mutating()}
+            onOpen={() => {
               listError.set(null);
-              props.onOpenChannel();
+              props.onOpenChannel(channel);
             }}
-            class="min-w-0 flex-1 py-2.5 pl-3 pr-2 hover:bg-transparent active:bg-transparent"
-          >
-            <GoogleCloudAvatar />
-            <View class="min-w-0 flex-1 gap-0.5">
-              <Text class="min-w-0 truncate text-sm font-medium text-card-foreground">
-                {name()}
-              </Text>
-              <Text
-                testID="settings-tts-summary-google-cloud"
-                class={`min-w-0 truncate text-xs ${summary().toneClass}`}
-              >
-                {summary().text}
-              </Text>
-            </View>
-          </Button>
-
-          <Switch
-            testID="settings-tts-toggle-google-cloud"
-            variant="inline"
-            checked={enabled()}
-            disabled={mutating() || !configured()}
-            accessibilityLabel={t("settings.tts.enableLabel", { name: name() })}
-            tooltip={!configured() ? t("settings.tts.configureBeforeEnable") : undefined}
-            onChange={(checked) => void handleToggle(checked)}
+            onToggle={(checked) => void handleToggle(channel, checked)}
+            onRowRef={(node) => props.onRowRef(channel, node)}
           />
-
-          <Button
-            testID="settings-tts-open-google-cloud"
-            variant="ghost"
-            size="icon-sm"
-            tooltip={t("settings.tts.configureLabel", { name: name() })}
-            accessibilityLabel={t("settings.tts.configureLabel", { name: name() })}
-            onPress={() => {
-              listError.set(null);
-              props.onOpenChannel();
-            }}
-          >
-            <Icon name="chevron-right" tone="muted-foreground" class="size-3.5" />
-          </Button>
-        </View>
+        ))}
       </Card>
 
       <If when={listError() !== null}>
@@ -175,6 +136,103 @@ function TtsChannelList(props: TtsChannelListProps) {
           {listError()}
         </Text>
       </If>
+    </View>
+  );
+}
+
+function TtsChannelRow(props: {
+  channel: TtsChannelId;
+  credentialState: CredentialState;
+  mutating: boolean;
+  onOpen: () => void;
+  onToggle: (checked: boolean) => void;
+  onRowRef: (node: ViewRef) => void;
+}) {
+  const name = () => channelName(props.channel);
+  const saved = () => ttsSettingsStore.savedBinding(props.channel);
+  const configured = () => saved() !== null;
+  const enabled = () => ttsSettingsStore.activeBinding()?.channel === props.channel;
+  const summary = (): { text: string; toneClass: string } => {
+    if (!configured()) {
+      return { text: t("settings.tts.notConfigured"), toneClass: "text-muted-foreground" };
+    }
+    if (props.credentialState === "missing") {
+      return { text: t("settings.tts.keyUnreadable"), toneClass: "text-destructive" };
+    }
+    return { text: t("settings.tts.configured"), toneClass: "text-muted-foreground" };
+  };
+  const rowLabel = () =>
+    t("settings.tts.itemLabel", {
+      name: name(),
+      status: configured()
+        ? enabled()
+          ? t("models.filter.enabled")
+          : t("models.filter.disabled")
+        : t("settings.tts.notConfigured"),
+    });
+  const otherName = () => {
+    const active = ttsSettingsStore.activeBinding();
+    if (active === null || active.channel === props.channel || enabled()) return null;
+    return channelName(active.channel);
+  };
+  const switchLabel = () => {
+    const other = otherName();
+    if (other === null) return t("settings.tts.enableLabel", { name: name() });
+    return t("settings.tts.switchOffOther", { name: other });
+  };
+
+  return (
+    <View
+      testID={`settings-tts-row-${props.channel}`}
+      class={`flex-row items-center gap-1.5 rounded-lg pr-2 hover:bg-accent/60 active:bg-accent ${motion.navigationFeedback}`}
+    >
+      <Button
+        testID={`settings-tts-channel-${props.channel}`}
+        ref={(node) => props.onRowRef(node)}
+        variant="ghost"
+        size="row"
+        accessibilityLabel={rowLabel()}
+        onPress={props.onOpen}
+        class="min-w-0 flex-1 py-2.5 pl-3 pr-2 hover:bg-transparent active:bg-transparent"
+      >
+        <ChannelAvatar channel={props.channel} />
+        <View class="min-w-0 flex-1 gap-0.5">
+          <Text class="min-w-0 truncate text-sm font-medium text-card-foreground">{name()}</Text>
+          <Text
+            testID={`settings-tts-summary-${props.channel}`}
+            class={`min-w-0 truncate text-xs ${summary().toneClass}`}
+          >
+            {summary().text}
+          </Text>
+        </View>
+      </Button>
+
+      <Switch
+        testID={`settings-tts-toggle-${props.channel}`}
+        variant="inline"
+        checked={enabled()}
+        disabled={props.mutating || !configured()}
+        accessibilityLabel={switchLabel()}
+        tooltip={
+          !configured()
+            ? t("settings.tts.configureBeforeEnable")
+            : otherName() === null
+              ? undefined
+              : switchLabel()
+        }
+        onChange={props.onToggle}
+      />
+
+      <Button
+        testID={`settings-tts-open-${props.channel}`}
+        variant="ghost"
+        size="icon-sm"
+        tooltip={t("settings.tts.configureLabel", { name: name() })}
+        accessibilityLabel={t("settings.tts.configureLabel", { name: name() })}
+        onPress={props.onOpen}
+      >
+        <Icon name="chevron-right" tone="muted-foreground" class="size-3.5" />
+      </Button>
     </View>
   );
 }
@@ -187,15 +245,17 @@ function previewFailureMessage(failure: GoogleCloudTtsFailure): string {
   return t("settings.tts.failure.playback");
 }
 
-function GoogleCloudDetail(props: { compact: boolean; credentialState: CredentialState }) {
+function ChannelDetail(props: { channel: TtsChannelId; compact: boolean; credentialState: CredentialState }) {
   const entrance = createMotion({ enter: motion.pageEnter });
   const apiKeyDraft = signal("");
+  const regionDraft = signal("");
   const error = signal<string | null>(null);
   const previewError = signal<string | null>(null);
   const saving = signal(false);
   const playbackReady = signal(false);
   const phase = signal<PreviewPhase>("idle");
   let apiKeyField: InputRef | undefined;
+  let regionTouched = false;
   let mounted = true;
   const active = {
     token: 0,
@@ -212,11 +272,18 @@ function GoogleCloudDetail(props: { compact: boolean; credentialState: Credentia
   });
 
   effect(() => {
+    if (props.channel !== "azure" || regionTouched) return;
+    const saved = ttsSettingsStore.savedBinding("azure");
+    regionDraft.set(saved === null ? "" : saved.region);
+  });
+
+  effect(() => {
     void canPlayTts().then((ready) => {
       if (mounted) playbackReady.set(ready);
     });
   });
 
+  const savedBinding = () => ttsSettingsStore.savedBinding(props.channel);
   const previewLabel = () => {
     if (phase() === "loading") return t("common.cancel");
     if (phase() === "playing") return t("settings.tts.stop");
@@ -224,11 +291,12 @@ function GoogleCloudDetail(props: { compact: boolean; credentialState: Credentia
   };
   const previewNote = (): string | undefined => {
     if (!playbackReady()) return t("settings.tts.previewUnavailable");
-    if (ttsSettingsStore.savedBinding("google-cloud") === null || props.credentialState !== "readable") {
+    if (savedBinding() === null || props.credentialState !== "readable") {
       return t("settings.tts.previewNeedsKey");
     }
-    if (phase() === "idle" && apiKeyDraft().trim().length > 0)
+    if (phase() === "idle" && apiKeyDraft().trim().length > 0) {
       return t("settings.tts.previewUnsaved");
+    }
     return undefined;
   };
   const previewDisabled = () =>
@@ -236,20 +304,35 @@ function GoogleCloudDetail(props: { compact: boolean; credentialState: Credentia
     (saving() ||
       !playbackReady() ||
       apiKeyDraft().trim().length > 0 ||
-      ttsSettingsStore.savedBinding("google-cloud") === null ||
+      savedBinding() === null ||
       props.credentialState !== "readable");
   const controlsLocked = () => saving() || phase() !== "idle";
+  const saveDisabled = () =>
+    controlsLocked() ||
+    apiKeyDraft().trim().length === 0 ||
+    (props.channel === "azure" && regionDraft().trim().length === 0);
 
   const handleSave = async () => {
     const apiKey = apiKeyDraft().trim();
-    if (controlsLocked() || apiKey.length === 0) return;
+    if (saveDisabled()) return;
     error.set(null);
     saving.set(true);
     try {
-      const result = await ttsSettingsStore.saveChannel({ channel: "google-cloud", apiKey });
+      const result =
+        props.channel === "azure"
+          ? await ttsSettingsStore.saveChannel({
+              channel: "azure",
+              apiKey,
+              region: regionDraft().trim(),
+            })
+          : await ttsSettingsStore.saveChannel({ channel: "google-cloud", apiKey });
       if (!result.ok) {
         error.set(result.message);
         return;
+      }
+      if (result.binding.channel === "azure") {
+        regionTouched = false;
+        regionDraft.set(result.binding.region);
       }
       apiKeyDraft.set("");
       if (mounted) apiKeyField?.blur();
@@ -277,9 +360,9 @@ function GoogleCloudDetail(props: { compact: boolean; credentialState: Credentia
       previewError.set(null);
       return;
     }
-    if (previewDisabled()) return;
-    const saved = ttsSettingsStore.savedBinding("google-cloud");
-    if (saved === null) return;
+    if (previewDisabled() || props.channel !== "google-cloud") return;
+    const saved = savedBinding();
+    if (saved === null || saved.channel !== "google-cloud") return;
     const token = active.token + 1;
     active.token = token;
     const controller = new AbortController();
@@ -288,7 +371,7 @@ function GoogleCloudDetail(props: { compact: boolean; credentialState: Credentia
     phase.set("loading");
     const apiKey = await ttsSettingsStore.readKey(saved.credentialRef);
     if (!mounted || token !== active.token) return;
-    if (apiKey === null || saved.credentialRef !== ttsSettingsStore.savedBinding("google-cloud")?.credentialRef) {
+    if (apiKey === null || saved.credentialRef !== savedBinding()?.credentialRef) {
       phase.set("idle");
       previewError.set(t("settings.tts.keyUnreadable"));
       return;
@@ -337,9 +420,26 @@ function GoogleCloudDetail(props: { compact: boolean; credentialState: Credentia
     >
       <Card testID="settings-tts-detail-card" class={props.compact ? "gap-4 p-4" : "gap-5 p-6"}>
         <View class="min-w-0 flex-row items-center gap-3">
-          <GoogleCloudAvatar />
-          <SectionHeading title={t("settings.tts.channel")} />
+          <ChannelAvatar channel={props.channel} />
+          <SectionHeading title={channelName(props.channel)} />
         </View>
+
+        <If when={props.channel === "azure"}>
+          <FormField label={t("settings.tts.azure.region")}>
+            <Input
+              testID="settings-tts-region"
+              value={regionDraft()}
+              placeholder={t("settings.tts.azure.regionExample")}
+              disabled={controlsLocked()}
+              accessibilityLabel={t("settings.tts.azure.region")}
+              onChange={(value) => {
+                regionTouched = true;
+                error.set(null);
+                regionDraft.set(value);
+              }}
+            />
+          </FormField>
+        </If>
 
         <FormField label={t("settings.tts.apiKey")}>
           <Input
@@ -348,9 +448,7 @@ function GoogleCloudDetail(props: { compact: boolean; credentialState: Credentia
               apiKeyField = node;
             }}
             value={apiKeyDraft()}
-            placeholder={
-              props.credentialState === "readable" ? t("settings.tts.savedKey") : undefined
-            }
+            placeholder={props.credentialState === "readable" ? t("settings.tts.savedKey") : undefined}
             masked={true}
             disabled={controlsLocked()}
             accessibilityLabel={t("settings.tts.apiKey")}
@@ -394,7 +492,7 @@ function GoogleCloudDetail(props: { compact: boolean; credentialState: Credentia
             variant="primary"
             size="sm"
             label={saving() ? t("common.saving") : t("common.save")}
-            disabled={controlsLocked() || apiKeyDraft().trim().length === 0}
+            disabled={saveDisabled()}
             onPress={() => void handleSave()}
           />
         </View>
@@ -403,51 +501,78 @@ function GoogleCloudDetail(props: { compact: boolean; credentialState: Credentia
   );
 }
 
-/** Settings section for the Google Cloud text-to-speech channel. */
+/** Settings section for the text-to-speech channels. */
 export function TtsSection(props: TtsSectionProps) {
-  const credentialState = signal<CredentialState>("unknown");
-  let rowRef: ViewRef | undefined;
+  const credentialState = signal<CredentialStates>({
+    "google-cloud": "unknown",
+    azure: "unknown",
+  });
+  const rowRefs: Partial<Record<TtsChannelId, ViewRef>> = {};
+  let returnChannel: TtsChannelId | null = null;
   let restoreFocusOnList = false;
 
   effect(() => {
-    const saved = ttsSettingsStore.savedBinding("google-cloud");
-    if (saved === null) {
-      credentialState.set("unknown");
-      return;
+    for (const channel of TTS_CHANNELS) {
+      const saved = ttsSettingsStore.savedBinding(channel);
+      if (saved === null) {
+        if (credentialState()[channel] !== "unknown") {
+          credentialState.set({ ...credentialState(), [channel]: "unknown" });
+        }
+        continue;
+      }
+      const ref = saved.credentialRef;
+      void ttsSettingsStore.readKey(ref).then((key) => {
+        if (ttsSettingsStore.savedBinding(channel)?.credentialRef !== ref) return;
+        const next = key === null ? "missing" : "readable";
+        if (credentialState()[channel] === next) return;
+        credentialState.set({ ...credentialState(), [channel]: next });
+      });
     }
-    const ref = saved.credentialRef;
-    void ttsSettingsStore.readKey(ref).then((key) => {
-      if (ttsSettingsStore.savedBinding("google-cloud")?.credentialRef !== ref) return;
-      credentialState.set(key === null ? "missing" : "readable");
-    });
   });
 
   effect(() => {
     const current = props.selectedChannel;
     if (current !== null) {
+      returnChannel = current;
       restoreFocusOnList = true;
       return;
     }
     if (!restoreFocusOnList) return;
     restoreFocusOnList = false;
+    const channel = returnChannel;
     queueMicrotask(() => {
-      if (props.selectedChannel === null) rowRef?.focus();
+      if (props.selectedChannel === null && channel !== null) rowRefs[channel]?.focus();
     });
   });
 
+  const selected = () => props.selectedChannel;
+
   return (
-    <If
-      when={props.selectedChannel === null}
-      else={<GoogleCloudDetail compact={props.compact} credentialState={credentialState()} />}
-    >
-      <TtsChannelList
-        compact={props.compact}
-        credentialState={credentialState()}
-        onOpenChannel={() => props.onSelectChannel("google-cloud")}
-        onRowRef={(node) => {
-          rowRef = node;
-        }}
-      />
-    </If>
+    <>
+      <If when={selected() === null}>
+        <TtsChannelList
+          compact={props.compact}
+          credentialState={credentialState()}
+          onOpenChannel={(channel) => props.onSelectChannel(channel)}
+          onRowRef={(channel, node) => {
+            rowRefs[channel] = node;
+          }}
+        />
+      </If>
+      <If when={selected() === "google-cloud"}>
+        <ChannelDetail
+          channel="google-cloud"
+          compact={props.compact}
+          credentialState={credentialState()["google-cloud"]}
+        />
+      </If>
+      <If when={selected() === "azure"}>
+        <ChannelDetail
+          channel="azure"
+          compact={props.compact}
+          credentialState={credentialState().azure}
+        />
+      </If>
+    </>
   );
 }

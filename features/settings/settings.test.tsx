@@ -1716,3 +1716,99 @@ test("tts preview: leaving or cancelling drops a late response and closes playba
     playing.audio().filter((call) => call.command === "close").length,
   );
 });
+
+test("tts settings: configures Azure and switches it on without a network call", async () => {
+  const app = await open(APP_ENTRY, {
+    ...viewport,
+    storage: {
+      "settings.language": "en",
+      [TTS_STORAGE_KEY]: JSON.stringify({
+        version: 1,
+        googleCloud: { enabled: true, credentialRef: "google-ref" },
+      }),
+      [ttsCredentialStorageKey("google-ref")]: JSON.stringify({ apiKey: "google-key" }),
+    },
+  });
+
+  await app.press("id:nav-settings");
+  await app.waitFor("id:settings-nav-tts");
+  await app.press("id:settings-nav-tts");
+  await app.waitFor("id:settings-tts-row-azure");
+  const googleAt = app.texts().indexOf("Google Cloud Text-to-Speech");
+  const azureAt = app.texts().indexOf("Azure Speech");
+  expect(googleAt).toBeGreaterThanOrEqual(0);
+  expect(azureAt).toBeGreaterThan(googleAt);
+  expect(app.shows("id:settings-tts-open-azure")).toBe(true);
+
+  await app.press("id:settings-tts-open-azure");
+  await app.waitFor("id:settings-tts-region");
+  expect(app.texts()).toContain("Azure Speech");
+  expect(app.shows("id:settings-tts-breadcrumb-root")).toBe(true);
+  await app.type("id:settings-tts-region", "eastus");
+  await app.type("id:settings-tts-api-key", "azure-key");
+  await app.press("id:settings-tts-save");
+  await app.waitUntil(() => {
+    const raw = app.storage()[TTS_STORAGE_KEY];
+    return typeof raw === "string" && raw.includes("eastus");
+  });
+  expect(app.value("id:settings-tts-api-key")).toBe("");
+
+  await app.press("id:settings-tts-breadcrumb-root");
+  await app.waitFor("id:settings-tts-card");
+  await app.press("id:settings-tts-toggle-azure");
+  await app.waitUntil(() => {
+    const raw = app.storage()[TTS_STORAGE_KEY];
+    if (typeof raw !== "string") return false;
+    const saved = JSON.parse(raw) as {
+      googleCloud: { enabled: boolean };
+      azure: { enabled: boolean; region: string } | null;
+    };
+    return saved.azure?.enabled === true && saved.googleCloud.enabled === false;
+  });
+  expect(app.requests().some((request) => String(request.url).includes("tts.speech"))).toBe(false);
+  expect(app.requests().some((request) => String(request.url).includes("texttospeech"))).toBe(
+    false,
+  );
+});
+
+test("tts settings: shows the saved Azure region and names the channel a switch will turn off", async () => {
+  const app = await open(APP_ENTRY, {
+    ...viewport,
+    storage: {
+      "settings.language": "en",
+      [TTS_STORAGE_KEY]: JSON.stringify({
+        version: 1,
+        googleCloud: { enabled: true, credentialRef: "google-ref" },
+        azure: { enabled: false, credentialRef: "azure-ref", region: "eastus" },
+      }),
+      [ttsCredentialStorageKey("google-ref")]: JSON.stringify({ apiKey: "google-key" }),
+      [ttsCredentialStorageKey("azure-ref")]: JSON.stringify({ apiKey: "azure-key" }),
+    },
+  });
+
+  await app.press("id:nav-settings");
+  await app.press("id:settings-nav-tts");
+  await app.waitFor("id:settings-tts-toggle-azure");
+  await app.hover("id:settings-tts-toggle-azure");
+  await app.waitUntil(() => app.texts().includes("Turn off Google Cloud Text-to-Speech"));
+  expect(app.texts()).not.toContain("azure-key");
+  expect(app.texts()).not.toContain("google-key");
+
+  await app.press("id:settings-tts-open-azure");
+  await app.waitFor("id:settings-tts-region");
+  expect(app.value("id:settings-tts-region")).toBe("eastus");
+  expect(app.value("id:settings-tts-api-key")).toBe("");
+  expect(app.texts()).not.toContain("azure-key");
+  await app.type("id:settings-tts-region", "2");
+  expect(app.enabled("id:settings-tts-save")).toBe(false);
+  await app.type("id:settings-tts-api-key", "next-azure-key");
+  expect(app.enabled("id:settings-tts-save")).toBe(true);
+  await app.press("id:settings-tts-save");
+  await app.waitUntil(() => {
+    const raw = app.storage()[TTS_STORAGE_KEY];
+    return typeof raw === "string" && raw.includes("eastus2");
+  });
+  expect(app.value("id:settings-tts-api-key")).toBe("");
+  expect(app.value("id:settings-tts-region")).toBe("eastus2");
+  expect(app.texts()).not.toContain("next-azure-key");
+});
