@@ -76,7 +76,7 @@ function SpeakerButton(props: {
   disabled: boolean;
   tooltip: string;
   label: string;
-  icon: "speaker-one" | "close-circle";
+  icon: "speaker-one" | "close-circle" | "pause";
   onPress: () => void;
 }) {
   return (
@@ -227,7 +227,7 @@ interface PresetCardRowProps {
     disabled: boolean;
     tooltip: string;
     label: string;
-    icon: "speaker-one" | "close-circle";
+    icon: "speaker-one" | "close-circle" | "pause";
   }>;
   speakError: Accessor<string | null>;
   onSpeak: () => void;
@@ -744,7 +744,7 @@ export function QuickTranslatePopup(props: QuickTranslatePopupProps) {
         disabled: false,
         tooltip: t("settings.tts.stop"),
         label: t("settings.tts.stop"),
-        icon: "close-circle" as const,
+        icon: "pause" as const,
         busy: true,
       };
     }

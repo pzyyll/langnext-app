@@ -23,6 +23,7 @@ import infoIcon from "../../assets/icons/icon-park-outline--info.svg";
 import lightningSolidIcon from "../../assets/icons/lightning-solid.svg";
 import lightningIcon from "../../assets/icons/lightning.svg";
 import minusIcon from "../../assets/icons/minus.svg";
+import pauseIcon from "../../assets/icons/icon-park-outline--pause.svg";
 import picIcon from "../../assets/icons/pic.svg";
 import pinSolidIcon from "../../assets/icons/pin-solid.svg";
 import pinIcon from "../../assets/icons/pin.svg";
@@ -59,6 +60,7 @@ const ICONS = {
   lightning: lightningIcon,
   "lightning-solid": lightningSolidIcon,
   minus: minusIcon,
+  pause: pauseIcon,
   pic: picIcon,
   pin: pinIcon,
   "pin-solid": pinSolidIcon,
