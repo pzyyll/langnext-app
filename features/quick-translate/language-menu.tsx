@@ -108,7 +108,7 @@ export function QuickTranslateLanguageBar(props: QuickTranslateLanguageBarProps)
         class="min-w-0 shrink"
         items={targetItems()}
         value={props.targetLanguage}
-        labelClass="font-semibold text-foreground"
+        labelClass="font-medium text-muted-foreground"
         accessibilityLabel={t("quickTranslate.targetLanguageLabel")}
         onOpenChange={(open) => props.onTargetOpenChange?.(open)}
         onChange={(value) => {
