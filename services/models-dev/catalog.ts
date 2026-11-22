@@ -1,9 +1,12 @@
 // ABOUTME: Client for the models.dev catalog that seeds model capabilities and token limits.
-// ABOUTME: Fetches https://models.dev/models.json at most once per 24h and caches derived facts.
+// ABOUTME: Refreshes https://models.dev/models.json once per 24h; the bundled snapshot answers when it cannot.
 import { Storage } from "nsh";
+import bundledCatalogUrl from "../../assets/catalog/models.dev.json?url";
 
 /** Provider-agnostic model metadata published from https://github.com/anomalyco/models.dev. */
 const CATALOG_URL = "https://models.dev/models.json";
+/** The copy of that catalog the app ships, refreshed by `mise run catalog`. */
+const BUNDLED_CATALOG_URL = bundledCatalogUrl;
 /** Storage key holding the derived catalog cache. */
 export const CATALOG_CACHE_KEY = "models.dev.catalog.v1";
 /** Refresh the remote catalog only after this age (24h). */
@@ -43,11 +46,12 @@ export interface CatalogDeps {
   readCache: () => Promise<string | null>;
   writeCache: (value: string) => Promise<void>;
   fetchCatalog: () => Promise<string>;
+  readBundledCatalog: () => Promise<string>;
 }
 
 /** Cached access to the models.dev catalog. */
 export interface Catalog {
-  /** Returns the catalog index, or `null` when no snapshot is available. Never rejects. */
+  /** Returns the catalog index, or `null` when the network, the cache and the bundle all fail. Never rejects. */
   load: () => Promise<CatalogIndex | null>;
 }
 
@@ -64,8 +68,22 @@ export function createCatalog(deps: Partial<CatalogDeps> = {}): Catalog {
     readCache: deps.readCache ?? (() => Storage.getItem(CATALOG_CACHE_KEY)),
     writeCache: deps.writeCache ?? ((value) => Storage.setItem(CATALOG_CACHE_KEY, value)),
     fetchCatalog: deps.fetchCatalog ?? fetchCatalogBody,
+    readBundledCatalog: deps.readBundledCatalog ?? fetchBundledCatalogBody,
   };
   let inFlight: Promise<CatalogIndex | null> | null = null;
+  let bundledIndex: Promise<CatalogIndex | null> | null = null;
+
+  const readBundledIndex = (): Promise<CatalogIndex | null> => {
+    bundledIndex ??= (async () => {
+      try {
+        return buildIndex(parseCatalogBody(await resolved.readBundledCatalog()));
+      } catch (error) {
+        console.warn("Could not read the bundled models.dev catalog.", error);
+        return null;
+      }
+    })();
+    return bundledIndex;
+  };
 
   const readCachedIndex = async (): Promise<{ index: CatalogIndex; fetchedAt: number } | null> => {
     let raw: string | null;
@@ -117,8 +135,8 @@ export function createCatalog(deps: Partial<CatalogDeps> = {}): Catalog {
           return buildIndex(models);
         } catch (error) {
           console.warn("Could not refresh the models.dev catalog.", error);
-          // A stale snapshot beats falling back to guessing capabilities.
-          return cached?.index ?? null;
+          // A stale cache is newer than the bundle, and the bundle is the last resort.
+          return cached?.index ?? (await readBundledIndex());
         } finally {
           inFlight = null;
         }
@@ -131,7 +149,7 @@ export function createCatalog(deps: Partial<CatalogDeps> = {}): Catalog {
 
 const defaultCatalog = createCatalog();
 
-/** Loads the shared catalog index, or `null` when neither the network nor a cache provides one. */
+/** Loads the shared catalog index, or `null` when the network, the cache and the bundle all fail. */
 export function loadCatalog(): Promise<CatalogIndex | null> {
   return defaultCatalog.load();
 }
@@ -243,6 +261,15 @@ function positiveTokenCount(value: unknown): number | null {
   const rounded = Math.trunc(value);
   if (rounded <= 0) return null;
   return Math.min(rounded, MAX_TOKEN_COUNT);
+}
+
+/** Reads the catalog snapshot the app ships; an `asset:` fetch needs no network. */
+async function fetchBundledCatalogBody(): Promise<string> {
+  const response = await fetch(BUNDLED_CATALOG_URL, { headers: { Accept: "application/json" } });
+  if (!response.ok) {
+    throw new Error(`bundled models.dev catalog responded ${response.status}`);
+  }
+  return await response.text();
 }
 
 async function fetchCatalogBody(): Promise<string> {

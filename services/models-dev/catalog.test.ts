@@ -22,6 +22,14 @@ const SAMPLE_CATALOG = JSON.stringify({
   },
 });
 
+/** The bundled snapshot the app ships, reduced to the entry these tests read. */
+const SNAPSHOT_CATALOG = JSON.stringify({
+  "openai/gpt-4o-mini": {
+    modalities: { input: ["text", "image"] },
+    limit: { context: 400_000, output: 16_384 },
+  },
+});
+
 interface Harness {
   catalog: ReturnType<typeof createCatalog>;
   fetches: () => number;
@@ -29,7 +37,13 @@ interface Harness {
 }
 
 function createHarness(
-  options: { cache?: string | null; fetchBody?: string; failFetch?: boolean } = {},
+  options: {
+    cache?: string | null;
+    fetchBody?: string;
+    failFetch?: boolean;
+    snapshotBody?: string;
+    failSnapshot?: boolean;
+  } = {},
 ): Harness {
   let fetches = 0;
   let cache = options.cache ?? null;
@@ -45,6 +59,12 @@ function createHarness(
         throw new Error("offline");
       }
       return options.fetchBody ?? SAMPLE_CATALOG;
+    },
+    readBundledCatalog: async () => {
+      if (options.failSnapshot) {
+        throw new Error("missing snapshot");
+      }
+      return options.snapshotBody ?? SNAPSHOT_CATALOG;
     },
   };
   return {
@@ -198,8 +218,24 @@ test("models.dev catalog: refreshes an expired cache and falls back to it when o
   });
   expect(offline.fetches()).toBe(1);
 
-  const empty = createHarness({ failFetch: true });
+  const empty = createHarness({ failFetch: true, failSnapshot: true });
   expect(await empty.catalog.load()).toBeNull();
+});
+
+test("models.dev catalog: serves the bundled snapshot when the network fails and no cache exists", async () => {
+  const offline = createHarness({ failFetch: true });
+  const index = await offline.catalog.load();
+
+  expect(offline.fetches()).toBe(1);
+  expect(index!.lookup("gpt-4o-mini", "openai")).toEqual({
+    text: true,
+    image: true,
+    pdf: false,
+    video: false,
+    contextLimit: 400_000,
+    maxTokens: 16_384,
+  });
+  expect(index!.lookup("unknown-model", null)).toBeNull();
 });
 
 test("models.dev catalog: ignores a corrupt cache and refetches", async () => {

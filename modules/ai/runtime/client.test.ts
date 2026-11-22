@@ -446,7 +446,12 @@ test("ai client: provider root policy cannot switch the configured origin", asyn
 const DAY_MS = 24 * 60 * 60 * 1000;
 
 function catalogBoundary(
-  options: { body?: Record<string, unknown>; fail?: boolean; cache?: string | null } = {},
+  options: {
+    body?: Record<string, unknown>;
+    fail?: boolean;
+    cache?: string | null;
+    snapshot?: Record<string, unknown>;
+  } = {},
 ): () => Promise<CatalogIndex | null> {
   const deps: Partial<CatalogDeps> = {
     now: () => 1_000_000,
@@ -456,10 +461,19 @@ function catalogBoundary(
       if (options.fail) throw new Error("offline");
       return JSON.stringify(options.body ?? {});
     },
+    readBundledCatalog: async () => JSON.stringify(options.snapshot ?? {}),
   };
   const catalog = createCatalog(deps);
   return () => catalog.load();
 }
+
+/** A bundled snapshot entry that differs from the heuristic it replaced. */
+const GEMINI_SNAPSHOT = {
+  "google/gemini-2.5-flash": {
+    modalities: { input: ["text", "image"] },
+    limit: { context: 262_144, output: 32_768 },
+  },
+};
 
 const GEMINI_CATALOG = {
   "google/gemini-2.5-flash": {
@@ -520,15 +534,19 @@ test("ai client: discovery uses the provider catalog mapping", async () => {
 });
 
 test("ai client: discovery falls back when the catalog is unavailable", async () => {
-  const offline = createBuiltInHarness(geminiListing(), catalogBoundary({ fail: true }));
+  const offline = createBuiltInHarness(
+    geminiListing(),
+    catalogBoundary({ fail: true, snapshot: GEMINI_SNAPSHOT }),
+  );
   const offlineModels = await offline.client.discoverModels(geminiDiscoveryInput);
   expect(offlineModels).toEqual([
     {
       modelKey: "gemini-2.5-flash",
       displayName: null,
-      contextLimit: null,
-      maxTokens: null,
-      capabilities: { text: true, image: true, pdf: true, video: true },
+      // The bundled snapshot answers when the network and the cache do not.
+      contextLimit: 262_144,
+      maxTokens: 32_768,
+      capabilities: { text: true, image: true, pdf: false, video: false },
     },
   ]);
 
@@ -557,6 +575,28 @@ test("ai client: discovery falls back when the catalog is unavailable", async ()
       contextLimit: 1_048_576,
       maxTokens: 65_536,
       capabilities: { text: true, image: true, pdf: true, video: false },
+    },
+  ]);
+});
+
+test("ai client: a model the catalog does not describe keeps text only", async () => {
+  const harness = createBuiltInHarness(
+    async () => ({
+      ok: true,
+      status: 200,
+      json: async () => ({ models: [{ name: "models/claude-3-5-unknown" }] }),
+    }),
+    catalogBoundary({ fail: true }),
+  );
+
+  const models = await harness.client.discoverModels(geminiDiscoveryInput);
+  expect(models).toEqual([
+    {
+      modelKey: "claude-3-5-unknown",
+      displayName: null,
+      contextLimit: null,
+      maxTokens: null,
+      capabilities: { text: true, image: false, pdf: false, video: false },
     },
   ]);
 });

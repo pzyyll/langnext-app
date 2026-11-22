@@ -1,0 +1,47 @@
+#!/usr/bin/env bash
+#MISE description="Download the models.dev catalog snapshot that ships with the app."
+set -euo pipefail
+
+# `services/models-dev` asks https://models.dev/models.json at run time and keeps
+# the answer for a day. This snapshot is the copy that ships with the app, so a
+# first launch without a network still knows model capabilities and limits.
+# Run this task before a release to move the fallback forward.
+
+root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+cd "$root"
+
+url=https://models.dev/models.json
+out=assets/catalog/models.dev.json
+
+temp="$(mktemp)"
+trap 'rm -f "$temp"' EXIT
+
+curl --fail --silent --show-error --location --max-time 60 "$url" --output "$temp"
+
+# An error page or a truncated body would ship as the fallback and quietly strip
+# every capability, so refuse anything that is not a non-empty catalog object.
+node --input-type=module -e '
+import { readFile } from "node:fs/promises";
+
+const models = JSON.parse(await readFile(process.argv[1], "utf8"));
+if (!models || typeof models !== "object" || Array.isArray(models)) {
+  console.error("catalog: the body is not a models.dev catalog object");
+  process.exit(1);
+}
+const entries = Object.keys(models).length;
+if (entries === 0) {
+  console.error("catalog: the catalog is empty");
+  process.exit(1);
+}
+console.log(`catalog: ${entries} models`);
+' "$temp"
+
+mv "$temp" "$out"
+trap - EXIT
+
+# models.dev publishes one line; lay it out the way the repository formatter
+# does, so a refresh diffs per model and `mise run format-check` stays clean.
+pnpm exec oxfmt "$out" >/dev/null
+
+bytes="$(wc -c <"$out" | tr -d ' ')"
+echo "catalog: wrote $out (${bytes} bytes)"
