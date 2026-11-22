@@ -1,5 +1,6 @@
 import { computed, signal, Storage } from "nsh";
 import { t } from "nsh/i18n";
+import { createLogger } from "../../services/log";
 import { readAvailableModelChoices } from "./model-choices";
 import { isTemperature } from "./temperature";
 import {
@@ -15,6 +16,8 @@ import { validatePresetForSave, type ValidatedPresetPayload } from "./validation
 
 export const PRESETS_STORAGE_KEY = "presets.v1.items";
 export const DEEPL_CREDENTIAL_KEY_PREFIX = "presets.v1.deeplKeys.";
+
+const log = createLogger("presets/store");
 
 /** Storage key for one DeepL preset's key, addressed by its non-secret reference. */
 export function deepLCredentialStorageKey(ref: string): string {
@@ -130,7 +133,7 @@ async function removeSecretQuietly(storage: PresetsStorage, ref: string): Promis
   try {
     await storage.removeItem(deepLCredentialStorageKey(ref));
   } catch {
-    console.warn("Could not remove an unused DeepL API key.");
+    log.warn("Could not remove an unused DeepL API key.");
   }
 }
 

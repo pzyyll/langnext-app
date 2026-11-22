@@ -66,6 +66,11 @@ settings:
   silentLaunch:
     label: Silent launch
     error: Could not save silent launch. Try again.
+  logs:
+    label: Logs
+    open: Open folder
+    openLabel: Open logs folder
+    error: Could not open the logs folder.
   shortcuts:
     quickTranslate: Open Quick Translate
     screenshotTranslate: Screenshot Translate

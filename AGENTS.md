@@ -32,6 +32,12 @@ Design docs: `@docs/ui/DESIGNE.md`
 - Use `style` only for values computed at run time: platform metrics (`titleBar()`), theme colors (`token()`), or animation. Say why in a comment when you do.
 - Avoid concrete pixel numbers (`16`, `824`, `max-w-[824px]`). Take the nearest scale step (`p-4`, `max-w-4xl`) before inventing an arbitrary value; if a number is genuinely required, define it in the design system (`theme.json`, `@docs/ui/DESIGNE.md`) and reuse it.
 
+## Logging
+
+- Log through `createLogger` from `services/log.ts`: `const log = createLogger("<area>/<module>")`, then `log.warn("Could not ...", error)`. Do not call `console.*` outside that module.
+- Native code logs through the `log` crate (`log::warn!`, `log::debug!`). NSH writes both kinds to `logs/app.log` in the app data directory.
+- Never log API keys, credentials, selected or translated text, or request bodies.
+
 ## Commands
 
 All project commands are in `.mise/tasks/`.

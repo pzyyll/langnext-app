@@ -1,7 +1,10 @@
 import { signal, Storage } from "nsh";
 import { t } from "nsh/i18n";
+import { createLogger } from "../../services/log";
 
 export const SILENT_LAUNCH_STORAGE_KEY = "settings.silentLaunch";
+
+const log = createLogger("settings/silent-launch");
 
 const enabled = signal(false);
 const saveError = signal<string | null>(null);
@@ -13,7 +16,7 @@ export async function loadSilentLaunch() {
   try {
     enabled.set((await Storage.getItem(SILENT_LAUNCH_STORAGE_KEY)) === "true");
   } catch (error) {
-    console.warn("Could not load silent launch settings.", error);
+    log.warn("Could not load silent launch settings.", error);
   }
 }
 

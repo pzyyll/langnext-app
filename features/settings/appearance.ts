@@ -1,9 +1,12 @@
 import { setColorScheme, signal, Storage } from "nsh";
 import { t } from "nsh/i18n";
+import { createLogger } from "../../services/log";
 
 export type Appearance = "light" | "dark" | "system";
 
 const APPEARANCE_STORAGE_KEY = "settings.appearance";
+
+const log = createLogger("settings/appearance");
 const preference = signal<Appearance>("system");
 const saveError = signal<string | null>(null);
 
@@ -21,7 +24,7 @@ export async function loadAppearance() {
     preference.set(value);
     setColorScheme(value);
   } catch (error) {
-    console.warn("Could not load appearance settings.", error);
+    log.warn("Could not load appearance settings.", error);
   }
 }
 

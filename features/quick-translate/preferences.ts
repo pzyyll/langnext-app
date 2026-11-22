@@ -1,6 +1,7 @@
 import { signal, Storage } from "nsh";
 import { t } from "nsh/i18n";
 import { canUseDoubleCopy } from "../../platform/quick-translate";
+import { createLogger } from "../../services/log";
 import {
   isSourceLanguageId,
   isTargetLanguageId,
@@ -12,6 +13,8 @@ import { resolvePresetTemplate } from "./translate";
 
 export const QUICK_TRANSLATE_PREFERENCES_KEY = "quickTranslate.preferences.v1";
 export const QUICK_TRANSLATE_PREFERENCES_VERSION = 1 as const;
+
+const log = createLogger("quick-translate/preferences");
 
 export interface SavedQuickTranslateCard {
   id: string;
@@ -279,13 +282,13 @@ export function createQuickTranslatePreferencesStore(
       }
       const valid = parseQuickTranslatePreferences(raw);
       if (!valid) {
-        console.warn("Could not parse Quick Translate preferences; retaining defaults.");
+        log.warn("Could not parse Quick Translate preferences; retaining defaults.");
         storedPreferencesSignal.set(defaultPreferences());
         return;
       }
       storedPreferencesSignal.set(valid);
     } catch (error) {
-      console.warn("Could not load Quick Translate preferences.", error);
+      log.warn("Could not load Quick Translate preferences.", error);
       storedPreferencesSignal.set(defaultPreferences());
     }
   };

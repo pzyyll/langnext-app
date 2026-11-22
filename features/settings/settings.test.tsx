@@ -194,6 +194,45 @@ test("silent launch: a failed write keeps the saved state and can be retried", a
   expect(app.shows("id:settings-silent-launch-error")).toBe(false);
 });
 
+test("logs: opens the logs folder and reports a folder that cannot open", async () => {
+  const opened = await open(APP_ENTRY, {
+    ...viewport,
+    storage: { "settings.language": "en" },
+    modules: { "my-translator/native": { "AppPathsNative.openLogsFolder": () => true } },
+  });
+  await opened.press("id:nav-settings");
+  await opened.waitFor("id:settings-open-logs-card");
+  await opened.press("id:settings-open-logs");
+  expect(opened.shows("id:settings-logs-error")).toBe(false);
+
+  const failed = await open(APP_ENTRY, {
+    ...viewport,
+    storage: { "settings.language": "en" },
+    modules: { "my-translator/native": { "AppPathsNative.openLogsFolder": () => false } },
+  });
+  await failed.press("id:nav-settings");
+  await failed.press("id:settings-open-logs");
+  await failed.waitFor("id:settings-logs-error");
+  expect(failed.texts()).toContain("Could not open the logs folder.");
+
+  const narrow = await open(APP_ENTRY, {
+    ...viewport,
+    width: 720,
+    storage: { "settings.language": "en" },
+    modules: { "my-translator/native": { "AppPathsNative.openLogsFolder": () => true } },
+  });
+  await narrow.press("id:nav-settings");
+  expect(narrow.shows("id:settings-open-logs")).toBe(true);
+
+  const mac = await open(APP_ENTRY, {
+    ...viewport,
+    platform: "macos",
+    storage: { "settings.language": "en" },
+  });
+  await mac.press("id:nav-settings");
+  expect(mac.shows("id:settings-open-logs-card")).toBe(false);
+});
+
 test("settings ui: resizes the settings split divider and persists width independently", async () => {
   const app = await open(APP_ENTRY, {
     ...viewport,

@@ -2,6 +2,7 @@
 // ABOUTME: Refreshes https://models.dev/models.json once per 24h; the bundled snapshot answers when it cannot.
 import { Storage } from "nsh";
 import bundledCatalogUrl from "../../assets/catalog/models.dev.json?url";
+import { createLogger } from "../log";
 
 /** Provider-agnostic model metadata published from https://github.com/anomalyco/models.dev. */
 const CATALOG_URL = "https://models.dev/models.json";
@@ -17,6 +18,8 @@ const FETCH_TIMEOUT_MS = 15_000;
 const MAX_CATALOG_CHARS = 10 * 1024 * 1024;
 /** Highest accepted token count, matching the catalog's 32-bit limits. */
 const MAX_TOKEN_COUNT = 4_294_967_295;
+
+const log = createLogger("models-dev/catalog");
 
 /** Capability flags and token limits the catalog reports for one model. */
 export interface CatalogFacts {
@@ -78,7 +81,7 @@ export function createCatalog(deps: Partial<CatalogDeps> = {}): Catalog {
       try {
         return buildIndex(parseCatalogBody(await resolved.readBundledCatalog()));
       } catch (error) {
-        console.warn("Could not read the bundled models.dev catalog.", error);
+        log.warn("Could not read the bundled models.dev catalog.", error);
         return null;
       }
     })();
@@ -90,7 +93,7 @@ export function createCatalog(deps: Partial<CatalogDeps> = {}): Catalog {
     try {
       raw = await resolved.readCache();
     } catch (error) {
-      console.warn("Could not read the models.dev catalog cache.", error);
+      log.warn("Could not read the models.dev catalog cache.", error);
       return null;
     }
     if (!raw) return null;
@@ -107,7 +110,7 @@ export function createCatalog(deps: Partial<CatalogDeps> = {}): Catalog {
       }
       return { index: buildIndex(coerceCachedModels(cache.models)), fetchedAt: cache.fetchedAt };
     } catch (error) {
-      console.warn("Could not parse the models.dev catalog cache.", error);
+      log.warn("Could not parse the models.dev catalog cache.", error);
       return null;
     }
   };
@@ -130,11 +133,11 @@ export function createCatalog(deps: Partial<CatalogDeps> = {}): Catalog {
           try {
             await resolved.writeCache(JSON.stringify({ fetchedAt: now, models }));
           } catch (error) {
-            console.warn("Could not cache the models.dev catalog.", error);
+            log.warn("Could not cache the models.dev catalog.", error);
           }
           return buildIndex(models);
         } catch (error) {
-          console.warn("Could not refresh the models.dev catalog.", error);
+          log.warn("Could not refresh the models.dev catalog.", error);
           // A stale cache is newer than the bundle, and the bundle is the last resort.
           return cached?.index ?? (await readBundledIndex());
         } finally {

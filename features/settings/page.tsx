@@ -9,6 +9,7 @@ import { Card, SectionHeading } from "../../components/ui/card";
 import { Icon } from "../../components/ui/icon";
 import { Switch } from "../../components/ui/switch";
 import { buildTooltip } from "../../components/ui/tooltip";
+import { canOpenLogsFolder, openLogsFolder } from "../../platform/logs";
 import type { LanguageDetectorKind } from "../language-detection/settings";
 import type { OcrServiceKind } from "../ocr/settings";
 import { appearance, appearanceError, selectAppearance, type Appearance } from "./appearance";
@@ -121,7 +122,10 @@ function LanguageOption(props: { value: LanguagePreference; label: string }) {
   );
 }
 
-function GeneralSection(props: { compact: boolean }) {
+function GeneralSection(props: { compact: boolean; os: string }) {
+  const logsError = signal(false);
+  const openLogs = async () => logsError.set(!(await openLogsFolder()));
+
   return (
     <>
       <Card testID="settings-general-card" class={props.compact ? "gap-4 p-4" : "gap-5 p-6"}>
@@ -155,6 +159,31 @@ function GeneralSection(props: { compact: boolean }) {
           </Text>
         </If>
       </Card>
+
+      <If when={canOpenLogsFolder(props.os)}>
+        <Card testID="settings-open-logs-card" class={props.compact ? "gap-2 p-2" : "gap-2 p-3"}>
+          <View class="flex-row items-center justify-between gap-4 px-3 py-1">
+            <Text class="text-sm font-medium text-card-foreground">{t("settings.logs.label")}</Text>
+            <Button
+              testID="settings-open-logs"
+              variant="outline"
+              size="sm"
+              label={t("settings.logs.open")}
+              accessibilityLabel={t("settings.logs.openLabel")}
+              onPress={() => void openLogs()}
+            />
+          </View>
+          <If when={logsError()}>
+            <Text
+              testID="settings-logs-error"
+              role="alert"
+              class="px-3 pb-1 text-sm text-destructive"
+            >
+              {t("settings.logs.error")}
+            </Text>
+          </If>
+        </Card>
+      </If>
     </>
   );
 }
@@ -388,7 +417,7 @@ export function SettingsPage(props: {
               class={`mx-auto w-full max-w-4xl ${compact() ? "gap-4 px-4 pb-4 pt-1" : "gap-5 px-6 pb-6 pt-2"}`}
             >
               <If when={selectedSection() === "general"}>
-                <GeneralSection compact={compact()} />
+                <GeneralSection compact={compact()} os={currentOs()} />
               </If>
               <If when={selectedSection() === "appearance"}>
                 <AppearanceSection compact={compact()} />
