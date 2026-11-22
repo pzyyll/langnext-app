@@ -1,9 +1,9 @@
-import { Text, View, type JSX, type ViewRef } from "nsh";
+import { signal, Text, View, type JSX, type ViewRef } from "nsh";
 import { Select as BaseSelect, type SelectItem } from "nsh/base";
 import { t } from "nsh/i18n";
 import { motion } from "../motion";
 import { Icon } from "./icon";
-import { buildTooltip } from "./tooltip";
+import { buildHoverTooltip, buildTooltip } from "./tooltip";
 
 export type { SelectItem };
 
@@ -18,6 +18,8 @@ interface SelectProps {
   prefix?: string;
   leading?: JSX.Element;
   tooltip?: string;
+  /** Shows the shown label in a hover tooltip, for compact triggers whose label may truncate. */
+  labelTooltip?: boolean;
   variant?: SelectVariant;
   size?: SelectSize;
   disabled?: boolean;
@@ -43,6 +45,10 @@ const TRIGGER_VARIANT_CLASSES: Record<SelectVariant, string> = {
 
 /** Single-choice dropdown built over nsh/base Select with theme tokens. */
 export function Select(props: SelectProps) {
+  // Label tooltips follow the pointer only: the dropdown opening clears the hover, and the
+  // pointer shows it again once it comes back, so a focus tooltip never answers the next Escape.
+  const hovered = signal(false);
+  const listOpen = signal(false);
   const variant = () => props.variant ?? "default";
   const isCompact = () => variant() !== "default";
   const selectedTitle = () => {
@@ -58,6 +64,15 @@ export function Select(props: SelectProps) {
   };
   const textSizeClass = () => (props.size === "sm" || isCompact() ? "text-xs" : "text-sm");
   const contentFlexClass = () => (isCompact() ? "min-w-0 shrink" : "min-w-0 flex-1");
+  const triggerTooltip = () => {
+    if (props.tooltip !== undefined) return buildTooltip(props.tooltip, "top");
+    if (!props.labelTooltip) return undefined;
+    return buildHoverTooltip({
+      label: shownLabel,
+      open: () => hovered() && !listOpen(),
+      testID: props.testID ? `${props.testID}-label-tooltip` : undefined,
+    });
+  };
 
   return (
     <BaseSelect
@@ -71,7 +86,11 @@ export function Select(props: SelectProps) {
       offset={4}
       margin={8}
       onChange={({ value }) => props.onChange(value)}
-      onOpenChange={({ open }) => props.onOpenChange?.(open)}
+      onOpenChange={({ open }) => {
+        if (open) hovered.set(false);
+        listOpen.set(open);
+        props.onOpenChange?.(open);
+      }}
       class={props.class}
       popupClass={`min-w-44 rounded-xl border border-border bg-popover p-1 shadow-lg ${motion.popup}`}
       listClass="max-h-60"
@@ -92,7 +111,9 @@ export function Select(props: SelectProps) {
         <View
           testID={props.testID}
           ref={(node) => props.ref?.(node)}
-          tooltip={props.tooltip ? buildTooltip(props.tooltip, "top") : undefined}
+          onMouseEnter={() => hovered.set(true)}
+          onMouseLeave={() => hovered.set(false)}
+          tooltip={triggerTooltip()}
           class={`flex-row items-center focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-50 ${TRIGGER_VARIANT_CLASSES[variant()]} ${heightClass()} ${motion.navigationFeedback} ${props.triggerClass ?? ""}`}
         >
           <View class={`${contentFlexClass()} flex-row items-center gap-1.5`}>

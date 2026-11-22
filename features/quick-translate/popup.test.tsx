@@ -252,6 +252,36 @@ test("quick popup: shows localized tooltips for icon-only toolbar and card actio
   await app.waitFor(`text:${t("quickTranslate.copied")}`);
 });
 
+test("quick popup: header language capsules show their full label in a hover tooltip", async () => {
+  const app = await open(POPUP_HARNESS, {
+    ...viewport,
+    storage: seedWithPresets([makePreset()]),
+  });
+
+  await app.waitFor("id:quick-translate-language-bar");
+  await app.hover("id:quick-translate-source-language");
+  await app.waitFor(
+    `id:quick-translate-source-language-label-tooltip >> text:${getLanguageLabel("en")}`,
+  );
+  await app.hover("id:quick-translate-target-language");
+  await app.waitFor(
+    `id:quick-translate-target-language-label-tooltip >> text:${getTargetLanguageLabel("fr")}`,
+  );
+
+  // Leaving the capsule takes the tooltip away.
+  await app.hover("id:harness-toggle-auto");
+  await app.waitUntil(() => !app.shows("id:quick-translate-target-language-label-tooltip"));
+
+  // The keyboard focus never opens it: closing the list with Escape brings the focus back to
+  // the trigger without arming a tooltip that takes the Escape meant for the window.
+  await app.press("id:quick-translate-target-language");
+  await app.waitFor(`role:option[${getLanguageLabel("de")}]`);
+  await app.keyboard.press("escape");
+  await app.waitUntil(() => !app.shows(`role:option[${getLanguageLabel("de")}]`));
+  expect(app.shows("id:quick-translate-target-language-label-tooltip")).toBe(false);
+  expect(app.shows("id:quick-translate-target-language >> text:French")).toBe(true);
+});
+
 test("quick popup: ignores Enter submission while an IME composition is active", async () => {
   const app = await open(POPUP_HARNESS, {
     ...viewport,
@@ -1200,6 +1230,43 @@ test("language resolution: one detection request serves both expanded cards", as
     expect(body.messages[1].content).toBe("Bonjour");
   }
   expect(app.texts().some((text) => text.startsWith("calls=2|"))).toBe(true);
+});
+
+test("language resolution: the source language list names the detected language on its automatic item", async () => {
+  const app = await open(POPUP_HARNESS, {
+    ...viewport,
+    storage: seedAutoPair([false], "language-resolution"),
+    network: {
+      [TRANSLATE_URL]: { status: 200, body: { choices: [{ message: { content: "译文" } }] } },
+    },
+  });
+
+  await app.waitFor("id:quick-translate-source");
+  await app.type("id:quick-translate-source", "Bonjour");
+  await app.keyboard.press("enter");
+  await app.waitUntil(() => app.texts().some((text) => text.includes("detects=1|")));
+
+  // The trigger reports progress; the list keeps naming the choice, not the progress.
+  expect(
+    app.shows(
+      `id:quick-translate-source-language >> text:${t("quickTranslate.detectingLanguage")}`,
+    ),
+  ).toBe(true);
+  await app.press("id:quick-translate-source-language");
+  await app.waitFor(`role:option[${t("quickTranslate.autoDetect")}]`);
+  await app.press(`role:option[${t("quickTranslate.autoDetect")}]`);
+  await app.waitUntil(() => !app.shows(`role:option[${t("quickTranslate.autoDetect")}]`));
+
+  await app.press("id:harness-resolve-language-fr");
+  const detected = t("quickTranslate.autoDetectDetected", { language: getLanguageLabel("fr") });
+  await app.waitUntil(() => app.shows(`id:quick-translate-source-language >> text:${detected}`));
+
+  await app.press("id:quick-translate-source-language");
+  await app.waitFor(`role:option[${detected}]`);
+  expect(app.shows(`role:option[${t("quickTranslate.autoDetect")}]`)).toBe(false);
+  await app.press(`role:option[${detected}]`);
+  await app.waitUntil(() => !app.shows(`role:option[${detected}]`));
+  expect(app.shows(`id:quick-translate-source-language >> text:${detected}`)).toBe(true);
 });
 
 test("language resolution: the popup detection uses the saved detector endpoint", async () => {
