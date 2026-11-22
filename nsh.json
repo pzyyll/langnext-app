@@ -11,6 +11,25 @@
     "radius": { "sidebar": 10 }
   },
   "appearance": "system",
+  "capabilities": {
+    "network": { "hosts": ["*"] },
+    "webview": { "hosts": ["*"] },
+    "statusBar": true,
+    "clipboard": true,
+    "picker": true,
+    "share": true,
+    "speech": true,
+    "notifications": true,
+    "audio": true,
+    "application": true,
+    "homeDir": true,
+    "openUrl": true,
+    "windows": true,
+    "fs": {
+      "read": ["${dataDir}"],
+      "write": ["${dataDir}"]
+    }
+  },
   "window": {
     "title": "My Translator",
     "defaultVisible": false,
