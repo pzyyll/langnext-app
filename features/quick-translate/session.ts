@@ -56,7 +56,7 @@ export type CardResultState =
   | { status: "idle" }
   | { status: "loading" }
   | { status: "streaming"; text: string }
-  | { status: "success"; text: string; modelId: string | null }
+  | { status: "success"; text: string; modelId: string | null; targetLanguage: LanguageId }
   | { status: "error"; message: string; text?: string };
 
 export interface CardViewItem {
@@ -623,6 +623,7 @@ export function createQuickTranslateSession(
           status: "success",
           text: outcome.text,
           modelId: outcome.modelId,
+          targetLanguage: resolvedPair.targetLanguage,
         },
       }));
       return;

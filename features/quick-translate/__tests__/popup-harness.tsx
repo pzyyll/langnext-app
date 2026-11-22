@@ -23,6 +23,7 @@ import { loadModelsState } from "../../models/store";
 import { createPresetsStore } from "../../presets/store";
 import { loadAppearance } from "../../settings/appearance";
 import { loadLanguage } from "../../settings/language";
+import { ttsSettingsStore } from "../../tts/settings";
 import {
   createQuickTranslatePreferencesStore,
   type QuickTranslatePreferencesStore,
@@ -500,8 +501,9 @@ void Promise.all([
   loadLanguage(),
   loadModelsState(),
   languageDetectionStore.load(),
+  ttsSettingsStore.load(),
   Storage.getItem(POPUP_HARNESS_MODE_KEY),
-]).then(async ([, , , , modeRaw]) => {
+]).then(async ([, , , , , modeRaw]) => {
   const mode: HarnessMode =
     modeRaw === "preset-load-error-then-recover" ||
     modeRaw === "clipboard-error" ||

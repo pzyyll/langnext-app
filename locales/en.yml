@@ -595,6 +595,13 @@ quickTranslate:
   enableAutoTranslate: Enable automatic translation
   disableAutoTranslate: Disable automatic translation
   speak: Read aloud
+  speakOff: Turn on Google Cloud Text-to-Speech in Settings.
+  speakSending: Sends this text to Google.
+  speakChooseSource: Choose a source language.
+  speakTranslateFirst: Translate first so the source language can be detected.
+  speakUnsupported: This language has no Google Cloud Standard voice.
+  speakTooLong: Shorten the text. Google accepts at most 5,000 bytes.
+  speakPlayback: Could not play the audio. Try again.
   copy: Copy
   copied: Copied
   sourceLabel: Source text

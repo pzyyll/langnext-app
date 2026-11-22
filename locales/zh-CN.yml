@@ -595,6 +595,13 @@ quickTranslate:
   enableAutoTranslate: 开启自动翻译
   disableAutoTranslate: 关闭自动翻译
   speak: 朗读
+  speakOff: 在设置中打开 Google Cloud 文字转语音。
+  speakSending: 将这段文字发送到 Google。
+  speakChooseSource: 请先选择源语言。
+  speakTranslateFirst: 请先翻译，以便确定源语言。
+  speakUnsupported: 此语言没有 Google Cloud 标准语音。
+  speakTooLong: 请缩短文字。Google 最多接受 5000 字节。
+  speakPlayback: 无法播放音频。请重试。
   copy: 复制
   copied: 已复制
   sourceLabel: 源文本

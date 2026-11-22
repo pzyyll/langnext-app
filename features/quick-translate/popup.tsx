@@ -1,4 +1,5 @@
 import {
+  cleanup,
   effect,
   platform,
   signal,
@@ -20,8 +21,14 @@ import { Select, type SelectItem } from "../../components/ui/select";
 import { Textarea } from "../../components/ui/textarea";
 import { ProviderMark } from "../../modules/ai/ui/provider-mark";
 import { providerSettingsRegistry } from "../../modules/ai/ui/registry";
+import { languageDetectionStore } from "../language-detection/settings";
+import { AUTO_LANGUAGE, type LanguageId } from "../presets/languages";
 import { modelsStore } from "../models/store";
 import type { TranslationPreset } from "../presets/types";
+import { createGoogleCloudTtsClient } from "../tts/google-cloud";
+import { playMp3Bytes } from "../tts/playback";
+import { prepareQuickSpeech, quickSpeechFailureMessage } from "../tts/quick-speech";
+import { ttsSettingsStore } from "../tts/settings";
 import type { CardViewItem, QuickTranslateSession } from "./session";
 import { resolvePresetTemplate } from "./translate";
 
@@ -62,16 +69,21 @@ function RetryIconButton(props: { testID: string; onPress: () => void }) {
   );
 }
 
-/** Disabled speech synthesis placeholder until TTS playback is implemented. */
-function SpeakerPlaceholderButton(props: { testID: string }) {
+function SpeakerButton(props: {
+  testID: string;
+  disabled: boolean;
+  tooltip: string;
+  onPress: () => void;
+}) {
   return (
     <Button
       testID={props.testID}
       size="icon-xs"
       variant="ghost"
-      disabled
-      tooltip={t("quickTranslate.speak")}
-      accessibilityLabel={t("quickTranslate.speak")}
+      disabled={props.disabled}
+      tooltip={props.tooltip}
+      accessibilityLabel={props.disabled ? props.tooltip : t("quickTranslate.speak")}
+      onPress={() => props.onPress()}
     >
       <Icon name="speaker-one" tone="muted-foreground" class="size-3.5" />
     </Button>
@@ -207,6 +219,10 @@ interface PresetCardRowProps {
   onRemove: (cardId: string) => void;
   onRetry: (cardId: string) => void;
   onCopy: (cardId: string) => void;
+  speakEnabled: Accessor<boolean>;
+  speakTooltip: Accessor<string>;
+  speakError: Accessor<string | null>;
+  onSpeak: () => void;
 }
 
 function PresetCardRow(props: PresetCardRowProps) {
@@ -385,7 +401,12 @@ function PresetCardRow(props: PresetCardRowProps) {
                     return res.status === "success" && res.text.trim().length > 0;
                   })()}
                 >
-                  <SpeakerPlaceholderButton testID="quick-translate-speak-result" />
+                  <SpeakerButton
+                    testID="quick-translate-speak-result"
+                    disabled={!props.speakEnabled()}
+                    tooltip={props.speakTooltip()}
+                    onPress={() => props.onSpeak()}
+                  />
                 </If>
                 <Button
                   testID="quick-translate-copy"
@@ -411,6 +432,17 @@ function PresetCardRow(props: PresetCardRowProps) {
                 onPress={() => props.onRetry(props.card().id)}
               />
             </View>
+            <If when={props.speakError() !== null}>
+              <View class="px-3 pb-2.5">
+                <Text
+                  testID="quick-translate-speak-result-error"
+                  role="alert"
+                  class="text-xs text-destructive"
+                >
+                  {props.speakError() ?? ""}
+                </Text>
+              </View>
+            </If>
             <If when={props.card().copyError !== null}>
               <View class="px-3 pb-2.5">
                 <Text
@@ -488,6 +520,111 @@ export function QuickTranslatePopup(props: QuickTranslatePopupProps) {
     input.setSelection(end, end);
   });
 
+  const sourceSpeechError = signal<string | null>(null);
+  const resultSpeechErrors = signal<Readonly<Record<string, string>>>({});
+  let speechToken = 0;
+  let speechAbort: AbortController | null = null;
+  let stopSpeech: (() => void) | null = null;
+  const speakEnabled = () => ttsSettingsStore.isEnabled();
+  const speakTooltip = () =>
+    speakEnabled() ? t("quickTranslate.speakSending") : t("quickTranslate.speakOff");
+
+  cleanup(() => {
+    speechToken += 1;
+    speechAbort?.abort();
+    stopSpeech?.();
+    stopSpeech = null;
+  });
+
+  const setResultSpeechError = (cardId: string, message: string | null) => {
+    const next = { ...resultSpeechErrors() };
+    if (message === null) delete next[cardId];
+    else next[cardId] = message;
+    resultSpeechErrors.set(next);
+  };
+
+  const mountedSpeech = (token: number) => token === speechToken;
+
+  const runSpeech = async (input: {
+    text: string;
+    language: LanguageId | null;
+    unresolvedAuto: "choose-source" | "translate-first" | null;
+    report: (message: string | null) => void;
+  }) => {
+    const token = ++speechToken;
+    speechAbort?.abort();
+    stopSpeech?.();
+    stopSpeech = null;
+    const controller = new AbortController();
+    speechAbort = controller;
+    input.report(null);
+    const prepared = await prepareQuickSpeech({
+      text: input.text,
+      language: input.language,
+      unresolvedAuto: input.unresolvedAuto,
+    });
+    if (!mountedSpeech(token)) return;
+    if (!prepared.ok) {
+      input.report(prepared.message);
+      return;
+    }
+    const synthesized = await createGoogleCloudTtsClient().synthesize(
+      {
+        apiKey: prepared.speech.apiKey,
+        text: prepared.speech.text,
+        languageCode: prepared.speech.voice.languageCode,
+        voiceName: prepared.speech.voice.voiceName,
+      },
+      { signal: controller.signal },
+    );
+    if (!mountedSpeech(token) || controller.signal.aborted) return;
+    if (synthesized.status === "cancelled") return;
+    if (synthesized.status === "failed") {
+      input.report(quickSpeechFailureMessage(synthesized.failure));
+      return;
+    }
+    const playback = playMp3Bytes(synthesized.audio);
+    stopSpeech = () => playback.stop();
+    const played = await playback.result;
+    if (!mountedSpeech(token)) return;
+    stopSpeech = null;
+    if (played.status === "failed") input.report(t("quickTranslate.speakPlayback"));
+  };
+
+  const speakSource = () => {
+    const selected = props.session.sourceLanguage();
+    const detected = props.session.sourceDetection();
+    const language =
+      selected === AUTO_LANGUAGE
+        ? detected.status === "detected"
+          ? detected.language
+          : null
+        : selected;
+    const unresolvedAuto =
+      language === null
+        ? languageDetectionStore.settings().mode === "off"
+          ? ("choose-source" as const)
+          : ("translate-first" as const)
+        : null;
+    void runSpeech({
+      text: sourceText(),
+      language,
+      unresolvedAuto,
+      report: (message) => sourceSpeechError.set(message),
+    });
+  };
+
+  const speakResult = (cardId: string) => {
+    const card = props.session.cards().find((item) => item.id === cardId);
+    if (card === undefined || card.result.status !== "success") return;
+    void runSpeech({
+      text: card.result.text,
+      language: card.result.targetLanguage,
+      unresolvedAuto: null,
+      report: (message) => setResultSpeechError(cardId, message),
+    });
+  };
+
   const ocrMessage = () => (props.ocrState ? props.ocrState().message : null);
   const ocrRecognizing = () => (props.ocrState ? props.ocrState().phase === "recognizing" : false);
   // One bottom-left status slot serves OCR errors and active recognition by priority.
@@ -548,7 +685,21 @@ export function QuickTranslatePopup(props: QuickTranslatePopupProps) {
     <If when={hasSourceToolbar()}>
       <View testID="quick-translate-source-toolbar" class="mt-1 flex-row items-center gap-1.5">
         <If when={hasSpeakableSource()}>
-          <SpeakerPlaceholderButton testID="quick-translate-speak-source" />
+          <SpeakerButton
+            testID="quick-translate-speak-source"
+            disabled={!speakEnabled()}
+            tooltip={speakTooltip()}
+            onPress={() => void speakSource()}
+          />
+          <If when={sourceSpeechError() !== null}>
+            <Text
+              testID="quick-translate-speak-source-error"
+              role="alert"
+              class="min-w-0 flex-1 text-xs text-destructive"
+            >
+              {sourceSpeechError() ?? ""}
+            </Text>
+          </If>
         </If>
         <If when={showOcrError()}>
           <Text
@@ -704,6 +855,10 @@ export function QuickTranslatePopup(props: QuickTranslatePopupProps) {
                 onRemove={(cardId) => props.session.handleRemoveCard(cardId)}
                 onRetry={(id) => props.session.handleRetryCard(id)}
                 onCopy={(id) => props.session.handleCopyCard(id)}
+                speakEnabled={speakEnabled}
+                speakTooltip={speakTooltip}
+                speakError={() => resultSpeechErrors()[card().id] ?? null}
+                onSpeak={() => speakResult(card().id)}
               />
             )}
           </Each>
