@@ -126,6 +126,9 @@ export function Button(props: ButtonProps) {
 
 interface KeyboardButtonProps extends ButtonProps {
   focusable?: boolean;
+  accessibilityHint?: string;
+  accessibilityActions?: { name: string; label?: string }[];
+  onAccessibilityAction?: (event: { actionName: string }) => void;
   onBlur?: () => void;
   captureKeys?: "none" | readonly string[];
   onKeyDown?: (event: KeyEvent) => void;
@@ -140,7 +143,10 @@ export function KeyboardButton(props: KeyboardButtonProps) {
       testID={props.testID}
       ref={(node) => props.ref?.(node)}
       accessibilityLabel={props.accessibilityLabel ?? props.label}
+      accessibilityHint={props.accessibilityHint}
+      accessibilityActions={props.accessibilityActions}
       accessibilityState={{ selected: props.selected }}
+      onAccessibilityAction={props.onAccessibilityAction}
       focusable={props.focusable}
       disabled={props.disabled}
       onPress={() => props.onPress?.()}

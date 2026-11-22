@@ -101,6 +101,8 @@ settings:
     enableLabel: 启用 %{name}
     moveUp: 上移 %{name}
     moveDown: 下移 %{name}
+    reorder: 调整「%{name}」的顺序
+    reorderHint: 拖动，或按上下方向键。
     itemLabel: "%{name}（%{status}）"
     role:
       primary: 首选

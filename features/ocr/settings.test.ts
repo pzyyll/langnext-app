@@ -413,13 +413,13 @@ test("ocr store: reordering channels updates priority order and persists", async
 
   expect(store.enabledBindings()).toEqual([VISION_BINDING, baidu]);
 
-  // Boundary no-ops do not write to storage.
+  // Keeping a channel in its position does not write to storage.
   const writesBefore = mem.getSetCalls();
-  expect(await store.moveChannel("ai", "up")).toEqual({ ok: true });
-  expect(await store.moveChannel("baidu", "down")).toEqual({ ok: true });
+  expect(await store.moveChannelTo("ai", 0)).toEqual({ ok: true });
+  expect(await store.moveChannelTo("baidu", 1)).toEqual({ ok: true });
   expect(mem.getSetCalls()).toBe(writesBefore);
 
-  expect(await store.moveChannel("baidu", "up")).toEqual({ ok: true });
+  expect(await store.moveChannelTo("baidu", 0)).toEqual({ ok: true });
   expect(store.channelOrder()).toEqual(["baidu", "ai"]);
   expect(store.enabledBindings()).toEqual([baidu, VISION_BINDING]);
 
@@ -428,7 +428,8 @@ test("ocr store: reordering channels updates priority order and persists", async
   expect(reloaded.channelOrder()).toEqual(["baidu", "ai"]);
   expect(reloaded.enabledBindings()).toEqual([baidu, VISION_BINDING]);
 
-  expect(await reloaded.moveChannel("baidu", "down")).toEqual({ ok: true });
+  // A target past the end clamps to the last position.
+  expect(await reloaded.moveChannelTo("baidu", 99)).toEqual({ ok: true });
   expect(reloaded.channelOrder()).toEqual(["ai", "baidu"]);
   expect(reloaded.enabledBindings()).toEqual([VISION_BINDING, baidu]);
 });
@@ -485,7 +486,7 @@ test("ocr store: failed toggle or reorder write keeps previous state", async () 
   expect(store.isEnabled("ai")).toBe(true);
   expect(mem.backing[OCR_STORAGE_KEY]).toBe(before);
 
-  const moveErr = await store.moveChannel("baidu", "up");
+  const moveErr = await store.moveChannelTo("baidu", 0);
   expect(moveErr.ok).toBe(false);
   if (moveErr.ok) throw new Error("expected failure");
   expect(moveErr.key).toBe("storage_write_failed");

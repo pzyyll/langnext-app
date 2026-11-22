@@ -1,13 +1,18 @@
 import {
   cleanup,
+  createAnimatedValue,
   createMotion,
   effect,
   Image,
+  reduceMotion,
   signal,
   Text,
   token,
   View,
+  type AnimatedValue,
   type InputRef,
+  type KeyEvent,
+  type PanEvent,
   type ViewRef,
 } from "nsh";
 import { t } from "nsh/i18n";
@@ -15,7 +20,7 @@ import baiduIcon from "../../assets/icons/baidu.svg";
 import { motion } from "../../components/motion";
 import { Avatar } from "../../components/ui/avatar";
 import { Badge } from "../../components/ui/badge";
-import { Button } from "../../components/ui/button";
+import { Button, KeyboardButton } from "../../components/ui/button";
 import { Card, SectionHeading } from "../../components/ui/card";
 import { Icon } from "../../components/ui/icon";
 import { Input } from "../../components/ui/input";
@@ -28,6 +33,7 @@ import { readAvailableModelChoices, resolveModelBindingInfo } from "../presets/m
 import {
   BAIDU_OCR_OPERATIONS,
   isBaiduOcrOperation,
+  OCR_SERVICE_KINDS,
   ocrSettingsStore,
   type BaiduOcrOperation,
   type OcrServiceKind,
@@ -43,6 +49,9 @@ interface OcrSectionProps {
 }
 
 type CredentialState = "unknown" | "readable" | "missing";
+
+/** Time a reordered row takes to settle into its new slot. */
+const REORDER_SETTLE_MS = 180;
 
 function OcrChannelAvatar(props: { kind: OcrServiceKind }) {
   return (
@@ -73,12 +82,22 @@ interface OcrChannelListProps {
   credentialState: CredentialState;
   onOpenChannel: (kind: OcrServiceKind) => void;
   onRowRef: (kind: OcrServiceKind, node: ViewRef) => void;
+  onGripRef: (kind: OcrServiceKind, node: ViewRef) => void;
+  onFocusGrip: (kind: OcrServiceKind) => void;
 }
 
 function OcrChannelList(props: OcrChannelListProps) {
   const entrance = createMotion({ enter: motion.pageEnter });
   const mutating = signal(false);
   const listError = signal<string | null>(null);
+  const dragging = signal<OcrServiceKind | null>(null);
+  const animating = signal(false);
+  // Per-channel drag offsets drive the rows natively; they return to 0 at rest.
+  const offsets: Record<OcrServiceKind, AnimatedValue> = {
+    ai: createAnimatedValue(0),
+    baidu: createAnimatedValue(0),
+  };
+  const rowSlots: Partial<Record<OcrServiceKind, { top: number; height: number }>> = {};
 
   const order = () => ocrSettingsStore.channelOrder();
   const enabledOrder = () => order().filter((kind) => ocrSettingsStore.isEnabled(kind));
@@ -132,16 +151,115 @@ function OcrChannelList(props: OcrChannelListProps) {
     }
   };
 
-  const handleMove = async (kind: OcrServiceKind, direction: "up" | "down") => {
-    if (mutating()) return;
+  const animateOffset = (kind: OcrServiceKind, to: number): Promise<unknown> => {
+    if (reduceMotion()) {
+      offsets[kind].set(to);
+      return Promise.resolve();
+    }
+    return offsets[kind].timing(to, { duration: REORDER_SETTLE_MS, easing: "easeOut" });
+  };
+
+  const resetOffsets = () => {
+    for (const row of OCR_SERVICE_KINDS) offsets[row].set(0);
+  };
+
+  const handleDragStart = (kind: OcrServiceKind) => {
+    if (mutating() || animating() || dragging() !== null) return;
+    listError.set(null);
+    dragging.set(kind);
+  };
+
+  /** The channel whose measured slot center is nearest the dragged row's center. */
+  const nearestChannel = (kind: OcrServiceKind, offsetY: number): number | null => {
+    const slot = rowSlots[kind];
+    if (slot === undefined) return null;
+    const center = slot.top + slot.height / 2 + offsetY;
+    let target: number | null = null;
+    let nearest = Number.POSITIVE_INFINITY;
+    order().forEach((other, position) => {
+      const otherSlot = rowSlots[other];
+      if (otherSlot === undefined) return;
+      const distance = Math.abs(otherSlot.top + otherSlot.height / 2 - center);
+      if (distance < nearest) {
+        nearest = distance;
+        target = position;
+      }
+    });
+    return target;
+  };
+
+  /** Slides every row into the slot the reordered list gives it, and returns that list. */
+  const settleIntoSlots = async (kind: OcrServiceKind, target: number) => {
+    const list = order();
+    const nextOrder = [...list];
+    nextOrder.splice(list.indexOf(kind), 1);
+    nextOrder.splice(target, 0, kind);
+    const moves: Promise<unknown>[] = [];
+    nextOrder.forEach((row, position) => {
+      const from = rowSlots[row];
+      const to = rowSlots[list[position]!];
+      if (from === undefined || to === undefined || from.top === to.top) return;
+      moves.push(animateOffset(row, to.top - from.top));
+    });
+    await Promise.all(moves);
+    return nextOrder;
+  };
+
+  const handleDragEnd = async (kind: OcrServiceKind, event: PanEvent) => {
+    if (dragging() !== kind) {
+      await animateOffset(kind, 0);
+      return;
+    }
+    animating.set(true);
+    try {
+      const index = order().indexOf(kind);
+      const target = nearestChannel(kind, event.value?.y ?? event.translation.y);
+      if (event.cancelled || index === -1 || target === null || target === index) {
+        await animateOffset(kind, 0);
+        return;
+      }
+      const nextOrder = await settleIntoSlots(kind, target);
+      const result = await ocrSettingsStore.moveChannelTo(kind, target);
+      if (result.ok) {
+        resetOffsets();
+        return;
+      }
+      await Promise.all(nextOrder.map((row) => animateOffset(row, 0)));
+      listError.set(result.message);
+    } finally {
+      dragging.set(null);
+      animating.set(false);
+    }
+  };
+
+  const handleMoveBy = async (kind: OcrServiceKind, delta: number, refocus: boolean) => {
+    if (mutating() || animating() || dragging() !== null) return;
+    const list = order();
+    const index = list.indexOf(kind);
+    const target = index + delta;
+    if (index === -1 || target < 0 || target >= list.length) return;
     listError.set(null);
     mutating.set(true);
     try {
-      const result = await ocrSettingsStore.moveChannel(kind, direction);
-      if (!result.ok) listError.set(result.message);
+      const result = await ocrSettingsStore.moveChannelTo(kind, target);
+      if (!result.ok) {
+        listError.set(result.message);
+        return;
+      }
+      if (refocus) queueMicrotask(() => props.onFocusGrip(kind));
     } finally {
       mutating.set(false);
     }
+  };
+
+  const handleGripKey = (kind: OcrServiceKind, event: KeyEvent) => {
+    if (event.key === "ArrowUp") void handleMoveBy(kind, -1, true);
+    else if (event.key === "ArrowDown") void handleMoveBy(kind, 1, true);
+  };
+
+  const handleAccessibilityMove = (kind: OcrServiceKind, actionName: string) => {
+    if (actionName === "moveUp") void handleMoveBy(kind, -1, false);
+    else if (actionName === "moveDown") void handleMoveBy(kind, 1, false);
   };
 
   return (
@@ -182,7 +300,21 @@ function OcrChannelList(props: OcrChannelListProps) {
                 </If>
                 <View
                   testID={`settings-ocr-row-${kind()}`}
-                  class={`flex-row items-center gap-1.5 rounded-lg pr-2 hover:bg-accent/60 active:bg-accent ${motion.navigationFeedback}`}
+                  pan={mutating() || animating() ? undefined : { y: offsets[kind()] }}
+                  onPanStart={() => handleDragStart(kind())}
+                  onPanEnd={(event) => void handleDragEnd(kind(), event)}
+                  onLayout={(event) => {
+                    rowSlots[kind()] = {
+                      top: event.bounds.origin.y,
+                      height: event.bounds.size.height,
+                    };
+                  }}
+                  style={{ translate: [0, offsets[kind()]] }}
+                  class={`flex-row items-center gap-1.5 rounded-lg pr-2 ${motion.navigationFeedback} ${
+                    dragging() === kind()
+                      ? "z-10 cursor-grabbing bg-card shadow-md"
+                      : "hover:bg-accent/60 active:bg-accent"
+                  }`}
                 >
                   <Button
                     testID={`settings-ocr-channel-${kind()}`}
@@ -221,30 +353,29 @@ function OcrChannelList(props: OcrChannelListProps) {
                     </View>
                   </Button>
 
-                  <View class="shrink-0 flex-row items-center gap-0.5">
-                    <Button
-                      testID={`settings-ocr-move-up-${kind()}`}
-                      variant="ghost"
-                      size="icon-sm"
-                      tooltip={t("settings.ocr.moveUp", { name: name() })}
-                      accessibilityLabel={t("settings.ocr.moveUp", { name: name() })}
-                      disabled={mutating() || index() === 0}
-                      onPress={() => void handleMove(kind(), "up")}
-                    >
-                      <Icon name="arrow-up" tone="muted-foreground" class="size-3.5" />
-                    </Button>
-                    <Button
-                      testID={`settings-ocr-move-down-${kind()}`}
-                      variant="ghost"
-                      size="icon-sm"
-                      tooltip={t("settings.ocr.moveDown", { name: name() })}
-                      accessibilityLabel={t("settings.ocr.moveDown", { name: name() })}
-                      disabled={mutating() || index() === order().length - 1}
-                      onPress={() => void handleMove(kind(), "down")}
-                    >
-                      <Icon name="arrow-down" tone="muted-foreground" class="size-3.5" />
-                    </Button>
-                  </View>
+                  <KeyboardButton
+                    testID={`settings-ocr-grip-${kind()}`}
+                    variant="ghost"
+                    size="icon-sm"
+                    focusable={true}
+                    tooltip={t("settings.ocr.reorder", { name: name() })}
+                    accessibilityLabel={t("settings.ocr.reorder", { name: name() })}
+                    accessibilityHint={t("settings.ocr.reorderHint")}
+                    accessibilityActions={[
+                      { name: "moveUp", label: t("settings.ocr.moveUp", { name: name() }) },
+                      { name: "moveDown", label: t("settings.ocr.moveDown", { name: name() }) },
+                    ]}
+                    onAccessibilityAction={(event) =>
+                      handleAccessibilityMove(kind(), event.actionName)
+                    }
+                    onPress={() => props.onFocusGrip(kind())}
+                    captureKeys={["arrowup", "arrowdown"]}
+                    onKeyDown={(event) => handleGripKey(kind(), event)}
+                    ref={(node) => props.onGripRef(kind(), node)}
+                    class="shrink-0 cursor-grab"
+                  >
+                    <Icon name="grip-vertical" tone="muted-foreground" class="size-4" />
+                  </KeyboardButton>
 
                   <Switch
                     testID={`settings-ocr-toggle-${kind()}`}
@@ -557,6 +688,7 @@ function OcrChannelDetail(props: OcrChannelDetailProps) {
 export function OcrSection(props: OcrSectionProps) {
   const credentialState = signal<CredentialState>("unknown");
   const rowRefs: Partial<Record<OcrServiceKind, ViewRef>> = {};
+  const gripRefs: Partial<Record<OcrServiceKind, ViewRef>> = {};
   let lastOpenedChannel: OcrServiceKind | null = null;
   let restoreFocusOnList = false;
 
@@ -616,6 +748,10 @@ export function OcrSection(props: OcrSectionProps) {
         onRowRef={(kind, node) => {
           rowRefs[kind] = node;
         }}
+        onGripRef={(kind, node) => {
+          gripRefs[kind] = node;
+        }}
+        onFocusGrip={(kind) => gripRefs[kind]?.focus()}
       />
     </If>
   );
