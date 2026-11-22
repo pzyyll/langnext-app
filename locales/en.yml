@@ -100,6 +100,8 @@ settings:
     enableLabel: Enable %{name}
     moveUp: Move %{name} up
     moveDown: Move %{name} down
+    reorder: Reorder %{name}
+    reorderHint: Drag, or press the up and down arrow keys.
     itemLabel: "%{name} (%{status})"
     role:
       primary: Primary

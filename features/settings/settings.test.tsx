@@ -983,17 +983,14 @@ test("ocr settings: reorders channels and toggles enable state while preserving 
   await app.press("id:settings-nav-ocr");
   await app.waitFor("id:settings-ocr-card");
 
-  expect(app.enabled("id:settings-ocr-move-up-ai")).toBe(false);
-  expect(app.enabled("id:settings-ocr-move-down-ai")).toBe(true);
-  expect(app.enabled("id:settings-ocr-move-up-baidu")).toBe(true);
-  expect(app.enabled("id:settings-ocr-move-down-baidu")).toBe(false);
+  expect(app.shows("id:settings-ocr-grip-ai")).toBe(true);
+  expect(app.shows("id:settings-ocr-grip-baidu")).toBe(true);
   expect(app.shows("id:settings-ocr-role-ai")).toBe(true);
   expect(app.shows("id:settings-ocr-role-baidu")).toBe(true);
 
-  await app.press("id:settings-ocr-move-up-baidu");
+  // Dragging the second row above the first persists the new priority order.
+  await app.drag("id:settings-ocr-row-baidu", { x: 0, y: -80 });
   await app.waitUntil(() => JSON.parse(app.storage()[OCR_STORAGE_KEY]!).order[0] === "baidu");
-  expect(app.enabled("id:settings-ocr-move-up-baidu")).toBe(false);
-  expect(app.enabled("id:settings-ocr-move-down-baidu")).toBe(true);
 
   const reopened = await open(APP_ENTRY, { ...viewport, storage: app.storage() });
   await reopened.press("id:nav-settings");
@@ -1024,6 +1021,22 @@ test("ocr settings: reorders channels and toggles enable state while preserving 
     () => JSON.parse(reopened.storage()[OCR_STORAGE_KEY]!).baidu.operation === "accurate_basic",
   );
   expect(JSON.parse(reopened.storage()[OCR_STORAGE_KEY]!).enabled.baidu).toBe(false);
+});
+
+test("ocr settings: the grip reorders channels with the arrow keys and keeps the focus", async () => {
+  // A Linux host delivers raw keys to the focused view, as a desktop does.
+  const app = await open(APP_ENTRY, { ...viewport, platform: "linux" });
+  await app.press("id:nav-settings");
+  await app.press("id:settings-nav-ocr");
+  await app.waitFor("id:settings-ocr-card");
+
+  await app.press("id:settings-ocr-grip-ai");
+  await app.keyboard.press("arrowdown");
+  await app.waitUntil(() => JSON.parse(app.storage()[OCR_STORAGE_KEY]!).order[0] === "baidu");
+
+  // The grip keeps the focus across the reorder, so the next key moves it back.
+  await app.keyboard.press("arrowup");
+  await app.waitUntil(() => JSON.parse(app.storage()[OCR_STORAGE_KEY]!).order[0] === "ai");
 });
 
 test("ocr settings: keeps previous order and enabled state on a failed list write", async () => {
@@ -1058,7 +1071,8 @@ test("ocr settings: keeps previous order and enabled state on a failed list writ
   await failing.waitFor("id:settings-ocr-list-error");
   expect(JSON.parse(failing.storage()[OCR_STORAGE_KEY]!).enabled.baidu).toBe(false);
 
-  await failing.press("id:settings-ocr-move-down-baidu");
+  await failing.drag("id:settings-ocr-row-baidu", { x: 0, y: 80 });
+  await failing.wait(600);
   await failing.waitFor("id:settings-ocr-list-error");
   expect(JSON.parse(failing.storage()[OCR_STORAGE_KEY]!).order).toEqual(["baidu", "ai"]);
 });
