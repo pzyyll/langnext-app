@@ -663,7 +663,8 @@ fn paint_preview(hdc: HDC, snapshot: &Snapshot, dimmed: &Snapshot, crop: Option<
 }
 
 /// Paints the selection edge as alternating dark and light dashes, so the boundary reads as
-/// dashed and stays visible on light and dark content.
+/// dashed and stays visible on light and dark content. Dash positions come from the display
+/// origin, so resizing the selection reveals or hides dashes instead of sliding them.
 fn draw_selection_frame(hdc: HDC, rect: RECT) {
     let width = rect.right - rect.left;
     let height = rect.bottom - rect.top;
@@ -671,53 +672,49 @@ fn draw_selection_frame(hdc: HDC, rect: RECT) {
         return;
     }
     let stroke = FRAME_STROKE.min(width / 2).min(height / 2).max(1);
-    let mut dark = true;
-    let mut remaining = FRAME_DASH;
 
-    // Walk clockwise from the top-left corner so the dash rhythm carries across corners.
-    for (band, horizontal, forward, length) in [
-        (rect.top, true, true, width),
-        (rect.right - stroke, false, true, height),
-        (rect.bottom - stroke, true, false, width),
-        (rect.left, false, false, height),
+    // (from, to, horizontal, band) for the four edges: each dash covers [from, to) on the
+    // edge's axis and `band` plus `stroke` on the other.
+    for (from, to, horizontal, band) in [
+        (rect.left, rect.right, true, rect.top),
+        (rect.top, rect.bottom, false, rect.right - stroke),
+        (rect.left, rect.right, true, rect.bottom - stroke),
+        (rect.top, rect.bottom, false, rect.left),
     ] {
-        let mut offset = 0;
-        while offset < length {
-            let run = remaining.min(length - offset);
-            let first = if forward {
-                offset
-            } else {
-                length - offset - run
-            };
-            let dash = if horizontal {
-                RECT {
-                    left: rect.left + first,
-                    top: band,
-                    right: rect.left + first + run,
-                    bottom: band + stroke,
+        let mut index = from.div_euclid(FRAME_DASH);
+        while index * FRAME_DASH < to {
+            let dash_start = (index * FRAME_DASH).max(from);
+            let dash_end = ((index + 1) * FRAME_DASH).min(to);
+            if dash_end > dash_start {
+                let dash = if horizontal {
+                    RECT {
+                        left: dash_start,
+                        top: band,
+                        right: dash_end,
+                        bottom: band + stroke,
+                    }
+                } else {
+                    RECT {
+                        left: band,
+                        top: dash_start,
+                        right: band + stroke,
+                        bottom: dash_end,
+                    }
+                };
+                // SAFETY: FillRect only reads the dash rectangle and the stock brush.
+                unsafe {
+                    FillRect(
+                        hdc,
+                        &dash,
+                        GetStockObject(if index.rem_euclid(2) == 0 {
+                            BLACK_BRUSH
+                        } else {
+                            WHITE_BRUSH
+                        }),
+                    );
                 }
-            } else {
-                RECT {
-                    left: band,
-                    top: rect.top + first,
-                    right: band + stroke,
-                    bottom: rect.top + first + run,
-                }
-            };
-            // SAFETY: FillRect only reads the dash rectangle and the stock brush.
-            unsafe {
-                FillRect(
-                    hdc,
-                    &dash,
-                    GetStockObject(if dark { BLACK_BRUSH } else { WHITE_BRUSH }),
-                );
             }
-            offset += run;
-            remaining -= run;
-            if remaining == 0 {
-                dark = !dark;
-                remaining = FRAME_DASH;
-            }
+            index += 1;
         }
     }
 }
@@ -1196,6 +1193,70 @@ mod tests {
             paint_preview(preview.dc, &frame, &dimmed, None);
             assert_eq!(pixel(16, 16), pixel(4, 4));
         }
+    }
+
+    #[test]
+    fn dashed_frame_keeps_its_pattern_while_the_selection_resizes() {
+        const SIDE: i32 = 40;
+        let surface = Snapshot::new(ptr::null_mut(), SIDE, SIDE).unwrap();
+        let sample = |rect: RECT, horizontal: bool| -> Vec<u32> {
+            // SAFETY: the DIB owns SIDE × SIDE pixels; FillRect reads only the stock brush.
+            unsafe {
+                std::slice::from_raw_parts_mut(surface.pixels, (SIDE * SIDE) as usize)
+                    .fill(0x00ff_ffff);
+                draw_selection_frame(surface.dc, rect);
+                let pixel = |along: i32| {
+                    if horizontal {
+                        GetPixel(surface.dc, along, rect.top)
+                    } else {
+                        GetPixel(surface.dc, rect.left, along)
+                    }
+                };
+                if horizontal {
+                    (rect.left..rect.right).map(pixel).collect()
+                } else {
+                    (rect.top..rect.bottom).map(pixel).collect()
+                }
+            }
+        };
+        let narrow = sample(
+            RECT {
+                left: 8,
+                top: 8,
+                right: 24,
+                bottom: 24,
+            },
+            true,
+        );
+        let wider = sample(
+            RECT {
+                left: 10,
+                top: 8,
+                right: 24,
+                bottom: 24,
+            },
+            true,
+        );
+        assert_eq!(wider.as_slice(), &narrow[2..]);
+        let shorter = sample(
+            RECT {
+                left: 8,
+                top: 10,
+                right: 24,
+                bottom: 24,
+            },
+            false,
+        );
+        let taller = sample(
+            RECT {
+                left: 8,
+                top: 8,
+                right: 24,
+                bottom: 24,
+            },
+            false,
+        );
+        assert_eq!(shorter.as_slice(), &taller[2..]);
     }
 
     #[test]
