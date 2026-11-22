@@ -20,13 +20,8 @@ import { Input } from "../../components/ui/input";
 import { Switch } from "../../components/ui/switch";
 import { toast } from "../../components/ui/toast";
 import { FormField } from "../../modules/ai/ui/form-field";
-import {
-  createGoogleCloudTtsClient,
-  TTS_SAMPLE_LANGUAGE_CODE,
-  TTS_SAMPLE_TEXT,
-  TTS_SAMPLE_VOICE_NAME,
-  type GoogleCloudTtsFailure,
-} from "../tts/google-cloud";
+import { sampleSpeechRequest, synthesizeSpeech } from "../tts/channels";
+import type { TtsCredentials, TtsFailure } from "../tts/synthesis";
 import { canPlayTts, playMp3Bytes } from "../tts/playback";
 import { ttsSettingsStore } from "../tts/settings";
 import type { TtsChannelId } from "../tts/synthesis";
@@ -239,8 +234,11 @@ function TtsChannelRow(props: {
 
 type PreviewPhase = "idle" | "loading" | "playing";
 
-function previewFailureMessage(failure: GoogleCloudTtsFailure): string {
-  if (failure === "auth") return t("settings.tts.failure.auth");
+function previewFailureMessage(channel: TtsChannelId, failure: TtsFailure): string {
+  if (failure === "auth") {
+    return t(channel === "azure" ? "settings.tts.failure.azureAuth" : "settings.tts.failure.auth");
+  }
+  if (failure === "rate_limited") return t("settings.tts.failure.azureRateLimited");
   if (failure === "quota") return t("settings.tts.failure.quota");
   return t("settings.tts.failure.playback");
 }
@@ -284,6 +282,12 @@ function ChannelDetail(props: { channel: TtsChannelId; compact: boolean; credent
   });
 
   const savedBinding = () => ttsSettingsStore.savedBinding(props.channel);
+  const regionDirty = () => {
+    if (props.channel !== "azure") return false;
+    const saved = ttsSettingsStore.savedBinding("azure");
+    if (saved === null) return regionDraft().trim().length > 0;
+    return regionDraft().trim() !== saved.region;
+  };
   const previewLabel = () => {
     if (phase() === "loading") return t("common.cancel");
     if (phase() === "playing") return t("settings.tts.stop");
@@ -297,6 +301,7 @@ function ChannelDetail(props: { channel: TtsChannelId; compact: boolean; credent
     if (phase() === "idle" && apiKeyDraft().trim().length > 0) {
       return t("settings.tts.previewUnsaved");
     }
+    if (phase() === "idle" && regionDirty()) return t("settings.tts.previewUnsavedRegion");
     return undefined;
   };
   const previewDisabled = () =>
@@ -304,6 +309,7 @@ function ChannelDetail(props: { channel: TtsChannelId; compact: boolean; credent
     (saving() ||
       !playbackReady() ||
       apiKeyDraft().trim().length > 0 ||
+      regionDirty() ||
       savedBinding() === null ||
       props.credentialState !== "readable");
   const controlsLocked = () => saving() || phase() !== "idle";
@@ -360,9 +366,9 @@ function ChannelDetail(props: { channel: TtsChannelId; compact: boolean; credent
       previewError.set(null);
       return;
     }
-    if (previewDisabled() || props.channel !== "google-cloud") return;
+    if (previewDisabled()) return;
     const saved = savedBinding();
-    if (saved === null || saved.channel !== "google-cloud") return;
+    if (saved === null) return;
     const token = active.token + 1;
     active.token = token;
     const controller = new AbortController();
@@ -371,20 +377,24 @@ function ChannelDetail(props: { channel: TtsChannelId; compact: boolean; credent
     phase.set("loading");
     const apiKey = await ttsSettingsStore.readKey(saved.credentialRef);
     if (!mounted || token !== active.token) return;
-    if (apiKey === null || saved.credentialRef !== savedBinding()?.credentialRef) {
+    const current = savedBinding();
+    const bindingChanged =
+      current === null ||
+      current.credentialRef !== saved.credentialRef ||
+      (saved.channel === "azure" &&
+        (current.channel !== "azure" || current.region !== saved.region));
+    if (apiKey === null || bindingChanged) {
       phase.set("idle");
       previewError.set(t("settings.tts.keyUnreadable"));
       return;
     }
-    const synthesized = await createGoogleCloudTtsClient().synthesize(
-      {
-        apiKey,
-        text: TTS_SAMPLE_TEXT,
-        languageCode: TTS_SAMPLE_LANGUAGE_CODE,
-        voiceName: TTS_SAMPLE_VOICE_NAME,
-      },
-      { signal: controller.signal },
-    );
+    const credentials: TtsCredentials =
+      saved.channel === "azure"
+        ? { channel: "azure", apiKey, region: saved.region }
+        : { channel: "google-cloud", apiKey };
+    const synthesized = await synthesizeSpeech(sampleSpeechRequest(credentials), {
+      signal: controller.signal,
+    });
     if (!mounted || token !== active.token || controller.signal.aborted) return;
     if (synthesized.status === "cancelled") {
       phase.set("idle");
@@ -392,7 +402,7 @@ function ChannelDetail(props: { channel: TtsChannelId; compact: boolean; credent
     }
     if (synthesized.status === "failed") {
       phase.set("idle");
-      previewError.set(previewFailureMessage(synthesized.failure));
+      previewError.set(previewFailureMessage(props.channel, synthesized.failure));
       return;
     }
     const playback = playMp3Bytes(synthesized.audio, {

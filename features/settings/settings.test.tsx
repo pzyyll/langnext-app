@@ -1812,3 +1812,128 @@ test("tts settings: shows the saved Azure region and names the channel a switch 
   expect(app.value("id:settings-tts-region")).toBe("eastus2");
   expect(app.texts()).not.toContain("next-azure-key");
 });
+
+test("tts preview: plays an Azure sample without changing the active channel", async () => {
+  const azureUrl = "https://eastus.tts.speech.microsoft.com/cognitiveservices/v1";
+  const app = await open(APP_ENTRY, {
+    ...viewport,
+    storage: {
+      "settings.language": "en",
+      [TTS_STORAGE_KEY]: JSON.stringify({
+        version: 1,
+        googleCloud: { enabled: true, credentialRef: "google-ref" },
+        azure: { enabled: false, credentialRef: "azure-ref", region: "eastus" },
+      }),
+      [ttsCredentialStorageKey("google-ref")]: JSON.stringify({ apiKey: "google-key" }),
+      [ttsCredentialStorageKey("azure-ref")]: JSON.stringify({ apiKey: "azure-key" }),
+    },
+    network: {
+      ["POST " + azureUrl]: { status: 200, body: "ID3azure-sample" },
+    },
+  });
+
+  await app.press("id:nav-settings");
+  await app.press("id:settings-nav-tts");
+  await app.press("id:settings-tts-open-azure");
+  await app.waitUntil(() => app.enabled("id:settings-tts-preview"));
+  expect(app.requests()).toHaveLength(0);
+  await app.press("id:settings-tts-preview");
+  await app.waitFor("text:Stop");
+  expect(app.requests()).toHaveLength(1);
+  const request = app.requests()[0]!;
+  expect(request.method).toBe("POST");
+  expect(request.url).toBe(azureUrl);
+  expect(request.headers["ocp-apim-subscription-key"] ?? request.headers["Ocp-Apim-Subscription-Key"]).toBe(
+    "azure-key",
+  );
+  expect(request.body).toContain(TTS_SAMPLE_TEXT);
+  expect(request.body).toContain("en-US-JennyNeural");
+  expect(app.requests().some((item) => String(item.url).includes("texttospeech"))).toBe(false);
+  expect(app.audio().some((call) => call.command === "open" && call.src.includes("tts-playback"))).toBe(
+    true,
+  );
+  const saved = JSON.parse(app.storage()[TTS_STORAGE_KEY]!) as {
+    googleCloud: { enabled: boolean };
+    azure: { enabled: boolean };
+  };
+  expect(saved.googleCloud.enabled).toBe(true);
+  expect(saved.azure.enabled).toBe(false);
+});
+
+test("tts preview: Azure auth and rate limits open no player", async () => {
+  const azureUrl = "https://eastus.tts.speech.microsoft.com/cognitiveservices/v1";
+  const storage = {
+    "settings.language": "en",
+    [TTS_STORAGE_KEY]: JSON.stringify({
+      version: 1,
+      googleCloud: { enabled: true, credentialRef: "google-ref" },
+      azure: { enabled: false, credentialRef: "azure-ref", region: "eastus" },
+    }),
+    [ttsCredentialStorageKey("google-ref")]: JSON.stringify({ apiKey: "google-key" }),
+    [ttsCredentialStorageKey("azure-ref")]: JSON.stringify({ apiKey: "azure-key" }),
+  };
+  const auth = await open(APP_ENTRY, {
+    ...viewport,
+    storage,
+    network: {
+      ["POST " + azureUrl]: { status: 401, body: "provider secret text" },
+    },
+  });
+  await auth.press("id:nav-settings");
+  await auth.press("id:settings-nav-tts");
+  await auth.press("id:settings-tts-open-azure");
+  await auth.waitUntil(() => auth.enabled("id:settings-tts-preview"));
+  await auth.type("id:settings-tts-region", "2");
+  expect(auth.enabled("id:settings-tts-preview")).toBe(false);
+  await auth.hover("id:settings-tts-preview");
+  await auth.waitUntil(() =>
+    auth.texts().includes("Save or clear the region before playing the sample."),
+  );
+  await auth.clear("id:settings-tts-region");
+  await auth.type("id:settings-tts-region", "eastus");
+  await auth.waitUntil(() => auth.enabled("id:settings-tts-preview"));
+  await auth.press("id:settings-tts-preview");
+  await auth.waitFor("id:settings-tts-preview-error");
+  expect(auth.texts()).toContain("Check the Speech resource key and region.");
+  expect(auth.texts()).not.toContain("provider secret text");
+  expect(auth.audio()).toEqual([]);
+  expect(auth.requests().some((item) => String(item.url).includes("texttospeech"))).toBe(false);
+
+  const limited = await open(APP_ENTRY, {
+    ...viewport,
+    storage,
+    network: {
+      ["POST " + azureUrl]: { status: 429, body: "quota exceeded secret" },
+    },
+  });
+  await limited.press("id:nav-settings");
+  await limited.press("id:settings-nav-tts");
+  await limited.press("id:settings-tts-open-azure");
+  await limited.waitUntil(() => limited.enabled("id:settings-tts-preview"));
+  await limited.press("id:settings-tts-preview");
+  await limited.waitFor("id:settings-tts-preview-error");
+  expect(limited.texts()).toContain("Azure is limiting requests. Try again later.");
+  expect(limited.texts().join(" ")).not.toMatch(/allowance|quota/i);
+  expect(limited.texts()).not.toContain("quota exceeded secret");
+  expect(limited.audio()).toEqual([]);
+
+  const loading = await open(APP_ENTRY, {
+    ...viewport,
+    storage,
+    network: {
+      ["POST " + azureUrl]: { status: 200, delay: 400, body: "ID3late" },
+    },
+  });
+  await loading.press("id:nav-settings");
+  await loading.press("id:settings-nav-tts");
+  await loading.press("id:settings-tts-open-azure");
+  await loading.waitUntil(() => loading.enabled("id:settings-tts-preview"));
+  await loading.press("id:settings-tts-preview");
+  await loading.waitFor("text:Cancel");
+  await loading.press("id:settings-tts-breadcrumb-root");
+  await loading.waitFor("id:settings-tts-card");
+  await loading.wait(500);
+  expect(loading.audio().some((call) => call.command === "open")).toBe(false);
+  expect(loading.texts()).not.toContain("Could not play the sample. Try again.");
+  expect(loading.texts()).not.toContain("Check the Speech resource key and region.");
+});

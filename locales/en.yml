@@ -152,10 +152,13 @@ settings:
     stop: Stop
     previewUnavailable: Playback is unavailable on this device.
     previewUnsaved: Save or clear the API key before playing the sample.
+    previewUnsavedRegion: Save or clear the region before playing the sample.
     previewNeedsKey: Save an API key before playing the sample.
     failure:
       auth: Check the API key, Cloud Text-to-Speech access, and project billing.
+      azureAuth: Check the Speech resource key and region.
       quota: Google Cloud Text-to-Speech is rate limited. Try again.
+      azureRateLimited: Azure is limiting requests. Try again later.
       playback: Could not play the sample. Try again.
     error:
       storageReadFailed: Could not read the saved text-to-speech settings.

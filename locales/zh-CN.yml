@@ -152,10 +152,13 @@ settings:
     stop: 停止
     previewUnavailable: 此设备无法播放音频。
     previewUnsaved: 请先保存或清除 API Key，再播放示例。
+    previewUnsavedRegion: 播放示例前请先保存或清除区域。
     previewNeedsKey: 请先保存 API Key，再播放示例。
     failure:
       auth: 请检查 API Key、Cloud Text-to-Speech 权限和项目结算。
+      azureAuth: 请检查语音资源密钥和区域。
       quota: Google Cloud Text-to-Speech 已达到配额或速率限制。请重试。
+      azureRateLimited: Azure 正在限制请求。请稍后再试。
       playback: 无法播放示例。请重试。
     error:
       storageReadFailed: 无法读取已保存的语音合成设置。
