@@ -6,6 +6,8 @@ import { loadSplitRailWidths } from "./components/layout/split-rail";
 import { languageDetectionStore } from "./features/language-detection/settings";
 import { loadModelsState } from "./features/models/store";
 import { ocrSettingsStore } from "./features/ocr/settings";
+import { cleanupTtsPlaybackFiles } from "./features/tts/playback";
+import { ttsSettingsStore } from "./features/tts/settings";
 import { loadSkippedNoticeDismissal } from "./features/presets/skipped-notice";
 import { presetsStore } from "./features/presets/store";
 import { loadQuickTranslatePreferences } from "./features/quick-translate/preferences";
@@ -18,6 +20,11 @@ import { loadTransparency } from "./features/settings/transparency";
 async function startApp() {
   initializeAiModules();
   try {
+    try {
+      await cleanupTtsPlaybackFiles();
+    } catch {
+      // Best-effort. A missing data directory must not keep the shell from mounting.
+    }
     await Promise.all([
       loadAppearance(),
       loadLanguage(),
@@ -30,6 +37,7 @@ async function startApp() {
       loadSkippedNoticeDismissal(),
       languageDetectionStore.load(),
       ocrSettingsStore.load(),
+      ttsSettingsStore.load(),
       loadSplitRailWidths(),
     ]);
     mount(AppShell);

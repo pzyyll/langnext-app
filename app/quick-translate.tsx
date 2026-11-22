@@ -312,6 +312,7 @@ function QuickTranslateWindowBody(props: { controller: QuickTranslateController 
           <QuickTranslatePopup
             session={session}
             ocrState={props.controller.ocrState}
+            playbackAllowed={() => props.controller.attachedWindow()?.state()?.visible === true}
             onAttachSourceInput={(node) => props.controller.attachSourceInput(node)}
           />
         </View>

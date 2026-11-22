@@ -8,6 +8,8 @@ import { getLanguageLabel, getTargetLanguageLabel } from "../presets/languages";
 import { deepLCredentialStorageKey, PRESETS_STORAGE_KEY } from "../presets/store";
 import type { TranslationPreset } from "../presets/types";
 import { QUICK_TRANSLATE_PREFERENCES_KEY } from "./preferences";
+import { GOOGLE_CLOUD_TTS_URL } from "../tts/google-cloud";
+import { TTS_STORAGE_KEY, ttsCredentialStorageKey } from "../tts/settings";
 
 initializeAiModules();
 
@@ -250,6 +252,36 @@ test("quick popup: shows localized tooltips for icon-only toolbar and card actio
   await app.hover("id:quick-translate-retry");
   await app.hover("id:quick-translate-copy");
   await app.waitFor(`text:${t("quickTranslate.copied")}`);
+});
+
+test("quick popup: header language capsules show their full label in a hover tooltip", async () => {
+  const app = await open(POPUP_HARNESS, {
+    ...viewport,
+    storage: seedWithPresets([makePreset()]),
+  });
+
+  await app.waitFor("id:quick-translate-language-bar");
+  await app.hover("id:quick-translate-source-language");
+  await app.waitFor(
+    `id:quick-translate-source-language-label-tooltip >> text:${getLanguageLabel("en")}`,
+  );
+  await app.hover("id:quick-translate-target-language");
+  await app.waitFor(
+    `id:quick-translate-target-language-label-tooltip >> text:${getTargetLanguageLabel("fr")}`,
+  );
+
+  // Leaving the capsule takes the tooltip away.
+  await app.hover("id:harness-toggle-auto");
+  await app.waitUntil(() => !app.shows("id:quick-translate-target-language-label-tooltip"));
+
+  // The keyboard focus never opens it: closing the list with Escape brings the focus back to
+  // the trigger without arming a tooltip that takes the Escape meant for the window.
+  await app.press("id:quick-translate-target-language");
+  await app.waitFor(`role:option[${getLanguageLabel("de")}]`);
+  await app.keyboard.press("escape");
+  await app.waitUntil(() => !app.shows(`role:option[${getLanguageLabel("de")}]`));
+  expect(app.shows("id:quick-translate-target-language-label-tooltip")).toBe(false);
+  expect(app.shows("id:quick-translate-target-language >> text:French")).toBe(true);
 });
 
 test("quick popup: ignores Enter submission while an IME composition is active", async () => {
@@ -1203,6 +1235,43 @@ test("language resolution: one detection request serves both expanded cards", as
   expect(app.texts().some((text) => text.startsWith("calls=2|"))).toBe(true);
 });
 
+test("language resolution: the source language list names the detected language on its automatic item", async () => {
+  const app = await open(POPUP_HARNESS, {
+    ...viewport,
+    storage: seedAutoPair([false], "language-resolution"),
+    network: {
+      [TRANSLATE_URL]: { status: 200, body: { choices: [{ message: { content: "译文" } }] } },
+    },
+  });
+
+  await app.waitFor("id:quick-translate-source");
+  await app.type("id:quick-translate-source", "Bonjour");
+  await app.keyboard.press("enter");
+  await app.waitUntil(() => app.texts().some((text) => text.includes("detects=1|")));
+
+  // The trigger reports progress; the list keeps naming the choice, not the progress.
+  expect(
+    app.shows(
+      `id:quick-translate-source-language >> text:${t("quickTranslate.detectingLanguage")}`,
+    ),
+  ).toBe(true);
+  await app.press("id:quick-translate-source-language");
+  await app.waitFor(`role:option[${t("quickTranslate.autoDetect")}]`);
+  await app.press(`role:option[${t("quickTranslate.autoDetect")}]`);
+  await app.waitUntil(() => !app.shows(`role:option[${t("quickTranslate.autoDetect")}]`));
+
+  await app.press("id:harness-resolve-language-fr");
+  const detected = t("quickTranslate.autoDetectDetected", { language: getLanguageLabel("fr") });
+  await app.waitUntil(() => app.shows(`id:quick-translate-source-language >> text:${detected}`));
+
+  await app.press("id:quick-translate-source-language");
+  await app.waitFor(`role:option[${detected}]`);
+  expect(app.shows(`role:option[${t("quickTranslate.autoDetect")}]`)).toBe(false);
+  await app.press(`role:option[${detected}]`);
+  await app.waitUntil(() => !app.shows(`role:option[${detected}]`));
+  expect(app.shows(`id:quick-translate-source-language >> text:${detected}`)).toBe(true);
+});
+
 test("language resolution: the popup detection uses the saved detector endpoint", async () => {
   const app = await open(POPUP_HARNESS, {
     ...viewport,
@@ -1795,4 +1864,211 @@ test("quick popup: swap button swaps explicit or auto-detected languages and ign
 
   await app.press("id:quick-translate-swap-languages");
   expect(showsLanguagePair(app, "en", "fr")).toBe(true);
+});
+
+const QUICK_TTS_URL = "POST " + GOOGLE_CLOUD_TTS_URL;
+const QUICK_TTS_MP3 = {
+  audioContent: Buffer.from(Uint8Array.from([0xff, 0xfb, 0x90, 0x64, 0x00])).toString("base64"),
+};
+
+function enabledTtsStorage(enabled = true): Record<string, string> {
+  return {
+    [TTS_STORAGE_KEY]: JSON.stringify({
+      version: 1,
+      googleCloud: { enabled, credentialRef: "tts-ref" },
+    }),
+    [ttsCredentialStorageKey("tts-ref")]: JSON.stringify({ apiKey: "tts-key" }),
+  };
+}
+
+function ttsVoice(requestBody: string | null | undefined): { languageCode: string; name: string } {
+  return JSON.parse(requestBody ?? "").voice;
+}
+
+test("quick tts: speaks the full source before translation and one selected result", async () => {
+  const source = await open(POPUP_HARNESS, {
+    ...viewport,
+    storage: seedWithPresets([makePreset()], enabledTtsStorage()),
+    network: { [QUICK_TTS_URL]: { status: 200, body: QUICK_TTS_MP3 } },
+  });
+  await source.waitFor("id:quick-translate-source");
+  await source.type("id:quick-translate-source", "Hello");
+  await source.keyboard.press("shift+enter");
+  await source.type("id:quick-translate-source", "world");
+  await source.waitUntil(() => source.enabled("id:quick-translate-speak-source"));
+  await source.press("id:quick-translate-speak-source");
+  await source.waitUntil(() => source.requests().length === 1);
+  const spoken = source.requests()[0]!;
+  expect(spoken.url).toBe(GOOGLE_CLOUD_TTS_URL);
+  expect(JSON.parse(spoken.body ?? "").input.text).toBe("Hello\nworld");
+  expect(ttsVoice(spoken.body)).toEqual({ languageCode: "en-US", name: "en-US-Standard-C" });
+  expect(spoken.headers["x-goog-api-key"] ?? spoken.headers["X-Goog-Api-Key"]).toBe("tts-key");
+
+  const result = await open(POPUP_HARNESS, {
+    ...viewport,
+    storage: seedWithPresets([makePreset()], enabledTtsStorage()),
+    network: {
+      "POST https://api.openai.com/v1/chat/completions": {
+        status: 200,
+        body: { choices: [{ message: { content: "Bonjour" } }] },
+      },
+      [QUICK_TTS_URL]: { status: 200, body: QUICK_TTS_MP3 },
+    },
+  });
+  await result.waitFor("id:quick-translate-source");
+  await result.type("id:quick-translate-source", "Hello");
+  await result.keyboard.press("enter");
+  await result.waitFor("id:quick-translate-card-card-1 >> id:quick-translate-speak-result");
+  expect(result.requests().some((request) => request.url === GOOGLE_CLOUD_TTS_URL)).toBe(false);
+  await result.press("id:quick-translate-card-card-1 >> id:quick-translate-speak-result");
+  await result.waitUntil(() =>
+    result.requests().some((request) => request.url === GOOGLE_CLOUD_TTS_URL),
+  );
+  const speech = result.requests().filter((request) => request.url === GOOGLE_CLOUD_TTS_URL);
+  expect(speech).toHaveLength(1);
+  expect(JSON.parse(speech[0]!.body ?? "").input.text).toBe("Bonjour");
+  expect(ttsVoice(speech[0]!.body)).toEqual({ languageCode: "fr-FR", name: "fr-FR-Standard-F" });
+  expect(result.requests().some((request) => request.url.includes("chat/completions"))).toBe(true);
+});
+
+test("quick tts: refuses a disabled channel, an unsupported language, and unresolved Auto", async () => {
+  const off = await open(POPUP_HARNESS, {
+    ...viewport,
+    storage: seedWithPresets([makePreset()], enabledTtsStorage(false)),
+    network: { [QUICK_TTS_URL]: { status: 200, body: QUICK_TTS_MP3 } },
+  });
+  await off.waitFor("id:quick-translate-source");
+  await off.type("id:quick-translate-source", "Hello");
+  expect(off.enabled("id:quick-translate-speak-source")).toBe(false);
+  expect(off.requests()).toHaveLength(0);
+
+  const unsupported = await open(POPUP_HARNESS, {
+    ...viewport,
+    storage: seedWithPresets([makePreset()], {
+      ...enabledTtsStorage(),
+      [QUICK_TRANSLATE_PREFERENCES_KEY]: JSON.stringify({
+        version: 1,
+        doubleCopyEnabled: false,
+        autoTranslate: false,
+        sourceLanguage: "hr",
+        targetLanguage: "en",
+        cards: [],
+      }),
+    }),
+    network: { [QUICK_TTS_URL]: { status: 200, body: QUICK_TTS_MP3 } },
+  });
+  await unsupported.waitFor("id:quick-translate-source");
+  await unsupported.type("id:quick-translate-source", "Bok");
+  await unsupported.press("id:quick-translate-speak-source");
+  await unsupported.waitFor("id:quick-translate-speak-source-error");
+  expect(unsupported.texts()).toContain(t("quickTranslate.speakUnsupported"));
+  expect(unsupported.requests()).toHaveLength(0);
+
+  const unresolved = await open(POPUP_HARNESS, {
+    ...viewport,
+    storage: seedWithPresets([makePreset()], {
+      ...enabledTtsStorage(),
+      [QUICK_TRANSLATE_PREFERENCES_KEY]: JSON.stringify({
+        version: 1,
+        doubleCopyEnabled: false,
+        autoTranslate: false,
+        sourceLanguage: "auto",
+        targetLanguage: "en",
+        cards: [],
+      }),
+    }),
+    network: { [QUICK_TTS_URL]: { status: 200, body: QUICK_TTS_MP3 } },
+  });
+  await unresolved.waitFor("id:quick-translate-source");
+  await unresolved.type("id:quick-translate-source", "Bonjour");
+  await unresolved.press("id:quick-translate-speak-source");
+  await unresolved.waitFor("id:quick-translate-speak-source-error");
+  expect(unresolved.texts()).toContain(t("quickTranslate.speakChooseSource"));
+  expect(unresolved.requests()).toHaveLength(0);
+});
+
+test("quick tts: resolved Auto uses the detected source and the card's stored target", async () => {
+  const app = await open(POPUP_HARNESS, {
+    ...viewport,
+    storage: {
+      ...seedAutoPair([false], "ocr-status"),
+      ...enabledTtsStorage(),
+    },
+    network: {
+      [TRANSLATE_URL]: {
+        status: 200,
+        body: { choices: [{ message: { content: "\u8bd1\u6587" } }] },
+      },
+      [QUICK_TTS_URL]: { status: 200, body: QUICK_TTS_MP3 },
+    },
+  });
+  await app.waitFor("id:quick-translate-source");
+  await app.type("id:quick-translate-source", "Bonjour");
+  await app.press("id:quick-translate-speak-source");
+  await app.waitFor("id:quick-translate-speak-source-error");
+  expect(app.texts()).toContain(t("quickTranslate.speakTranslateFirst"));
+  expect(app.requests().some((request) => request.url === GOOGLE_CLOUD_TTS_URL)).toBe(false);
+
+  await app.keyboard.press("enter");
+  await app.press("id:harness-resolve-language-fr");
+  await app.waitFor("id:quick-translate-card-card-1 >> id:quick-translate-speak-result");
+  expect(app.requests().some((request) => request.url === GOOGLE_CLOUD_TTS_URL)).toBe(false);
+
+  await app.press("id:quick-translate-card-card-1 >> id:quick-translate-speak-result");
+  await app.waitUntil(() => app.requests().some((request) => request.url === GOOGLE_CLOUD_TTS_URL));
+  const resultSpeech = app.requests().find((request) => request.url === GOOGLE_CLOUD_TTS_URL)!;
+  expect(JSON.parse(resultSpeech.body ?? "").input.text).toBe("\u8bd1\u6587");
+  expect(ttsVoice(resultSpeech.body)).toEqual({
+    languageCode: "cmn-CN",
+    name: "cmn-CN-Standard-A",
+  });
+
+  await app.press("id:quick-translate-speak-source");
+  await app.waitUntil(
+    () => app.requests().filter((request) => request.url === GOOGLE_CLOUD_TTS_URL).length === 2,
+  );
+  const sourceSpeech = app.requests().filter((request) => request.url === GOOGLE_CLOUD_TTS_URL)[1]!;
+  expect(JSON.parse(sourceSpeech.body ?? "").input.text).toBe("Bonjour");
+  expect(ttsVoice(sourceSpeech.body)).toEqual({ languageCode: "fr-FR", name: "fr-FR-Standard-F" });
+
+  await app.press("id:quick-translate-target-language");
+  await app.waitFor(`role:option[${getLanguageLabel("en")}]`);
+  await app.press(`role:option[${getLanguageLabel("en")}]`);
+  expect(app.requests().filter((request) => request.url === GOOGLE_CLOUD_TTS_URL)).toHaveLength(2);
+});
+
+test("quick tts: a later speaker replaces a delayed request, and Stop closes playback", async () => {
+  const app = await open(POPUP_HARNESS, {
+    ...viewport,
+    storage: seedWithPresets([makePreset()], enabledTtsStorage()),
+    network: {
+      "POST https://api.openai.com/v1/chat/completions": {
+        status: 200,
+        body: { choices: [{ message: { content: "Bonjour" } }] },
+      },
+      [QUICK_TTS_URL]: { status: 200, delay: 400, body: QUICK_TTS_MP3 },
+    },
+  });
+  await app.waitFor("id:quick-translate-source");
+  await app.type("id:quick-translate-source", "Hello");
+  await app.keyboard.press("enter");
+  await app.waitFor("id:quick-translate-card-card-1 >> id:quick-translate-speak-result");
+  await app.press("id:quick-translate-speak-source");
+  await app.waitFor("role:button[Cancel]");
+  await app.press("id:quick-translate-card-card-1 >> id:quick-translate-speak-result");
+  await app.waitFor("id:quick-translate-card-card-1 >> role:button[Stop]");
+  await app.wait(500);
+  const opens = app.audio().filter((call) => call.command === "open");
+  expect(opens).toHaveLength(1);
+  const speech = app.requests().filter((request) => request.url === GOOGLE_CLOUD_TTS_URL);
+  expect(speech.some((request) => JSON.parse(request.body ?? "").input.text === "Bonjour")).toBe(
+    true,
+  );
+  expect(app.texts()).not.toContain(t("quickTranslate.speakPlayback"));
+
+  const beforeStop = app.requests().length;
+  await app.press("id:quick-translate-card-card-1 >> id:quick-translate-speak-result");
+  await app.waitFor("id:quick-translate-card-card-1 >> role:button[Read aloud]");
+  expect(app.requests()).toHaveLength(beforeStop);
+  expect(app.audio().some((call) => call.command === "close")).toBe(true);
 });

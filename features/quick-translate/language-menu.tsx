@@ -16,10 +16,18 @@ import type { SourceDetectionState } from "./session";
 const SOURCE_LANGUAGE_OPTIONS: readonly SourceLanguageId[] = [AUTO_LANGUAGE, ...LANGUAGE_IDS];
 const TARGET_LANGUAGE_OPTIONS: readonly TargetLanguageId[] = [AUTO_LANGUAGE, ...LANGUAGE_IDS];
 
-function buildSourceItems(): SelectItem[] {
+/** The automatic source entry, named after the language one action auto-detected. */
+function buildAutoSourceLabel(detection: SourceDetectionState): string {
+  if (detection.status !== "detected") return t("quickTranslate.autoDetect");
+  return t("quickTranslate.autoDetectDetected", {
+    language: getLanguageLabel(detection.language),
+  });
+}
+
+function buildSourceItems(autoLabel: string): SelectItem[] {
   return SOURCE_LANGUAGE_OPTIONS.map((id) => ({
     value: id,
-    title: id === AUTO_LANGUAGE ? t("quickTranslate.autoDetect") : getLanguageLabel(id),
+    title: id === AUTO_LANGUAGE ? autoLabel : getLanguageLabel(id),
   }));
 }
 
@@ -45,9 +53,10 @@ export interface QuickTranslateLanguageBarProps {
 
 /** Header language capsule with inline source/target Select pickers and a swap action. */
 export function QuickTranslateLanguageBar(props: QuickTranslateLanguageBarProps) {
-  const sourceItems = () => buildSourceItems();
+  const sourceItems = () => buildSourceItems(buildAutoSourceLabel(props.sourceDetection));
   const targetItems = () => buildTargetItems();
 
+  // While detection runs the trigger reports progress; the list keeps naming the choice.
   const sourceDisplayLabel = () => {
     if (props.sourceLanguage !== AUTO_LANGUAGE) {
       return getLanguageLabel(props.sourceLanguage);
@@ -55,12 +64,7 @@ export function QuickTranslateLanguageBar(props: QuickTranslateLanguageBarProps)
     if (props.sourceDetection.status === "detecting") {
       return t("quickTranslate.detectingLanguage");
     }
-    if (props.sourceDetection.status === "detected") {
-      return t("quickTranslate.autoDetectDetected", {
-        language: getLanguageLabel(props.sourceDetection.language),
-      });
-    }
-    return t("quickTranslate.autoDetect");
+    return buildAutoSourceLabel(props.sourceDetection);
   };
 
   return (
@@ -71,6 +75,7 @@ export function QuickTranslateLanguageBar(props: QuickTranslateLanguageBarProps)
       <Select
         testID="quick-translate-source-language"
         variant="inline"
+        labelTooltip
         align={props.align ?? "start"}
         class="min-w-0 shrink"
         items={sourceItems()}
@@ -98,6 +103,7 @@ export function QuickTranslateLanguageBar(props: QuickTranslateLanguageBarProps)
       <Select
         testID="quick-translate-target-language"
         variant="inline"
+        labelTooltip
         align={props.align ?? "start"}
         class="min-w-0 shrink"
         items={targetItems()}

@@ -19,10 +19,12 @@ import editIcon from "../../assets/icons/edit.svg";
 import englishIcon from "../../assets/icons/icon-park-outline--english.svg";
 import filePdfIcon from "../../assets/icons/file-pdf.svg";
 import fileTextIcon from "../../assets/icons/file-text.svg";
+import gripVerticalIcon from "../../assets/icons/grip-vertical.svg";
 import infoIcon from "../../assets/icons/icon-park-outline--info.svg";
 import lightningSolidIcon from "../../assets/icons/lightning-solid.svg";
 import lightningIcon from "../../assets/icons/lightning.svg";
 import minusIcon from "../../assets/icons/minus.svg";
+import pauseIcon from "../../assets/icons/icon-park-outline--pause.svg";
 import picIcon from "../../assets/icons/pic.svg";
 import pinSolidIcon from "../../assets/icons/pin-solid.svg";
 import pinIcon from "../../assets/icons/pin.svg";
@@ -55,10 +57,12 @@ const ICONS = {
   english: englishIcon,
   "file-pdf": filePdfIcon,
   "file-text": fileTextIcon,
+  "grip-vertical": gripVerticalIcon,
   info: infoIcon,
   lightning: lightningIcon,
   "lightning-solid": lightningSolidIcon,
   minus: minusIcon,
+  pause: pauseIcon,
   pic: picIcon,
   pin: pinIcon,
   "pin-solid": pinSolidIcon,

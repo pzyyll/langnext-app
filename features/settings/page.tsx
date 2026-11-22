@@ -16,11 +16,18 @@ import { language, languageError, selectLanguage, type LanguagePreference } from
 import { LanguageDetectionSection } from "./language-detection-section";
 import { OcrSection } from "./ocr-section";
 import { ShortcutsSection } from "./shortcuts-section";
+import { TtsSection, type TtsChannelId } from "./tts-section";
 import { selectSilentLaunch, silentLaunch, silentLaunchError } from "./silent-launch";
 import type { TranslationShortcutId, TranslationShortcutSetting } from "./shortcuts";
 import { selectTransparency, transparency, transparencyError } from "./transparency";
 
-export type SettingsSection = "general" | "appearance" | "shortcuts" | "language-detection" | "ocr";
+export type SettingsSection =
+  | "general"
+  | "appearance"
+  | "shortcuts"
+  | "language-detection"
+  | "ocr"
+  | "tts";
 
 interface SettingsSectionEntry {
   id: SettingsSection;
@@ -50,6 +57,7 @@ const SETTINGS_GROUPS: readonly SettingsGroup[] = [
     sections: [
       { id: "language-detection", labelKey: "settings.sections.languageDetection" },
       { id: "ocr", labelKey: "settings.sections.ocr" },
+      { id: "tts", labelKey: "settings.sections.tts" },
     ],
   },
 ];
@@ -195,6 +203,7 @@ export function SettingsPage(props: {
   const activeSectionLabelKey = () => sectionLabelKey(selectedSection());
   const selectedOcrChannel = signal<OcrServiceKind | null>(null);
   const selectedDetectionChannel = signal<LanguageDetectorKind | null>(null);
+  const selectedTtsChannel = signal<TtsChannelId | null>(null);
 
   const headerBreadcrumb = (): HeaderBreadcrumb | null => {
     const ocrChannel = selectedOcrChannel();
@@ -230,6 +239,24 @@ export function SettingsPage(props: {
           {
             label: t(`settings.languageDetection.${detectionChannel}`),
             testID: "settings-detection-detail-title",
+          },
+        ],
+      };
+    }
+
+    if (selectedSection() === "tts" && selectedTtsChannel() !== null) {
+      return {
+        testID: "settings-tts-breadcrumb",
+        accessibilityLabel: t("settings.tts.breadcrumbLabel"),
+        items: [
+          {
+            label: t("settings.sections.tts"),
+            testID: "settings-tts-breadcrumb-root",
+            onPress: () => selectedTtsChannel.set(null),
+          },
+          {
+            label: t("settings.tts.channel"),
+            testID: "settings-tts-detail-title",
           },
         ],
       };
@@ -290,6 +317,7 @@ export function SettingsPage(props: {
                                 selectedSection.set(item().id);
                                 selectedOcrChannel.set(null);
                                 selectedDetectionChannel.set(null);
+                                selectedTtsChannel.set(null);
                               }}
                               class="w-full"
                             />
@@ -387,6 +415,13 @@ export function SettingsPage(props: {
                   selectedChannel={selectedOcrChannel()}
                   onSelectChannel={(channel) => selectedOcrChannel.set(channel)}
                   onManageModels={props.onNavigateToModels}
+                />
+              </If>
+              <If when={selectedSection() === "tts"}>
+                <TtsSection
+                  compact={compact()}
+                  selectedChannel={selectedTtsChannel()}
+                  onSelectChannel={(channel) => selectedTtsChannel.set(channel)}
                 />
               </If>
             </View>

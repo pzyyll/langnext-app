@@ -91,9 +91,10 @@ export interface LanguageDetectionSettingsStore {
   loadError(): LanguageDetectionLoadError | null;
   saveAiModel(modelId: string): Promise<LanguageDetectionSaveResult>;
   setEnabled(kind: LanguageDetectorKind, enabled: boolean): Promise<LanguageDetectionActionResult>;
-  moveDetector(
+  /** Moves one detector to a new top-to-bottom priority position, clamped to the list. */
+  moveDetectorTo(
     kind: LanguageDetectorKind,
-    direction: "up" | "down",
+    targetIndex: number,
   ): Promise<LanguageDetectionActionResult>;
   savePreferences(
     preferences: LanguageDetectionPreferences,
@@ -361,17 +362,17 @@ export function createLanguageDetectionSettingsStore(
           preferredTranslationLanguage: current.preferredTranslationLanguage,
         });
       }),
-    moveDetector: async (kind, direction) =>
+    moveDetectorTo: async (kind, targetIndex) =>
       enqueueWrite(async () => {
         const current = settingsSignal();
         const index = current.order.indexOf(kind);
         if (index === -1) return { ok: true };
-        const targetIndex = direction === "up" ? index - 1 : index + 1;
-        if (targetIndex < 0 || targetIndex >= current.order.length) return { ok: true };
+        const requested = Number.isFinite(targetIndex) ? Math.trunc(targetIndex) : index;
+        const target = Math.min(Math.max(requested, 0), current.order.length - 1);
+        if (target === index) return { ok: true };
         const nextOrder = [...current.order];
-        const moving = nextOrder[index]!;
-        nextOrder[index] = nextOrder[targetIndex]!;
-        nextOrder[targetIndex] = moving;
+        nextOrder.splice(index, 1);
+        nextOrder.splice(target, 0, kind);
         return persistSnapshot({
           order: nextOrder,
           enabled: { ...current.enabled },

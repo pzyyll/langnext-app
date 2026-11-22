@@ -1,9 +1,21 @@
-import { createMotion, effect, signal, Text, View, type ViewRef } from "nsh";
+import {
+  createAnimatedValue,
+  createMotion,
+  effect,
+  reduceMotion,
+  signal,
+  Text,
+  View,
+  type AnimatedValue,
+  type KeyEvent,
+  type PanEvent,
+  type ViewRef,
+} from "nsh";
 import { t } from "nsh/i18n";
 import { motion } from "../../components/motion";
 import { Avatar } from "../../components/ui/avatar";
 import { Badge } from "../../components/ui/badge";
-import { Button } from "../../components/ui/button";
+import { Button, KeyboardButton } from "../../components/ui/button";
 import { Card, SectionHeading } from "../../components/ui/card";
 import { Icon } from "../../components/ui/icon";
 import { Select, type SelectItem } from "../../components/ui/select";
@@ -11,6 +23,7 @@ import { Switch } from "../../components/ui/switch";
 import { toast } from "../../components/ui/toast";
 import { FormField } from "../../modules/ai/ui/form-field";
 import {
+  LANGUAGE_DETECTOR_KINDS,
   languageDetectionStore,
   type LanguageDetectionPreferences,
   type LanguageDetectorKind,
@@ -23,6 +36,9 @@ import {
   type LanguageId,
 } from "../presets/languages";
 import { readAvailableModelChoices, resolveModelBindingInfo } from "../presets/model-choices";
+
+/** Time a reordered row takes to settle into its new slot. */
+const REORDER_SETTLE_MS = 180;
 
 /** Select value for an unset language preference (`null` in storage). */
 const UNSET_LANGUAGE_CHOICE = "__unset__";
@@ -119,20 +135,31 @@ function DetectionChannelIdentity(props: { kind: LanguageDetectorKind }) {
 interface DetectionChannelListProps {
   compact: boolean;
   onOpenChannel: (kind: LanguageDetectorKind) => void;
-  onRowRef: (node: ViewRef) => void;
+  onRowRef: (kind: LanguageDetectorKind, node: ViewRef) => void;
+  onGripRef: (kind: LanguageDetectorKind, node: ViewRef) => void;
+  onFocusGrip: (kind: LanguageDetectorKind) => void;
 }
 
 function DetectionChannelList(props: DetectionChannelListProps) {
   const entrance = createMotion({ enter: motion.pageEnter });
   const mutating = signal(false);
   const listError = signal<string | null>(null);
+  const dragging = signal<LanguageDetectorKind | null>(null);
+  const animating = signal(false);
+  // Per-detector drag offsets drive the rows natively; they return to 0 at rest.
+  const offsets: Record<LanguageDetectorKind, AnimatedValue> = {
+    ai: createAnimatedValue(0),
+    google: createAnimatedValue(0),
+  };
+  const rowSlots: Partial<Record<LanguageDetectorKind, { top: number; height: number }>> = {};
 
   const order = () => languageDetectionStore.detectorOrder();
+  const name = (kind: LanguageDetectorKind) => t(`settings.languageDetection.${kind}`);
 
   const rowLabel = (kind: LanguageDetectorKind): string => {
     const role = detectorRole(kind);
     return t("settings.languageDetection.itemLabel", {
-      name: t(`settings.languageDetection.${kind}`),
+      name: name(kind),
       status:
         role !== null
           ? t(`settings.languageDetection.role.${role}`)
@@ -154,16 +181,115 @@ function DetectionChannelList(props: DetectionChannelListProps) {
     }
   };
 
-  const handleMove = async (kind: LanguageDetectorKind, direction: "up" | "down") => {
-    if (mutating()) return;
+  const animateOffset = (kind: LanguageDetectorKind, to: number): Promise<unknown> => {
+    if (reduceMotion()) {
+      offsets[kind].set(to);
+      return Promise.resolve();
+    }
+    return offsets[kind].timing(to, { duration: REORDER_SETTLE_MS, easing: "easeOut" });
+  };
+
+  const resetOffsets = () => {
+    for (const kind of LANGUAGE_DETECTOR_KINDS) offsets[kind].set(0);
+  };
+
+  const handleDragStart = (kind: LanguageDetectorKind) => {
+    if (mutating() || animating() || dragging() !== null) return;
+    listError.set(null);
+    dragging.set(kind);
+  };
+
+  /** The detector whose measured slot center is nearest the dragged row's center. */
+  const nearestDetector = (kind: LanguageDetectorKind, offsetY: number): number | null => {
+    const slot = rowSlots[kind];
+    if (slot === undefined) return null;
+    const center = slot.top + slot.height / 2 + offsetY;
+    let target: number | null = null;
+    let nearest = Number.POSITIVE_INFINITY;
+    order().forEach((other, position) => {
+      const otherSlot = rowSlots[other];
+      if (otherSlot === undefined) return;
+      const distance = Math.abs(otherSlot.top + otherSlot.height / 2 - center);
+      if (distance < nearest) {
+        nearest = distance;
+        target = position;
+      }
+    });
+    return target;
+  };
+
+  /** Slides every row into the slot the reordered list gives it, and returns that list. */
+  const settleIntoSlots = async (kind: LanguageDetectorKind, target: number) => {
+    const list = order();
+    const nextOrder = [...list];
+    nextOrder.splice(list.indexOf(kind), 1);
+    nextOrder.splice(target, 0, kind);
+    const moves: Promise<unknown>[] = [];
+    nextOrder.forEach((row, position) => {
+      const from = rowSlots[row];
+      const to = rowSlots[list[position]!];
+      if (from === undefined || to === undefined || from.top === to.top) return;
+      moves.push(animateOffset(row, to.top - from.top));
+    });
+    await Promise.all(moves);
+    return nextOrder;
+  };
+
+  const handleDragEnd = async (kind: LanguageDetectorKind, event: PanEvent) => {
+    if (dragging() !== kind) {
+      await animateOffset(kind, 0);
+      return;
+    }
+    animating.set(true);
+    try {
+      const index = order().indexOf(kind);
+      const target = nearestDetector(kind, event.value?.y ?? event.translation.y);
+      if (event.cancelled || index === -1 || target === null || target === index) {
+        await animateOffset(kind, 0);
+        return;
+      }
+      const nextOrder = await settleIntoSlots(kind, target);
+      const result = await languageDetectionStore.moveDetectorTo(kind, target);
+      if (result.ok) {
+        resetOffsets();
+        return;
+      }
+      await Promise.all(nextOrder.map((row) => animateOffset(row, 0)));
+      listError.set(result.message);
+    } finally {
+      dragging.set(null);
+      animating.set(false);
+    }
+  };
+
+  const handleMoveBy = async (kind: LanguageDetectorKind, delta: number, refocus: boolean) => {
+    if (mutating() || animating() || dragging() !== null) return;
+    const list = order();
+    const index = list.indexOf(kind);
+    const target = index + delta;
+    if (index === -1 || target < 0 || target >= list.length) return;
     listError.set(null);
     mutating.set(true);
     try {
-      const result = await languageDetectionStore.moveDetector(kind, direction);
-      if (!result.ok) listError.set(result.message);
+      const result = await languageDetectionStore.moveDetectorTo(kind, target);
+      if (!result.ok) {
+        listError.set(result.message);
+        return;
+      }
+      if (refocus) queueMicrotask(() => props.onFocusGrip(kind));
     } finally {
       mutating.set(false);
     }
+  };
+
+  const handleGripKey = (kind: LanguageDetectorKind, event: KeyEvent) => {
+    if (event.key === "ArrowUp") void handleMoveBy(kind, -1, true);
+    else if (event.key === "ArrowDown") void handleMoveBy(kind, 1, true);
+  };
+
+  const handleAccessibilityMove = (kind: LanguageDetectorKind, actionName: string) => {
+    if (actionName === "moveUp") void handleMoveBy(kind, -1, false);
+    else if (actionName === "moveDown") void handleMoveBy(kind, 1, false);
   };
 
   return (
@@ -181,7 +307,6 @@ function DetectionChannelList(props: DetectionChannelListProps) {
       <Card testID="settings-detection-card" class={props.compact ? "gap-1 p-2" : "gap-1 p-3"}>
         <Each of={order()} key={(kind) => kind}>
           {(kind, index) => {
-            const name = () => t(`settings.languageDetection.${kind()}`);
             const configured = () => isDetectorConfigured(kind());
             const enabled = () => languageDetectionStore.isEnabled(kind());
 
@@ -192,8 +317,20 @@ function DetectionChannelList(props: DetectionChannelListProps) {
                 </If>
                 <View
                   testID={`settings-detection-row-${kind()}`}
+                  pan={mutating() || animating() ? undefined : { y: offsets[kind()] }}
+                  onPanStart={() => handleDragStart(kind())}
+                  onPanEnd={(event) => void handleDragEnd(kind(), event)}
+                  onLayout={(event) => {
+                    rowSlots[kind()] = {
+                      top: event.bounds.origin.y,
+                      height: event.bounds.size.height,
+                    };
+                  }}
+                  style={{ translate: [0, offsets[kind()]] }}
                   class={`flex-row items-center gap-1.5 rounded-lg pr-2 ${motion.navigationFeedback} ${
-                    kind() === "ai" ? "hover:bg-accent/60 active:bg-accent" : ""
+                    dragging() === kind()
+                      ? "z-10 cursor-grabbing bg-card shadow-md"
+                      : "hover:bg-accent/60 active:bg-accent"
                   }`}
                 >
                   <If
@@ -206,7 +343,7 @@ function DetectionChannelList(props: DetectionChannelListProps) {
                   >
                     <Button
                       testID="settings-detection-channel-ai"
-                      ref={(node) => props.onRowRef(node)}
+                      ref={(node) => props.onRowRef(kind(), node)}
                       variant="ghost"
                       size="row"
                       accessibilityLabel={rowLabel(kind())}
@@ -220,32 +357,37 @@ function DetectionChannelList(props: DetectionChannelListProps) {
                     </Button>
                   </If>
 
-                  <View class="shrink-0 flex-row items-center gap-0.5">
-                    <Button
-                      testID={`settings-detection-move-up-${kind()}`}
-                      variant="ghost"
-                      size="icon-sm"
-                      tooltip={t("settings.languageDetection.moveUp", { name: name() })}
-                      accessibilityLabel={t("settings.languageDetection.moveUp", { name: name() })}
-                      disabled={mutating() || index() === 0}
-                      onPress={() => void handleMove(kind(), "up")}
-                    >
-                      <Icon name="arrow-up" tone="muted-foreground" class="size-3.5" />
-                    </Button>
-                    <Button
-                      testID={`settings-detection-move-down-${kind()}`}
-                      variant="ghost"
-                      size="icon-sm"
-                      tooltip={t("settings.languageDetection.moveDown", { name: name() })}
-                      accessibilityLabel={t("settings.languageDetection.moveDown", {
-                        name: name(),
-                      })}
-                      disabled={mutating() || index() === order().length - 1}
-                      onPress={() => void handleMove(kind(), "down")}
-                    >
-                      <Icon name="arrow-down" tone="muted-foreground" class="size-3.5" />
-                    </Button>
-                  </View>
+                  <KeyboardButton
+                    testID={`settings-detection-grip-${kind()}`}
+                    variant="ghost"
+                    size="icon-sm"
+                    focusable={true}
+                    tooltip={t("settings.languageDetection.reorder", { name: name(kind()) })}
+                    accessibilityLabel={t("settings.languageDetection.reorder", {
+                      name: name(kind()),
+                    })}
+                    accessibilityHint={t("settings.languageDetection.reorderHint")}
+                    accessibilityActions={[
+                      {
+                        name: "moveUp",
+                        label: t("settings.languageDetection.moveUp", { name: name(kind()) }),
+                      },
+                      {
+                        name: "moveDown",
+                        label: t("settings.languageDetection.moveDown", { name: name(kind()) }),
+                      },
+                    ]}
+                    onAccessibilityAction={(event) =>
+                      handleAccessibilityMove(kind(), event.actionName)
+                    }
+                    onPress={() => props.onFocusGrip(kind())}
+                    captureKeys={["arrowup", "arrowdown"]}
+                    onKeyDown={(event) => handleGripKey(kind(), event)}
+                    ref={(node) => props.onGripRef(kind(), node)}
+                    class="shrink-0 cursor-grab"
+                  >
+                    <Icon name="grip-vertical" tone="muted-foreground" class="size-4" />
+                  </KeyboardButton>
 
                   <Switch
                     testID={`settings-detection-toggle-${kind()}`}
@@ -253,7 +395,7 @@ function DetectionChannelList(props: DetectionChannelListProps) {
                     checked={enabled()}
                     disabled={mutating() || !configured()}
                     accessibilityLabel={t("settings.languageDetection.enableLabel", {
-                      name: name(),
+                      name: name(kind()),
                     })}
                     tooltip={
                       !configured()
@@ -268,9 +410,11 @@ function DetectionChannelList(props: DetectionChannelListProps) {
                       testID="settings-detection-open-ai"
                       variant="ghost"
                       size="icon-sm"
-                      tooltip={t("settings.languageDetection.configureLabel", { name: name() })}
+                      tooltip={t("settings.languageDetection.configureLabel", {
+                        name: name(kind()),
+                      })}
                       accessibilityLabel={t("settings.languageDetection.configureLabel", {
-                        name: name(),
+                        name: name(kind()),
                       })}
                       onPress={() => {
                         listError.set(null);
@@ -557,20 +701,23 @@ interface LanguageDetectionSectionProps {
 
 /** Settings section for prioritized detectors, their configuration pages, and language preferences. */
 export function LanguageDetectionSection(props: LanguageDetectionSectionProps) {
-  let rowRef: ViewRef | undefined;
-  let openedDetail = false;
+  const rowRefs: Partial<Record<LanguageDetectorKind, ViewRef>> = {};
+  const gripRefs: Partial<Record<LanguageDetectorKind, ViewRef>> = {};
+  let lastOpenedChannel: LanguageDetectorKind | null = null;
   let restoreFocus = false;
 
   effect(() => {
-    if (props.selectedChannel !== null) {
-      openedDetail = true;
+    const current = props.selectedChannel;
+    if (current !== null) {
+      lastOpenedChannel = current;
       restoreFocus = true;
       return;
     }
-    if (restoreFocus && openedDetail) {
+    if (restoreFocus && lastOpenedChannel !== null) {
       restoreFocus = false;
+      const channel = lastOpenedChannel;
       queueMicrotask(() => {
-        if (props.selectedChannel === null) rowRef?.focus();
+        if (props.selectedChannel === null) rowRefs[channel]?.focus();
       });
     }
   });
@@ -587,9 +734,13 @@ export function LanguageDetectionSection(props: LanguageDetectionSectionProps) {
       <DetectionChannelList
         compact={props.compact}
         onOpenChannel={(kind) => props.onSelectChannel(kind)}
-        onRowRef={(node) => {
-          rowRef = node;
+        onRowRef={(kind, node) => {
+          rowRefs[kind] = node;
         }}
+        onGripRef={(kind, node) => {
+          gripRefs[kind] = node;
+        }}
+        onFocusGrip={(kind) => gripRefs[kind]?.focus()}
       />
     </If>
   );

@@ -112,7 +112,8 @@ export interface OcrSettingsStore {
   loadError(): OcrLoadError | null;
   save(input: SaveOcrBindingInput): Promise<OcrSaveResult>;
   setEnabled(kind: OcrServiceKind, enabled: boolean): Promise<OcrActionResult>;
-  moveChannel(kind: OcrServiceKind, direction: "up" | "down"): Promise<OcrActionResult>;
+  /** Moves one channel to a new top-to-bottom priority position, clamped to the list. */
+  moveChannelTo(kind: OcrServiceKind, targetIndex: number): Promise<OcrActionResult>;
   /** Reads one stored pair. Loading the configuration does not call this. */
   readBaiduCredentials(credentialRef: string): Promise<BaiduCredentialPair | null>;
 }
@@ -484,17 +485,17 @@ export function createOcrSettingsStore(storage: OcrSettingsStorage): OcrSettings
           baidu: current.baidu,
         });
       }),
-    moveChannel: async (kind, direction) =>
+    moveChannelTo: async (kind, targetIndex) =>
       enqueueWrite(async () => {
         const current = settingsSignal();
         const index = current.order.indexOf(kind);
         if (index === -1) return { ok: true };
-        const targetIndex = direction === "up" ? index - 1 : index + 1;
-        if (targetIndex < 0 || targetIndex >= current.order.length) return { ok: true };
+        const requested = Number.isFinite(targetIndex) ? Math.trunc(targetIndex) : index;
+        const target = Math.min(Math.max(requested, 0), current.order.length - 1);
+        if (target === index) return { ok: true };
         const nextOrder = [...current.order];
-        const moving = nextOrder[index]!;
-        nextOrder[index] = nextOrder[targetIndex]!;
-        nextOrder[targetIndex] = moving;
+        nextOrder.splice(index, 1);
+        nextOrder.splice(target, 0, kind);
         return persistSnapshot({
           order: nextOrder,
           enabled: { ...current.enabled },

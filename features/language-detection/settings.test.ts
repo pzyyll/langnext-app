@@ -162,22 +162,27 @@ test("detection settings: Google enables without configuration and an unconfigur
   expect(store.enabledDetectors()).toEqual([{ kind: "ai", modelId: "m-1" }, { kind: "google" }]);
 });
 
-test("detection settings: reorders detectors and keeps end moves inert", async () => {
+test("detection settings: reorders detectors, clamps targets, and keeps same-slot moves inert", async () => {
   const mem = createMemoryStorage();
   const store = createLanguageDetectionSettingsStore(mem.storage);
   await store.load();
   await store.saveAiModel("m-1");
   await store.setEnabled("google", true);
 
-  const moved = await store.moveDetector("google", "up");
+  const moved = await store.moveDetectorTo("google", 0);
   expect(moved.ok).toBe(true);
   expect(store.detectorOrder()).toEqual(["google", "ai"]);
   expect(store.enabledDetectors()).toEqual([{ kind: "google" }, { kind: "ai", modelId: "m-1" }]);
 
   const writes = mem.getSetCalls();
-  expect((await store.moveDetector("google", "up")).ok).toBe(true);
-  expect((await store.moveDetector("ai", "down")).ok).toBe(true);
+  expect((await store.moveDetectorTo("google", 0)).ok).toBe(true);
+  expect((await store.moveDetectorTo("ai", 1)).ok).toBe(true);
   expect(mem.getSetCalls()).toBe(writes);
+
+  expect((await store.moveDetectorTo("google", 99)).ok).toBe(true);
+  expect(store.detectorOrder()).toEqual(["ai", "google"]);
+  expect((await store.moveDetectorTo("google", -5)).ok).toBe(true);
+  expect(store.detectorOrder()).toEqual(["google", "ai"]);
 
   const reopened = createLanguageDetectionSettingsStore(mem.storage);
   await reopened.load();
@@ -346,7 +351,7 @@ test("detection settings: keeps the last saved snapshot when a write fails", asy
   const savedOrder = store.detectorOrder();
 
   mem.setSetError(new Error("ERR_NSH_QUOTA_EXCEEDED"));
-  const failed = await store.moveDetector("ai", "down");
+  const failed = await store.moveDetectorTo("ai", 1);
 
   expect(failed.ok).toBe(false);
   if (!failed.ok) expect(failed.key).toBe("storage_write_failed");

@@ -88,8 +88,9 @@ local detector.
   unusable answer falls through to the next enabled detector.
 - **Google**: Enable **Google** to use the free Google Translate endpoint. It
   needs no key and no model configuration; a sample goes to Google Translate.
-- **Priority**: Use the arrows to order detectors. The first enabled detector is
-  the primary; later enabled detectors act as backups.
+- **Priority**: Drag a detector's grip, or focus the grip and press the up and
+  down arrow keys, to order them. The first enabled detector is the primary; later
+  enabled detectors act as backups.
 - **Automatic target**: Text in another language is translated into your native
   language. Text in your native language is translated into the preferred
   translation language. A concrete source and target pair never starts a
