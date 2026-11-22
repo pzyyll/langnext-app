@@ -646,12 +646,18 @@ export function QuickTranslatePopup(props: QuickTranslatePopupProps) {
       input.report(prepared.message);
       return;
     }
+    const request = prepared.speech.request;
+    if (request.credentials.channel !== "google-cloud") {
+      finishSpeech(token);
+      input.report(t("quickTranslate.speakPlayback"));
+      return;
+    }
     const synthesized = await createGoogleCloudTtsClient().synthesize(
       {
-        apiKey: prepared.speech.apiKey,
-        text: prepared.speech.text,
-        languageCode: prepared.speech.voice.languageCode,
-        voiceName: prepared.speech.voice.voiceName,
+        apiKey: request.credentials.apiKey,
+        text: request.text,
+        languageCode: request.voice.languageCode,
+        voiceName: request.voice.voiceName,
       },
       { signal: controller.signal },
     );

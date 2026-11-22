@@ -612,7 +612,10 @@ quickTranslate:
   enableAutoTranslate: Enable automatic translation
   disableAutoTranslate: Disable automatic translation
   speak: Read aloud
-  speakOff: Turn on Google Cloud Text-to-Speech in Settings.
+  speakOff: Turn on text-to-speech in Settings.
+  speakUnsupportedAzure: This language has no Azure Speech voice.
+  speakTooLongAzure: Shorten the text. This app sends at most 5,000 bytes to Azure.
+  speakInvalidText: This text contains characters Azure Speech cannot read.
   speakSending: Sends this text to Google.
   speakChooseSource: Choose a source language.
   speakTranslateFirst: Translate first so the source language can be detected.

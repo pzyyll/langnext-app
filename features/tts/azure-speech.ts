@@ -34,6 +34,15 @@ function failed(failure: TtsFailure): TtsSynthesis {
   return { status: "failed", failure };
 }
 
+/** True when `text` contains a character XML 1.0 cannot represent. */
+export function azureTextHasIllegalXml(text: string): boolean {
+  for (const char of text) {
+    const code = char.codePointAt(0);
+    if (code === undefined || !isXmlChar(code)) return true;
+  }
+  return false;
+}
+
 function isXmlChar(code: number): boolean {
   return (
     code === 0x9 ||
