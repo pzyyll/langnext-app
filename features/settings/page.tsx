@@ -273,7 +273,8 @@ export function SettingsPage(props: {
       };
     }
 
-    if (selectedSection() === "tts" && selectedTtsChannel() !== null) {
+    const ttsChannel = selectedTtsChannel();
+    if (selectedSection() === "tts" && ttsChannel !== null) {
       return {
         testID: "settings-tts-breadcrumb",
         accessibilityLabel: t("settings.tts.breadcrumbLabel"),
@@ -284,7 +285,9 @@ export function SettingsPage(props: {
             onPress: () => selectedTtsChannel.set(null),
           },
           {
-            label: t("settings.tts.channel"),
+            label: t(
+              ttsChannel === "azure" ? "settings.tts.azure.channel" : "settings.tts.channel",
+            ),
             testID: "settings-tts-detail-title",
           },
         ],
@@ -382,6 +385,18 @@ export function SettingsPage(props: {
                         testID="settings-ocr-priority-info"
                         accessibilityLabel={t("settings.ocr.priorityHint")}
                         tooltip={buildTooltip(t("settings.ocr.priorityHint"), "top", {
+                          align: "start",
+                        })}
+                        class="shrink-0 items-center justify-center p-1"
+                      >
+                        <Icon name="info" tone="muted-foreground" class="size-4" />
+                      </View>
+                    </If>
+                    <If when={selectedSection() === "tts"}>
+                      <View
+                        testID="settings-tts-priority-info"
+                        accessibilityLabel={t("settings.tts.priorityHint")}
+                        tooltip={buildTooltip(t("settings.tts.priorityHint"), "top", {
                           align: "start",
                         })}
                         class="shrink-0 items-center justify-center p-1"

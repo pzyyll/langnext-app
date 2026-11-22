@@ -137,6 +137,11 @@ settings:
       channelUnconfigured: 请先配置此渠道再启用。
   tts:
     channel: Google Cloud Text-to-Speech
+    azure:
+      channel: Azure Speech
+      region: 区域
+      regionExample: eastus
+    priorityHint: 已启用的渠道按从上到下的顺序使用。排在最前面的渠道用于朗读，关闭它后由下一条已启用的渠道接手。
     notConfigured: 未配置
     configured: 已配置
     savedKey: "\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022"
@@ -145,6 +150,13 @@ settings:
     configureLabel: 配置 %{name}
     enableLabel: 启用 %{name}
     itemLabel: "%{name}（%{status}）"
+    reorder: 调整「%{name}」的顺序
+    reorderHint: 拖动，或按上下方向键。
+    moveUp: 上移 %{name}
+    moveDown: 下移 %{name}
+    role:
+      primary: 首选
+      backup: 备用
     apiKey: API Key
     saved: 语音合成渠道已保存
     configureBeforeEnable: 请先配置此渠道再启用。
@@ -152,10 +164,13 @@ settings:
     stop: 停止
     previewUnavailable: 此设备无法播放音频。
     previewUnsaved: 请先保存或清除 API Key，再播放示例。
+    previewUnsavedRegion: 播放示例前请先保存或清除区域。
     previewNeedsKey: 请先保存 API Key，再播放示例。
     failure:
       auth: 请检查 API Key、Cloud Text-to-Speech 权限和项目结算。
+      azureAuth: 请检查语音资源密钥和区域。
       quota: Google Cloud Text-to-Speech 已达到配额或速率限制。请重试。
+      azureRateLimited: Azure 正在限制请求。请稍后再试。
       playback: 无法播放示例。请重试。
     error:
       storageReadFailed: 无法读取已保存的语音合成设置。
@@ -163,7 +178,8 @@ settings:
       storageUnsupportedVersion: 已保存的语音合成设置版本不受支持。
       storageWriteFailed: 无法保存语音合成设置，请检查存储后重试。
       apiKeyBlank: 请填写 API Key。
-      channelUnconfigured: 请先配置 Google Cloud Text-to-Speech 再启用。
+      invalidRegion: 请填写公开的 Azure Speech 区域，例如 eastus。
+      channelUnconfigured: 请先配置此渠道再启用。
       credentialUnreadable: 无法读取已保存的 API Key。请重新填写。
   languageDetection:
     title: 语言检测
@@ -608,8 +624,11 @@ quickTranslate:
   enableAutoTranslate: 开启自动翻译
   disableAutoTranslate: 关闭自动翻译
   speak: 朗读
-  speakOff: 在设置中打开 Google Cloud 文字转语音。
-  speakSending: 将这段文字发送到 Google。
+  speakOff: 请在设置中打开语音合成。
+  speakUnsupportedAzure: 此语言没有 Azure 语音。
+  speakTooLongAzure: 请缩短文字。本应用发给 Azure 的文本最多 5000 字节。
+  speakInvalidText: 这段文字含有 Azure 语音无法朗读的字符。
+  speakSending: 将这段文字发送到 %{name}。
   speakChooseSource: 请先选择源语言。
   speakTranslateFirst: 请先翻译，以便确定源语言。
   speakUnsupported: 此语言没有 Google Cloud 标准语音。

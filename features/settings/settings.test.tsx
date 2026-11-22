@@ -1448,7 +1448,7 @@ test("tts settings: opens the Google Cloud channel and discards an unsaved key",
   );
 });
 
-test("tts settings: enables on the first save and keeps a replaced key off", async () => {
+test("tts settings: keeps a saved channel off until enabled and preserves the switch on replacement", async () => {
   const app = await open(APP_ENTRY, {
     ...viewport,
     storage: { "settings.language": "en" },
@@ -1469,7 +1469,7 @@ test("tts settings: enables on the first save and keeps a replaced key off", asy
     googleCloud: { enabled: boolean; credentialRef: string };
   };
   expect(saved.version).toBe(1);
-  expect(saved.googleCloud.enabled).toBe(true);
+  expect(saved.googleCloud.enabled).toBe(false);
   expect(JSON.stringify(saved).includes("synthetic-tts-key")).toBe(false);
   expect(
     JSON.parse(app.storage()[ttsCredentialStorageKey(saved.googleCloud.credentialRef)]!),
@@ -1483,8 +1483,9 @@ test("tts settings: enables on the first save and keeps a replaced key off", asy
   expect(app.texts()).toContain("Configured");
   await app.press("id:settings-tts-toggle-google-cloud");
   await app.waitUntil(
-    () => JSON.parse(app.storage()[TTS_STORAGE_KEY]!).googleCloud.enabled === false,
+    () => JSON.parse(app.storage()[TTS_STORAGE_KEY]!).googleCloud.enabled === true,
   );
+  expect(app.shows("id:settings-tts-role-google-cloud")).toBe(true);
   expect(app.requests().some((request) => request.url.includes("texttospeech"))).toBe(false);
 
   await app.press("id:settings-tts-channel-google-cloud");
@@ -1501,7 +1502,7 @@ test("tts settings: enables on the first save and keeps a replaced key off", asy
   const replaced = JSON.parse(app.storage()[TTS_STORAGE_KEY]!) as {
     googleCloud: { enabled: boolean; credentialRef: string };
   };
-  expect(replaced.googleCloud.enabled).toBe(false);
+  expect(replaced.googleCloud.enabled).toBe(true);
   expect(
     JSON.parse(app.storage()[ttsCredentialStorageKey(replaced.googleCloud.credentialRef)]!),
   ).toEqual({ apiKey: "replacement-tts-key" });
@@ -1514,7 +1515,7 @@ test("tts settings: enables on the first save and keeps a replaced key off", asy
   await reopened.press("id:nav-settings");
   await reopened.press("id:settings-nav-tts");
   await reopened.waitFor("id:settings-tts-card");
-  expect(JSON.parse(reopened.storage()[TTS_STORAGE_KEY]!).googleCloud.enabled).toBe(false);
+  expect(JSON.parse(reopened.storage()[TTS_STORAGE_KEY]!).googleCloud.enabled).toBe(true);
   await reopened.press("id:settings-tts-open-google-cloud");
   await reopened.waitFor("id:settings-tts-api-key");
   expect(reopened.value("id:settings-tts-api-key")).toBe("");
@@ -1524,12 +1525,13 @@ test("tts settings: enables on the first save and keeps a replaced key off", asy
   await reopened.waitFor("id:settings-tts-card");
   expect(reopened.texts()).toContain("语音合成");
   expect(reopened.texts()).toContain("已配置");
+  expect(reopened.texts()).toContain("首选");
   await reopened.press("id:settings-tts-channel-google-cloud");
   await reopened.waitFor("id:settings-tts-detail-card");
   expect(reopened.value("id:settings-tts-api-key")).toBe("");
 });
 
-test("tts settings: a missing key can be turned off and a failed save keeps the draft", async () => {
+test("tts settings: a missing key can be turned off", async () => {
   const ref = "broken-tts-ref";
   const app = await open(APP_ENTRY, {
     ...viewport,
@@ -1556,7 +1558,10 @@ test("tts settings: a missing key can be turned off and a failed save keeps the 
   await app.waitFor("id:settings-tts-list-error");
   expect(JSON.parse(app.storage()[TTS_STORAGE_KEY]!).googleCloud.enabled).toBe(false);
   expect(app.texts()).toContain("The saved API key could not be read. Enter it again.");
+});
 
+test("tts storage: a failed save keeps the draft", async () => {
+  const ref = "broken-tts-ref";
   const failing = await open(APP_ENTRY, {
     ...viewport,
     storage: {
@@ -1754,4 +1759,295 @@ test("tts preview: leaving or cancelling drops a late response and closes playba
   expect(playing.audio().filter((call) => call.command === "open").length).toBe(
     playing.audio().filter((call) => call.command === "close").length,
   );
+});
+
+test("tts settings: configures Azure and enables it beside Google without a network call", async () => {
+  const app = await open(APP_ENTRY, {
+    ...viewport,
+    storage: {
+      "settings.language": "en",
+      [TTS_STORAGE_KEY]: JSON.stringify({
+        version: 1,
+        googleCloud: { enabled: true, credentialRef: "google-ref" },
+      }),
+      [ttsCredentialStorageKey("google-ref")]: JSON.stringify({ apiKey: "google-key" }),
+    },
+  });
+
+  await app.press("id:nav-settings");
+  await app.waitFor("id:settings-nav-tts");
+  await app.press("id:settings-nav-tts");
+  await app.waitFor("id:settings-tts-row-azure");
+  const googleAt = app.texts().indexOf("Google Cloud Text-to-Speech");
+  const azureAt = app.texts().indexOf("Azure Speech");
+  expect(googleAt).toBeGreaterThanOrEqual(0);
+  expect(azureAt).toBeGreaterThan(googleAt);
+  expect(app.shows("id:settings-tts-open-azure")).toBe(true);
+
+  await app.press("id:settings-tts-open-azure");
+  await app.waitFor("id:settings-tts-region");
+  expect(app.texts()).toContain("Azure Speech");
+  expect(app.shows("id:settings-tts-breadcrumb-root")).toBe(true);
+  await app.type("id:settings-tts-region", "eastus");
+  await app.type("id:settings-tts-api-key", "azure-key");
+  await app.press("id:settings-tts-save");
+  await app.waitUntil(() => {
+    const raw = app.storage()[TTS_STORAGE_KEY];
+    return typeof raw === "string" && raw.includes("eastus");
+  });
+  expect(app.value("id:settings-tts-api-key")).toBe("");
+
+  await app.press("id:settings-tts-breadcrumb-root");
+  await app.waitFor("id:settings-tts-card");
+  await app.press("id:settings-tts-toggle-azure");
+  await app.waitUntil(() => {
+    const raw = app.storage()[TTS_STORAGE_KEY];
+    if (typeof raw !== "string") return false;
+    const saved = JSON.parse(raw) as {
+      googleCloud: { enabled: boolean };
+      azure: { enabled: boolean; region: string } | null;
+    };
+    return saved.azure?.enabled === true && saved.googleCloud.enabled === true;
+  });
+  expect(app.shows("id:settings-tts-role-google-cloud")).toBe(true);
+  expect(app.shows("id:settings-tts-role-azure")).toBe(true);
+  expect(app.texts()).toContain("Primary");
+  expect(app.texts()).toContain("Backup");
+  expect(app.requests().some((request) => String(request.url).includes("tts.speech"))).toBe(false);
+  expect(app.requests().some((request) => String(request.url).includes("texttospeech"))).toBe(
+    false,
+  );
+});
+
+test("tts settings: shows the saved Azure region and the channel priority", async () => {
+  const app = await open(APP_ENTRY, {
+    ...viewport,
+    storage: {
+      "settings.language": "en",
+      [TTS_STORAGE_KEY]: JSON.stringify({
+        version: 1,
+        googleCloud: { enabled: true, credentialRef: "google-ref" },
+        azure: { enabled: false, credentialRef: "azure-ref", region: "eastus" },
+      }),
+      [ttsCredentialStorageKey("google-ref")]: JSON.stringify({ apiKey: "google-key" }),
+      [ttsCredentialStorageKey("azure-ref")]: JSON.stringify({ apiKey: "azure-key" }),
+    },
+  });
+
+  await app.press("id:nav-settings");
+  await app.press("id:settings-nav-tts");
+  await app.waitFor("id:settings-tts-toggle-azure");
+  expect(app.shows("id:settings-tts-role-google-cloud")).toBe(true);
+  expect(app.shows("id:settings-tts-role-azure")).toBe(false);
+  expect(app.enabled("id:settings-tts-toggle-azure")).toBe(true);
+  expect(app.texts()).not.toContain("Turn off Google Cloud Text-to-Speech");
+  expect(app.texts()).not.toContain("azure-key");
+  expect(app.texts()).not.toContain("google-key");
+
+  await app.press("id:settings-tts-open-azure");
+  await app.waitFor("id:settings-tts-region");
+  expect(app.value("id:settings-tts-region")).toBe("eastus");
+  expect(app.value("id:settings-tts-api-key")).toBe("");
+  expect(app.texts()).not.toContain("azure-key");
+  await app.type("id:settings-tts-region", "2");
+  expect(app.enabled("id:settings-tts-save")).toBe(false);
+  await app.type("id:settings-tts-api-key", "next-azure-key");
+  expect(app.enabled("id:settings-tts-save")).toBe(true);
+  await app.press("id:settings-tts-save");
+  await app.waitUntil(() => {
+    const raw = app.storage()[TTS_STORAGE_KEY];
+    return typeof raw === "string" && raw.includes("eastus2");
+  });
+  expect(app.value("id:settings-tts-api-key")).toBe("");
+  expect(app.value("id:settings-tts-region")).toBe("eastus2");
+  expect(app.texts()).not.toContain("next-azure-key");
+});
+
+test("tts settings: reorders channels and keeps the saved key of a disabled one", async () => {
+  const storage = {
+    "settings.language": "en",
+    [TTS_STORAGE_KEY]: JSON.stringify({
+      version: 1,
+      order: ["google-cloud", "azure"],
+      googleCloud: { enabled: true, credentialRef: "google-ref" },
+      azure: { enabled: true, credentialRef: "azure-ref", region: "eastus" },
+    }),
+    [ttsCredentialStorageKey("google-ref")]: JSON.stringify({ apiKey: "google-key" }),
+    [ttsCredentialStorageKey("azure-ref")]: JSON.stringify({ apiKey: "azure-key" }),
+  };
+  const app = await open(APP_ENTRY, { ...viewport, storage });
+  await app.press("id:nav-settings");
+  await app.press("id:settings-nav-tts");
+  await app.waitFor("id:settings-tts-card");
+
+  expect(app.shows("id:settings-tts-priority-info")).toBe(true);
+  expect(app.shows("id:settings-tts-grip-google-cloud")).toBe(true);
+  expect(app.shows("id:settings-tts-grip-azure")).toBe(true);
+  expect(app.shows("id:settings-tts-role-google-cloud")).toBe(true);
+  expect(app.shows("id:settings-tts-role-azure")).toBe(true);
+
+  // Dragging the second row above the first persists the new priority order.
+  await app.drag("id:settings-tts-row-azure", { x: 0, y: -80 });
+  await app.waitUntil(() => JSON.parse(app.storage()[TTS_STORAGE_KEY]!).order[0] === "azure");
+
+  const reopened = await open(APP_ENTRY, { ...viewport, storage: app.storage() });
+  await reopened.press("id:nav-settings");
+  await reopened.press("id:settings-nav-tts");
+  await reopened.waitFor("id:settings-tts-card");
+  expect(JSON.parse(reopened.storage()[TTS_STORAGE_KEY]!).order).toEqual(["azure", "google-cloud"]);
+
+  // Disabling Google keeps its saved key and summary, and leaves Azure primary.
+  await reopened.press("id:settings-tts-toggle-google-cloud");
+  await reopened.waitUntil(
+    () => JSON.parse(reopened.storage()[TTS_STORAGE_KEY]!).googleCloud.enabled === false,
+  );
+  expect(reopened.shows("id:settings-tts-role-google-cloud")).toBe(false);
+  expect(reopened.shows("id:settings-tts-role-azure")).toBe(true);
+  expect(reopened.texts()).toContain("Configured");
+  expect(reopened.storage()[ttsCredentialStorageKey("google-ref")]).toBe(
+    JSON.stringify({ apiKey: "google-key" }),
+  );
+});
+
+test("tts settings: the grip reorders channels with the arrow keys and keeps the focus", async () => {
+  // A Linux host delivers raw keys to the focused view, as a desktop does.
+  const app = await open(APP_ENTRY, { ...viewport, platform: "linux" });
+  await app.press("id:nav-settings");
+  await app.press("id:settings-nav-tts");
+  await app.waitFor("id:settings-tts-card");
+
+  await app.press("id:settings-tts-grip-google-cloud");
+  await app.keyboard.press("arrowdown");
+  await app.waitUntil(() => JSON.parse(app.storage()[TTS_STORAGE_KEY]!).order[0] === "azure");
+
+  // The grip keeps the focus across the reorder, so the next key moves it back.
+  await app.keyboard.press("arrowup");
+  await app.waitUntil(
+    () => JSON.parse(app.storage()[TTS_STORAGE_KEY]!).order[0] === "google-cloud",
+  );
+});
+
+test("tts preview: plays an Azure sample without changing the active channel", async () => {
+  const azureUrl = "https://eastus.tts.speech.microsoft.com/cognitiveservices/v1";
+  const app = await open(APP_ENTRY, {
+    ...viewport,
+    storage: {
+      "settings.language": "en",
+      [TTS_STORAGE_KEY]: JSON.stringify({
+        version: 1,
+        googleCloud: { enabled: true, credentialRef: "google-ref" },
+        azure: { enabled: false, credentialRef: "azure-ref", region: "eastus" },
+      }),
+      [ttsCredentialStorageKey("google-ref")]: JSON.stringify({ apiKey: "google-key" }),
+      [ttsCredentialStorageKey("azure-ref")]: JSON.stringify({ apiKey: "azure-key" }),
+    },
+    network: {
+      ["POST " + azureUrl]: { status: 200, body: "ID3azure-sample" },
+    },
+  });
+
+  await app.press("id:nav-settings");
+  await app.press("id:settings-nav-tts");
+  await app.press("id:settings-tts-open-azure");
+  await app.waitUntil(() => app.enabled("id:settings-tts-preview"));
+  expect(app.requests()).toHaveLength(0);
+  await app.press("id:settings-tts-preview");
+  await app.waitFor("text:Stop");
+  expect(app.requests()).toHaveLength(1);
+  const request = app.requests()[0]!;
+  expect(request.method).toBe("POST");
+  expect(request.url).toBe(azureUrl);
+  expect(
+    request.headers["ocp-apim-subscription-key"] ?? request.headers["Ocp-Apim-Subscription-Key"],
+  ).toBe("azure-key");
+  expect(request.body).toContain(TTS_SAMPLE_TEXT);
+  expect(request.body).toContain("en-US-JennyNeural");
+  expect(app.requests().some((item) => String(item.url).includes("texttospeech"))).toBe(false);
+  expect(
+    app.audio().some((call) => call.command === "open" && call.src.includes("tts-playback")),
+  ).toBe(true);
+  const saved = JSON.parse(app.storage()[TTS_STORAGE_KEY]!) as {
+    googleCloud: { enabled: boolean };
+    azure: { enabled: boolean };
+  };
+  expect(saved.googleCloud.enabled).toBe(true);
+  expect(saved.azure.enabled).toBe(false);
+});
+
+test("tts preview: Azure auth and rate limits open no player", async () => {
+  const azureUrl = "https://eastus.tts.speech.microsoft.com/cognitiveservices/v1";
+  const storage = {
+    "settings.language": "en",
+    [TTS_STORAGE_KEY]: JSON.stringify({
+      version: 1,
+      googleCloud: { enabled: true, credentialRef: "google-ref" },
+      azure: { enabled: false, credentialRef: "azure-ref", region: "eastus" },
+    }),
+    [ttsCredentialStorageKey("google-ref")]: JSON.stringify({ apiKey: "google-key" }),
+    [ttsCredentialStorageKey("azure-ref")]: JSON.stringify({ apiKey: "azure-key" }),
+  };
+  const auth = await open(APP_ENTRY, {
+    ...viewport,
+    storage,
+    network: {
+      ["POST " + azureUrl]: { status: 401, body: "provider secret text" },
+    },
+  });
+  await auth.press("id:nav-settings");
+  await auth.press("id:settings-nav-tts");
+  await auth.press("id:settings-tts-open-azure");
+  await auth.waitUntil(() => auth.enabled("id:settings-tts-preview"));
+  await auth.type("id:settings-tts-region", "2");
+  expect(auth.enabled("id:settings-tts-preview")).toBe(false);
+  await auth.hover("id:settings-tts-preview");
+  await auth.waitUntil(() =>
+    auth.texts().includes("Save or clear the region before playing the sample."),
+  );
+  await auth.clear("id:settings-tts-region");
+  await auth.type("id:settings-tts-region", "eastus");
+  await auth.waitUntil(() => auth.enabled("id:settings-tts-preview"));
+  await auth.press("id:settings-tts-preview");
+  await auth.waitFor("id:settings-tts-preview-error");
+  expect(auth.texts()).toContain("Check the Speech resource key and region.");
+  expect(auth.texts()).not.toContain("provider secret text");
+  expect(auth.audio()).toEqual([]);
+  expect(auth.requests().some((item) => String(item.url).includes("texttospeech"))).toBe(false);
+
+  const limited = await open(APP_ENTRY, {
+    ...viewport,
+    storage,
+    network: {
+      ["POST " + azureUrl]: { status: 429, body: "quota exceeded secret" },
+    },
+  });
+  await limited.press("id:nav-settings");
+  await limited.press("id:settings-nav-tts");
+  await limited.press("id:settings-tts-open-azure");
+  await limited.waitUntil(() => limited.enabled("id:settings-tts-preview"));
+  await limited.press("id:settings-tts-preview");
+  await limited.waitFor("id:settings-tts-preview-error");
+  expect(limited.texts()).toContain("Azure is limiting requests. Try again later.");
+  expect(limited.texts().join(" ")).not.toMatch(/allowance|quota/i);
+  expect(limited.texts()).not.toContain("quota exceeded secret");
+  expect(limited.audio()).toEqual([]);
+
+  const loading = await open(APP_ENTRY, {
+    ...viewport,
+    storage,
+    network: {
+      ["POST " + azureUrl]: { status: 200, delay: 400, body: "ID3late" },
+    },
+  });
+  await loading.press("id:nav-settings");
+  await loading.press("id:settings-nav-tts");
+  await loading.press("id:settings-tts-open-azure");
+  await loading.waitUntil(() => loading.enabled("id:settings-tts-preview"));
+  await loading.press("id:settings-tts-preview");
+  await loading.waitFor("text:Cancel");
+  await loading.press("id:settings-tts-breadcrumb-root");
+  await loading.waitFor("id:settings-tts-card");
+  await loading.wait(500);
+  expect(loading.audio().some((call) => call.command === "open")).toBe(false);
+  expect(loading.texts()).not.toContain("Could not play the sample. Try again.");
+  expect(loading.texts()).not.toContain("Check the Speech resource key and region.");
 });

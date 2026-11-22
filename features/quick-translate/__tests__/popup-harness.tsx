@@ -47,7 +47,8 @@ export type HarnessMode =
   | "language-resolution"
   | "ocr-status"
   | "streaming"
-  | "multi-card";
+  | "multi-card"
+  | "tts-switch";
 
 export const POPUP_HARNESS_MODE_KEY = "__test.qt.popupMode";
 
@@ -242,6 +243,27 @@ function PopupHarnessApp(props: {
             }
           }}
         />
+        <If when={props.mode === "tts-switch"}>
+          <Button
+            testID="harness-activate-google-tts"
+            size="xs"
+            variant="outline"
+            label="Activate Google TTS"
+            onPress={() => void ttsSettingsStore.setEnabled("google-cloud", true)}
+          />
+          <Button
+            testID="harness-save-inactive-google"
+            size="xs"
+            variant="outline"
+            label="Save inactive Google"
+            onPress={() =>
+              void ttsSettingsStore.saveChannel({
+                channel: "google-cloud",
+                apiKey: "next-google-key",
+              })
+            }
+          />
+        </If>
         <If when={props.mode === "preset-load-error-then-recover"}>
           <Button
             testID="harness-fix-storage"
@@ -512,7 +534,8 @@ void Promise.all([
     modeRaw === "language-resolution" ||
     modeRaw === "ocr-status" ||
     modeRaw === "streaming" ||
-    modeRaw === "multi-card"
+    modeRaw === "multi-card" ||
+    modeRaw === "tts-switch"
       ? modeRaw
       : "live";
 

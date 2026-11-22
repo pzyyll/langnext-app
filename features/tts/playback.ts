@@ -26,6 +26,26 @@ export function ttsPlaybackDirectory(): string | null {
   return join(root, TTS_PLAYBACK_DIRECTORY);
 }
 
+function encodeBase64(bytes: Uint8Array): string {
+  const alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+  let encoded = "";
+  for (let index = 0; index < bytes.length; index += 3) {
+    const first = bytes[index] ?? 0;
+    const second = bytes[index + 1] ?? 0;
+    const third = bytes[index + 2] ?? 0;
+    const chunk = (first << 16) | (second << 8) | third;
+    encoded += alphabet[(chunk >> 18) & 63];
+    encoded += alphabet[(chunk >> 12) & 63];
+    encoded += index + 1 < bytes.length ? alphabet[(chunk >> 6) & 63] : "=";
+    encoded += index + 2 < bytes.length ? alphabet[chunk & 63] : "=";
+  }
+  return encoded;
+}
+
+function headlessPlaybackUrl(name: string, bytes: Uint8Array): string {
+  return `data:audio/mpeg;filename=${TTS_PLAYBACK_DIRECTORY}/${name};base64,${encodeBase64(bytes)}`;
+}
+
 function appDataDirectory(): string | null {
   // The bundled default import of `process` does not carry the live dataDir getter.
   const runtime = (globalThis as { process?: { dataDir?: string | null } }).process;
@@ -122,10 +142,10 @@ export function playMp3Bytes(
       }
       const name = `tts-${crypto.randomUUID()}.mp3`;
       const directory = ttsPlaybackDirectory();
-      let src = `file:///${TTS_PLAYBACK_DIRECTORY}/${name}`;
+      // Headless tests have no data directory. A file URL is refused there, so
+      // the player receives the bytes in a data URL. A desktop host writes a file.
+      let src = headlessPlaybackUrl(name, bytes);
       if (directory !== null) {
-        // A desktop host writes the clip before play. The headless engine has
-        // no data directory; its player records this file URL and does not read it.
         const path = join(directory, name);
         filePath = path;
         await mkdir(directory, { recursive: true });

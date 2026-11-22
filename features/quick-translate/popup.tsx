@@ -25,7 +25,7 @@ import { languageDetectionStore } from "../language-detection/settings";
 import { AUTO_LANGUAGE, type LanguageId } from "../presets/languages";
 import { modelsStore } from "../models/store";
 import type { TranslationPreset } from "../presets/types";
-import { createGoogleCloudTtsClient } from "../tts/google-cloud";
+import { synthesizeSpeech } from "../tts/channels";
 import { playMp3Bytes } from "../tts/playback";
 import { prepareQuickSpeech, quickSpeechFailureMessage } from "../tts/quick-speech";
 import { ttsSettingsStore } from "../tts/settings";
@@ -542,12 +542,23 @@ export function QuickTranslatePopup(props: QuickTranslatePopupProps) {
   let speechAbort: AbortController | null = null;
   let stopSpeech: (() => void) | null = null;
   let activeCredential = "";
-  const speakEnabled = () => ttsSettingsStore.isEnabled();
-  const speakTooltip = () =>
-    speakEnabled() ? t("quickTranslate.speakSending") : t("quickTranslate.speakOff");
+  const activeSpeech = () => ttsSettingsStore.activeBinding();
+  const speakEnabled = () => activeSpeech() !== null;
+  const speakTooltip = () => {
+    const active = activeSpeech();
+    if (active === null) return t("quickTranslate.speakOff");
+    const name = t(
+      active.channel === "azure" ? "settings.tts.azure.channel" : "settings.tts.channel",
+    );
+    return t("quickTranslate.speakSending", { name });
+  };
   const credentialSignature = () => {
-    const binding = ttsSettingsStore.savedBinding();
-    return binding?.enabled ? binding.credentialRef : "";
+    const active = activeSpeech();
+    if (active === null) return "";
+    if (active.channel === "azure") {
+      return `azure\0${active.credentialRef}\0${active.region}`;
+    }
+    return `google-cloud\0${active.credentialRef}`;
   };
 
   const cancelSpeech = () => {
@@ -646,23 +657,24 @@ export function QuickTranslatePopup(props: QuickTranslatePopupProps) {
       input.report(prepared.message);
       return;
     }
-    const synthesized = await createGoogleCloudTtsClient().synthesize(
-      {
-        apiKey: prepared.speech.apiKey,
-        text: prepared.speech.text,
-        languageCode: prepared.speech.voice.languageCode,
-        voiceName: prepared.speech.voice.voiceName,
-      },
-      { signal: controller.signal },
-    );
+    const request = prepared.speech.request;
+    if (!mountedSpeech(token) || credentialSignature() !== activeCredential) {
+      finishSpeech(token);
+      return;
+    }
+    const synthesized = await synthesizeSpeech(request, { signal: controller.signal });
     if (!mountedSpeech(token)) return;
     if (controller.signal.aborted || synthesized.status === "cancelled") {
       finishSpeech(token);
       return;
     }
+    if (credentialSignature() !== activeCredential) {
+      finishSpeech(token);
+      return;
+    }
     if (synthesized.status === "failed") {
       finishSpeech(token);
-      input.report(quickSpeechFailureMessage(synthesized.failure));
+      input.report(quickSpeechFailureMessage(synthesized.failure, request.credentials.channel));
       return;
     }
     const playback = playMp3Bytes(synthesized.audio, {
