@@ -2,6 +2,7 @@ import {
   createAnimatedValue,
   createMotion,
   effect,
+  Image,
   reduceMotion,
   signal,
   Text,
@@ -12,6 +13,7 @@ import {
   type ViewRef,
 } from "nsh";
 import { t } from "nsh/i18n";
+import googleMark from "../../assets/icons/google.svg";
 import { motion } from "../../components/motion";
 import { Avatar } from "../../components/ui/avatar";
 import { Badge } from "../../components/ui/badge";
@@ -92,7 +94,22 @@ function detectorSummary(kind: LanguageDetectorKind): ChannelSummary {
 
 function DetectionChannelAvatar(props: { kind: LanguageDetectorKind }) {
   return (
-    <If when={props.kind === "ai"} else={<Avatar size="md" name="G" accessibilityLabel="" />}>
+    <If
+      when={props.kind === "ai"}
+      else={
+        <Avatar
+          size="md"
+          accessibilityLabel=""
+          fallback={
+            <Image
+              src={googleMark}
+              accessibilityElementsHidden={true}
+              class="size-4 overflow-hidden"
+            />
+          }
+        />
+      }
+    >
       <Avatar size="md" icon="cube-outline" accessibilityLabel="" />
     </If>
   );
