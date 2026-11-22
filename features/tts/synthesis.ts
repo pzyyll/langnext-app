@@ -1,3 +1,5 @@
+import type { GoogleAudioOptions } from "./google-preferences";
+
 /** Saved speech channel. Quick Translate uses only the active one. */
 export type TtsChannelId = "google-cloud" | "azure";
 
@@ -17,6 +19,8 @@ export interface TtsSynthesisRequest {
   credentials: TtsCredentials;
   text: string;
   voice: TtsVoice;
+  /** Google-only audio fields. Azure requests never carry them. */
+  audio?: GoogleAudioOptions;
 }
 
 /**

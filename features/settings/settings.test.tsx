@@ -1,12 +1,42 @@
 import { expect, open, test } from "nsh/test";
+import { t } from "nsh/i18n";
 import { SPLIT_RAIL_STORAGE_KEYS } from "../../components/layout/split-rail";
 import { LANGUAGE_DETECTION_STORAGE_KEY } from "../language-detection/settings";
 import { makeChannel, makeModel, makeSeedStorage } from "../models/__tests__/fixtures";
 import { baiduCredentialStorageKey, OCR_STORAGE_KEY } from "../ocr/settings";
 import { GOOGLE_CLOUD_TTS_URL, TTS_SAMPLE_TEXT } from "../tts/google-cloud";
+import {
+  DEFAULT_GOOGLE_VOICE_PREFERENCES,
+  type GoogleVoicePreferences,
+} from "../tts/google-preferences";
+import { googleSampleText } from "../tts/google-samples";
+import { GOOGLE_VOICE_FAMILIES, GOOGLE_VOICE_PRICING } from "../tts/google-voices";
 import { TTS_STORAGE_KEY, ttsCredentialStorageKey } from "../tts/settings";
+import { googleFamilyPricingLines } from "./google-tts-fields";
 import { SELECTION_COPY_STORAGE_KEY } from "./selection-copy";
 import { SILENT_LAUNCH_STORAGE_KEY } from "./silent-launch";
+
+/** One saved v2 TTS record; Google always keeps normalized voice preferences. */
+function ttsRecord(options: {
+  googleCloud?: { enabled: boolean; credentialRef: string; preferences?: unknown } | null;
+  azure?: { enabled: boolean; credentialRef: string; region: string } | null;
+  order?: readonly string[];
+}): string {
+  const google = options.googleCloud ?? null;
+  return JSON.stringify({
+    version: 2,
+    order: options.order ?? ["google-cloud", "azure"],
+    googleCloud:
+      google === null
+        ? null
+        : {
+            enabled: google.enabled,
+            credentialRef: google.credentialRef,
+            preferences: google.preferences ?? DEFAULT_GOOGLE_VOICE_PREFERENCES,
+          },
+    azure: options.azure ?? null,
+  });
+}
 
 const APP_ENTRY = "../../App.tsx";
 const viewport = { width: 1040, height: 720, platform: "windows" as const };
@@ -1438,7 +1468,7 @@ test("tts settings: opens the Google Cloud channel and discards an unsaved key",
   await app.press("id:settings-tts-breadcrumb-root");
   await app.waitFor("id:settings-tts-card");
   expect(app.shows("id:settings-tts-detail-card")).toBe(false);
-  expect(app.storage()["settings.tts.v1"]).toBeUndefined();
+  expect(app.storage()[TTS_STORAGE_KEY]).toBeUndefined();
 
   await app.press("id:settings-tts-open-google-cloud");
   await app.waitFor("id:settings-tts-detail-card");
@@ -1447,7 +1477,7 @@ test("tts settings: opens the Google Cloud channel and discards an unsaved key",
   await app.press("id:settings-nav-tts");
   await app.waitFor("id:settings-tts-card");
   expect(app.value("id:settings-tts-api-key")).toBeNull();
-  expect(app.storage()["settings.tts.v1"]).toBeUndefined();
+  expect(app.storage()[TTS_STORAGE_KEY]).toBeUndefined();
   expect(app.requests().some((request) => String(request.url).includes("texttospeech"))).toBe(
     false,
   );
@@ -1473,7 +1503,7 @@ test("tts settings: keeps a saved channel off until enabled and preserves the sw
     version: number;
     googleCloud: { enabled: boolean; credentialRef: string };
   };
-  expect(saved.version).toBe(1);
+  expect(saved.version).toBe(2);
   expect(saved.googleCloud.enabled).toBe(false);
   expect(JSON.stringify(saved).includes("synthetic-tts-key")).toBe(false);
   expect(
@@ -1542,8 +1572,7 @@ test("tts settings: a missing key can be turned off", async () => {
     ...viewport,
     storage: {
       "settings.language": "en",
-      [TTS_STORAGE_KEY]: JSON.stringify({
-        version: 1,
+      [TTS_STORAGE_KEY]: ttsRecord({
         googleCloud: { enabled: true, credentialRef: ref },
       }),
       [ttsCredentialStorageKey(ref)]: "not-json",
@@ -1571,8 +1600,7 @@ test("tts storage: a failed save keeps the draft", async () => {
     ...viewport,
     storage: {
       "settings.language": "en",
-      [TTS_STORAGE_KEY]: JSON.stringify({
-        version: 1,
+      [TTS_STORAGE_KEY]: ttsRecord({
         googleCloud: { enabled: false, credentialRef: ref },
       }),
       [ttsCredentialStorageKey(ref)]: JSON.stringify({ apiKey: "kept-tts-key" }),
@@ -1619,8 +1647,7 @@ function ttsPreviewNetwork(status = 200, body?: unknown) {
 function savedTtsStorage(enabled: boolean, apiKey = "saved-preview-key", ref = "preview-ref") {
   return {
     "settings.language": "en",
-    [TTS_STORAGE_KEY]: JSON.stringify({
-      version: 1,
+    [TTS_STORAGE_KEY]: ttsRecord({
       googleCloud: { enabled, credentialRef: ref },
     }),
     [ttsCredentialStorageKey(ref)]: JSON.stringify({ apiKey }),
@@ -1771,8 +1798,7 @@ test("tts settings: configures Azure and enables it beside Google without a netw
     ...viewport,
     storage: {
       "settings.language": "en",
-      [TTS_STORAGE_KEY]: JSON.stringify({
-        version: 1,
+      [TTS_STORAGE_KEY]: ttsRecord({
         googleCloud: { enabled: true, credentialRef: "google-ref" },
       }),
       [ttsCredentialStorageKey("google-ref")]: JSON.stringify({ apiKey: "google-key" }),
@@ -1829,8 +1855,7 @@ test("tts settings: shows the saved Azure region and the channel priority", asyn
     ...viewport,
     storage: {
       "settings.language": "en",
-      [TTS_STORAGE_KEY]: JSON.stringify({
-        version: 1,
+      [TTS_STORAGE_KEY]: ttsRecord({
         googleCloud: { enabled: true, credentialRef: "google-ref" },
         azure: { enabled: false, credentialRef: "azure-ref", region: "eastus" },
       }),
@@ -1871,8 +1896,7 @@ test("tts settings: shows the saved Azure region and the channel priority", asyn
 test("tts settings: reorders channels and keeps the saved key of a disabled one", async () => {
   const storage = {
     "settings.language": "en",
-    [TTS_STORAGE_KEY]: JSON.stringify({
-      version: 1,
+    [TTS_STORAGE_KEY]: ttsRecord({
       order: ["google-cloud", "azure"],
       googleCloud: { enabled: true, credentialRef: "google-ref" },
       azure: { enabled: true, credentialRef: "azure-ref", region: "eastus" },
@@ -1938,8 +1962,7 @@ test("tts preview: plays an Azure sample without changing the active channel", a
     ...viewport,
     storage: {
       "settings.language": "en",
-      [TTS_STORAGE_KEY]: JSON.stringify({
-        version: 1,
+      [TTS_STORAGE_KEY]: ttsRecord({
         googleCloud: { enabled: true, credentialRef: "google-ref" },
         azure: { enabled: false, credentialRef: "azure-ref", region: "eastus" },
       }),
@@ -1983,8 +2006,7 @@ test("tts preview: Azure auth and rate limits open no player", async () => {
   const azureUrl = "https://eastus.tts.speech.microsoft.com/cognitiveservices/v1";
   const storage = {
     "settings.language": "en",
-    [TTS_STORAGE_KEY]: JSON.stringify({
-      version: 1,
+    [TTS_STORAGE_KEY]: ttsRecord({
       googleCloud: { enabled: true, credentialRef: "google-ref" },
       azure: { enabled: false, credentialRef: "azure-ref", region: "eastus" },
     }),
@@ -2055,4 +2077,241 @@ test("tts preview: Azure auth and rate limits open no player", async () => {
   expect(loading.audio().some((call) => call.command === "open")).toBe(false);
   expect(loading.texts()).not.toContain("Could not play the sample. Try again.");
   expect(loading.texts()).not.toContain("Check the Speech resource key and region.");
+});
+
+function googleDraftPreferences(overrides: Partial<GoogleVoicePreferences> = {}) {
+  return { ...DEFAULT_GOOGLE_VOICE_PREFERENCES, ...overrides };
+}
+
+async function stepGoogleRate(app: Awaited<ReturnType<typeof open>>, steps: number) {
+  for (let step = 0; step < steps; step += 1) {
+    await app.press("id:settings-tts-google-rate-up");
+  }
+}
+
+test("tts google: previews the draft, saves it without a new key, and reopens it", async () => {
+  const ref = "google-ref";
+  const app = await open(APP_ENTRY, {
+    ...viewport,
+    storage: {
+      "settings.language": "en",
+      [TTS_STORAGE_KEY]: ttsRecord({ googleCloud: { enabled: true, credentialRef: ref } }),
+      [ttsCredentialStorageKey(ref)]: JSON.stringify({ apiKey: "google-key" }),
+    },
+    network: ttsPreviewNetwork(),
+  });
+  await app.press("id:nav-settings");
+  await app.press("id:settings-nav-tts");
+  await app.press("id:settings-tts-open-google-cloud");
+  await app.waitFor("id:settings-tts-google-family");
+
+  await app.press("id:settings-tts-google-family");
+  await app.waitFor("role:option[Neural2]");
+  await app.press("role:option[Neural2]");
+  await app.waitUntil(() => app.texts().some((text) => text.startsWith("Voice: en-US-Neural2-")));
+
+  await stepGoogleRate(app, 5);
+  await app.waitUntil(() => app.texts().includes("Speaking rate · 1.25×"));
+
+  const before = JSON.parse(app.storage()[TTS_STORAGE_KEY]!).googleCloud.preferences;
+  await app.press("id:settings-tts-preview");
+  await app.waitFor("text:Stop");
+  expect(app.requests()).toHaveLength(1);
+  const request = app.requests()[0]!;
+  const body = JSON.parse(request.body ?? "");
+  expect(body.voice.name).toMatch(/^en-US-Neural2-/);
+  expect(body.audioConfig).toEqual({ audioEncoding: "MP3", speakingRate: 1.25 });
+  expect(JSON.parse(app.storage()[TTS_STORAGE_KEY]!).googleCloud.preferences).toEqual(before);
+  await app.endAudio();
+  await app.waitFor("text:Play sample");
+
+  await app.press("id:settings-tts-save");
+  await app.waitUntil(
+    () =>
+      JSON.parse(app.storage()[TTS_STORAGE_KEY]!).googleCloud.preferences.voiceTier === "neural2",
+  );
+  const saved = JSON.parse(app.storage()[TTS_STORAGE_KEY]!).googleCloud;
+  expect(saved.credentialRef).toBe(ref);
+  expect(saved.enabled).toBe(true);
+  expect(saved.preferences.speakingRate).toBe(1.25);
+  expect(app.value("id:settings-tts-api-key")).toBe("");
+
+  await app.press("id:settings-tts-breadcrumb-root");
+  await app.waitFor("id:settings-tts-card");
+  await app.press("id:settings-tts-open-google-cloud");
+  await app.waitFor("id:settings-tts-google-family");
+  expect(app.shows("id:settings-tts-google-family >> text:Neural2")).toBe(true);
+  await app.waitUntil(() => app.texts().includes("Speaking rate · 1.25×"));
+  expect(JSON.parse(app.storage()[ttsCredentialStorageKey(ref)]!).apiKey).toBe("google-key");
+});
+
+test("tts google: leaving the channel discards an unsaved voice draft", async () => {
+  const app = await open(APP_ENTRY, {
+    ...viewport,
+    storage: savedTtsStorage(true),
+  });
+  await app.press("id:nav-settings");
+  await app.press("id:settings-nav-tts");
+  await app.press("id:settings-tts-open-google-cloud");
+  await app.waitFor("id:settings-tts-google-family");
+
+  await app.press("id:settings-tts-google-family");
+  await app.waitFor("role:option[Neural2]");
+  await app.press("role:option[Neural2]");
+  await app.waitUntil(() => app.shows("id:settings-tts-google-family >> text:Neural2"));
+
+  await app.press("id:settings-tts-breadcrumb-root");
+  await app.waitFor("id:settings-tts-card");
+  await app.press("id:settings-tts-open-google-cloud");
+  await app.waitFor("id:settings-tts-google-family");
+  expect(app.shows("id:settings-tts-google-family >> text:Standard")).toBe(true);
+  expect(app.texts().includes("Speaking rate · 1×")).toBe(true);
+});
+
+test("tts google: an unavailable saved voice blocks preview until the picker is corrected", async () => {
+  const ref = "google-ref";
+  const app = await open(APP_ENTRY, {
+    ...viewport,
+    storage: {
+      "settings.language": "en",
+      [TTS_STORAGE_KEY]: ttsRecord({
+        googleCloud: {
+          enabled: true,
+          credentialRef: ref,
+          preferences: googleDraftPreferences({ voiceOverrides: { en: "en-US-Removed-A" } }),
+        },
+      }),
+      [ttsCredentialStorageKey(ref)]: JSON.stringify({ apiKey: "google-key" }),
+    },
+    network: ttsPreviewNetwork(),
+  });
+  await app.press("id:nav-settings");
+  await app.press("id:settings-nav-tts");
+  await app.press("id:settings-tts-open-google-cloud");
+  await app.waitFor("id:settings-tts-google-family");
+
+  expect(app.texts()).toContain(t("settings.tts.google.overrideUnavailable"));
+  expect(app.enabled("id:settings-tts-preview")).toBe(false);
+  expect(app.requests()).toHaveLength(0);
+
+  await app.press("id:settings-tts-google-overrides");
+  await app.waitFor("id:settings-tts-google-override-dialog");
+  await app.type("id:settings-tts-google-override-search", "en-GB-Standard-A");
+  await app.press("id:settings-tts-google-override-voice");
+  await app.waitFor("role:option[en-GB-Standard-A · English (UK) · Standard · Female]");
+  await app.press("role:option[en-GB-Standard-A · English (UK) · Standard · Female]");
+  await app.press("id:settings-tts-google-override-apply");
+  await app.waitUntil(() => !app.shows("id:settings-tts-google-override-dialog"));
+  await app.waitUntil(() => app.texts().some((text) => text.includes("en-GB-Standard-A")));
+  await app.waitUntil(() => app.enabled("id:settings-tts-preview"));
+
+  await app.press("id:settings-tts-preview");
+  await app.waitFor("text:Stop");
+  const body = JSON.parse(app.requests()[0]!.body ?? "");
+  expect(body.voice).toEqual({ languageCode: "en-GB", name: "en-GB-Standard-A" });
+  await app.endAudio();
+});
+
+test("tts google: shows each family's reachable languages, allowance, and overage", async () => {
+  const app = await open(APP_ENTRY, {
+    ...viewport,
+    storage: savedTtsStorage(true),
+  });
+  await app.press("id:nav-settings");
+  await app.press("id:settings-nav-tts");
+  await app.press("id:settings-tts-open-google-cloud");
+  await app.waitFor("id:settings-tts-google-pricing");
+
+  const standard = GOOGLE_VOICE_FAMILIES[0]!;
+  for (const line of googleFamilyPricingLines(standard)) {
+    expect(app.texts()).toContain(line);
+  }
+  expect(app.texts()).toContain(
+    t("settings.tts.google.checked", { date: GOOGLE_VOICE_PRICING.checkedAt }),
+  );
+  expect(app.texts().some((text) => text.includes("shared with WaveNet"))).toBe(true);
+
+  await app.press("id:settings-tts-google-family");
+  await app.waitFor("role:option[Neural2]");
+  await app.press("role:option[Neural2]");
+  await app.waitUntil(() => app.texts().some((text) => text.includes("$16 per million")));
+  expect(app.texts().some((text) => text.includes("1 million free characters"))).toBe(true);
+
+  await app.press("id:settings-tts-google-pricing-link");
+  await app.waitUntil(() => app.openedUrls().includes(GOOGLE_VOICE_PRICING.url));
+});
+
+test("tts google: Chirp 3: HD keeps rate and pitch out and uses the Cantonese sample", async () => {
+  const ref = "google-ref";
+  const app = await open(APP_ENTRY, {
+    ...viewport,
+    storage: {
+      "settings.language": "en",
+      [TTS_STORAGE_KEY]: ttsRecord({
+        googleCloud: {
+          enabled: true,
+          credentialRef: ref,
+          preferences: googleDraftPreferences({
+            voiceOverrides: { zh: "yue-HK-Chirp3-HD-Achernar" },
+            speakingRate: 1.25,
+            pitch: 2,
+          }),
+        },
+      }),
+      [ttsCredentialStorageKey(ref)]: JSON.stringify({ apiKey: "google-key" }),
+    },
+    network: ttsPreviewNetwork(),
+  });
+  await app.press("id:nav-settings");
+  await app.press("id:settings-nav-tts");
+  await app.press("id:settings-tts-open-google-cloud");
+  await app.waitFor("id:settings-tts-google-family");
+
+  await app.press("id:settings-tts-google-sample-language");
+  await app.waitFor("role:option[Chinese]");
+  await app.press("role:option[Chinese]");
+  await app.waitUntil(() => app.texts().some((text) => text.includes("yue-HK-Chirp3-HD-Achernar")));
+  expect(app.texts()).toContain(t("settings.tts.google.rateUnavailable"));
+  expect(app.texts()).toContain(t("settings.tts.google.pitchUnavailable"));
+
+  await app.press("id:settings-tts-preview");
+  await app.waitFor("text:Stop");
+  const body = JSON.parse(app.requests()[0]!.body ?? "");
+  expect(body.input.text).toBe(googleSampleText("zh", "yue-HK"));
+  expect(body.voice).toEqual({ languageCode: "yue-HK", name: "yue-HK-Chirp3-HD-Achernar" });
+  expect(body.audioConfig).toEqual({ audioEncoding: "MP3" });
+  await app.endAudio();
+});
+
+test("tts google: cancelling the overrides dialog keeps the page draft", async () => {
+  const app = await open(APP_ENTRY, {
+    ...viewport,
+    storage: savedTtsStorage(true),
+  });
+  await app.press("id:nav-settings");
+  await app.press("id:settings-nav-tts");
+  await app.press("id:settings-tts-open-google-cloud");
+  await app.waitFor("id:settings-tts-google-family");
+
+  await app.press("id:settings-tts-google-overrides");
+  await app.waitFor("id:settings-tts-google-override-dialog");
+  await app.press("id:settings-tts-google-override-language");
+  await app.waitFor("role:option[French]");
+  await app.press("role:option[French]");
+  await app.type("id:settings-tts-google-override-search", "fr-CA-Standard-A");
+  await app.press("id:settings-tts-google-override-voice");
+  await app.waitUntil(() =>
+    app.shows("role:option[fr-CA-Standard-A · French (Canada) · Standard · Female]"),
+  );
+  await app.press("role:option[fr-CA-Standard-A · French (Canada) · Standard · Female]");
+  await app.press("id:settings-tts-google-override-cancel");
+  await app.waitUntil(() => !app.shows("id:settings-tts-google-override-dialog"));
+  expect(app.shows("id:settings-tts-google-override-fr")).toBe(false);
+  expect(app.enabled("id:settings-tts-save")).toBe(false);
+
+  await app.press("id:settings-tts-google-overrides");
+  await app.waitFor("id:settings-tts-google-override-dialog");
+  await app.keyboard.press("escape");
+  await app.waitUntil(() => !app.shows("id:settings-tts-google-override-dialog"));
+  expect(app.shows("id:settings-tts-google-override-fr")).toBe(false);
 });

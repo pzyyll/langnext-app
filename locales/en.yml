@@ -178,9 +178,80 @@ settings:
       storageUnsupportedVersion: The saved text-to-speech settings use an unsupported version.
       storageWriteFailed: Could not save the text-to-speech settings. Check storage and try again.
       apiKeyBlank: Enter an API key.
+      apiKeyRequired: Enter an API key the first time you configure this channel.
       invalidRegion: Enter a public Azure Speech region, such as eastus.
+      invalidVoiceTier: Choose an approved Google voice family.
+      invalidVoiceGender: Choose Any, Female, or Male.
+      invalidVoiceOverride: Choose a voice for this language from the list.
+      invalidSpeakingRate: Set a speaking rate from 0.25× to 2×.
+      invalidPitch: Set a pitch from −20 to 20 semitones.
       channelUnconfigured: Configure this channel before enabling it.
       credentialUnreadable: The saved API key could not be read. Enter it again.
+    google:
+      voice: Voice
+      audio: Audio
+      tierLabel: Voice family
+      tier:
+        standard: Standard
+        wavenet: WaveNet
+        neural2: Neural2
+        chirp3-hd: "Chirp 3: HD"
+        studio: Studio
+        chirp-hd: "Chirp HD"
+        news: News
+        polyglot: Polyglot
+        casual: Casual
+      genderLabel: Voice gender
+      gender:
+        any: Any
+        female: Female
+        male: Male
+      languages: "%{count} app languages"
+      free: "%{millions} million free characters per month"
+      freeShared: "%{millions} million free characters per month, shared with %{family}"
+      overage: "%{price} per million characters after"
+      priceUsd: "$%{amount}"
+      checked: "Published %{date}"
+      pricingLink: Google pricing
+      unavailableFamily: This voice family is no longer available. Choose another family.
+      overrides: Language overrides
+      sampleLanguage: Sample language
+      previewVoice: "Voice: %{voice} (%{family})"
+      previewVoiceUnavailable: No voice for the sample language.
+      overrideTitle: Language voice override
+      overrideAdd: Add voice
+      overrideLanguage: Language
+      overrideSearch: Search voices
+      overrideSearchPlaceholder: Voice, locale, or family
+      overrideVoice: Voice
+      overrideVoicePlaceholder: Select a voice…
+      overrideEmpty: No matching voices.
+      overrideApply: Apply
+      overrideReset: Use automatic
+      overrideMissing: Not in the current catalog
+      overrideUnavailable: The saved voice for this language is not in the current catalog. Choose another voice or reset it.
+      noVoiceForFamily: No voice for this language is in the selected family. Choose another family or set a voice.
+      noVoiceForLanguage: This language has no Google voice.
+      rate: Speaking rate
+      rateValue: "%{value}×"
+      rateUnavailable: This voice does not apply a speaking rate.
+      increaseRate: Increase speaking rate
+      decreaseRate: Decrease speaking rate
+      pitch: Pitch
+      pitchValue: "%{value} semitones"
+      pitchUnavailable: This voice does not apply pitch.
+      increasePitch: Increase pitch
+      decreasePitch: Decrease pitch
+      locale:
+        cmn-TW: Chinese (Taiwan)
+        en-AU: English (Australia)
+        en-GB: English (UK)
+        en-IN: English (India)
+        es-US: Spanish (US)
+        fr-CA: French (Canada)
+        nl-BE: Dutch (Belgium)
+        pt-BR: Portuguese (Brazil)
+        yue-HK: Cantonese
   languageDetection:
     title: Language Detection
     ai: AI
@@ -631,7 +702,9 @@ quickTranslate:
   speakSending: Sends this text to %{name}.
   speakChooseSource: Choose a source language.
   speakTranslateFirst: Translate first so the source language can be detected.
-  speakUnsupported: This language has no Google Cloud Standard voice.
+  speakUnsupported: This language has no Google Cloud Text-to-Speech voice.
+  speakVoiceUnavailable: The saved voice for this language is no longer available. Choose another voice in Settings.
+  speakVoiceNeedsSettings: No voice for this language is in the chosen Google voice family. Choose a voice in Settings.
   speakTooLong: Shorten the text. Google accepts at most 5,000 bytes.
   speakPlayback: Could not play the audio. Try again.
   copy: Copy

@@ -178,9 +178,80 @@ settings:
       storageUnsupportedVersion: 已保存的语音合成设置版本不受支持。
       storageWriteFailed: 无法保存语音合成设置，请检查存储后重试。
       apiKeyBlank: 请填写 API Key。
+      apiKeyRequired: 首次配置此渠道时请填写 API Key。
       invalidRegion: 请填写公开的 Azure Speech 区域，例如 eastus。
+      invalidVoiceTier: 请选择受支持的 Google 语音家族。
+      invalidVoiceGender: 请选择「任意」「女声」或「男声」。
+      invalidVoiceOverride: 请从列表中选择该语言的语音。
+      invalidSpeakingRate: 请将语速设置在 0.25× 到 2× 之间。
+      invalidPitch: 请将音高设置在 −20 到 20 半音之间。
       channelUnconfigured: 请先配置此渠道再启用。
       credentialUnreadable: 无法读取已保存的 API Key。请重新填写。
+    google:
+      voice: 语音
+      audio: 音频
+      tierLabel: 语音家族
+      tier:
+        standard: 标准
+        wavenet: WaveNet
+        neural2: Neural2
+        chirp3-hd: "Chirp 3: HD"
+        studio: Studio
+        chirp-hd: "Chirp HD"
+        news: News
+        polyglot: Polyglot
+        casual: Casual
+      genderLabel: 性别偏好
+      gender:
+        any: 任意
+        female: 女声
+        male: 男声
+      languages: "%{count} 种应用语言"
+      free: "每月 %{millions} 百万免费字符"
+      freeShared: "每月 %{millions} 百万免费字符，与 %{family} 共享"
+      overage: "超出后每百万字符 %{price}"
+      priceUsd: "$%{amount}"
+      checked: "价格发布于 %{date}"
+      pricingLink: Google 价格
+      unavailableFamily: 该语音家族已不可用，请选择其他家族。
+      overrides: 语言覆盖
+      sampleLanguage: 示例语言
+      previewVoice: "语音：%{voice}（%{family}）"
+      previewVoiceUnavailable: 示例语言没有可用语音。
+      overrideTitle: 语言语音覆盖
+      overrideAdd: 添加语音
+      overrideLanguage: 语言
+      overrideSearch: 搜索语音
+      overrideSearchPlaceholder: 语音名称、区域或家族
+      overrideVoice: 语音
+      overrideVoicePlaceholder: 请选择语音…
+      overrideEmpty: 没有匹配的语音。
+      overrideApply: 应用
+      overrideReset: 改用自动
+      overrideMissing: 不在当前目录中
+      overrideUnavailable: 该语言已保存的语音不在当前目录中。请重新选择或重置。
+      noVoiceForFamily: 所选家族中没有此语言的语音。请更换家族或指定语音。
+      noVoiceForLanguage: 此语言没有 Google 语音。
+      rate: 语速
+      rateValue: "%{value}×"
+      rateUnavailable: 此语音不支持语速。
+      increaseRate: 提高语速
+      decreaseRate: 降低语速
+      pitch: 音高
+      pitchValue: "%{value} 半音"
+      pitchUnavailable: 此语音不支持音高。
+      increasePitch: 提高音高
+      decreasePitch: 降低音高
+      locale:
+        cmn-TW: 中文（台湾）
+        en-AU: 英语（澳大利亚）
+        en-GB: 英语（英国）
+        en-IN: 英语（印度）
+        es-US: 西班牙语（美国）
+        fr-CA: 法语（加拿大）
+        nl-BE: 荷兰语（比利时）
+        pt-BR: 葡萄牙语（巴西）
+        yue-HK: 粤语
   languageDetection:
     title: 语言检测
     ai: AI
@@ -631,7 +702,9 @@ quickTranslate:
   speakSending: 将这段文字发送到 %{name}。
   speakChooseSource: 请先选择源语言。
   speakTranslateFirst: 请先翻译，以便确定源语言。
-  speakUnsupported: 此语言没有 Google Cloud 标准语音。
+  speakUnsupported: 此语言没有 Google Cloud 语音合成的语音。
+  speakVoiceUnavailable: 该语言已保存的语音已不可用。请在设置中重新选择。
+  speakVoiceNeedsSettings: 当前 Google 语音家族中没有此语言的语音。请在设置中选择语音。
   speakTooLong: 请缩短文字。Google 最多接受 5000 字节。
   speakPlayback: 无法播放音频。请重试。
   copy: 复制

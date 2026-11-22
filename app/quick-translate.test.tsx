@@ -15,6 +15,7 @@ import {
   SELECTION_TRANSLATE_SHORTCUT_STORAGE_KEY,
 } from "../features/settings/shortcuts";
 import { GOOGLE_CLOUD_TTS_URL } from "../features/tts/google-cloud";
+import { DEFAULT_GOOGLE_VOICE_PREFERENCES } from "../features/tts/google-preferences";
 import { TTS_STORAGE_KEY, ttsCredentialStorageKey } from "../features/tts/settings";
 import { createQuickTranslateController, POPUP_MIN_SIZE } from "./quick-translate-controller";
 
@@ -1903,8 +1904,12 @@ const QUICK_TTS_AUDIO = {
 function ttsWindowStorage(extra: Record<string, string> = {}) {
   return ocrSeed({
     [TTS_STORAGE_KEY]: JSON.stringify({
-      version: 1,
-      googleCloud: { enabled: true, credentialRef: "tts-ref" },
+      version: 2,
+      googleCloud: {
+        enabled: true,
+        credentialRef: "tts-ref",
+        preferences: DEFAULT_GOOGLE_VOICE_PREFERENCES,
+      },
     }),
     [ttsCredentialStorageKey("tts-ref")]: JSON.stringify({ apiKey: "tts-key" }),
     ...extra,

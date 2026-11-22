@@ -1,5 +1,6 @@
 import { atob } from "buffer";
 import type { FetchLike, HttpResponseLike } from "../../modules/ai/runtime/http";
+import type { GoogleAudioOptions } from "./google-preferences";
 import type { GoogleTtsFailure, TtsResult } from "./synthesis";
 
 /** Cloud Text-to-Speech REST v1 synthesize endpoint. The key travels only in a header. */
@@ -32,6 +33,8 @@ export interface GoogleCloudTtsSynthesizeInput {
   text: string;
   languageCode: string;
   voiceName: string;
+  /** Effective audio fields only; absent fields are omitted from the body. */
+  audio?: GoogleAudioOptions;
 }
 
 export interface GoogleCloudTtsSynthesizeOptions {
@@ -209,6 +212,12 @@ export function createGoogleCloudTtsClient(
       const stopped = (): GoogleCloudTtsSynthesis =>
         timedOut ? failed("timeout") : { status: "cancelled" };
 
+      const audioConfig: Record<string, unknown> = { audioEncoding: "MP3" };
+      if (input.audio?.speakingRate !== undefined) {
+        audioConfig.speakingRate = input.audio.speakingRate;
+      }
+      if (input.audio?.pitch !== undefined) audioConfig.pitch = input.audio.pitch;
+
       try {
         let response: HttpResponseLike;
         try {
@@ -221,7 +230,7 @@ export function createGoogleCloudTtsClient(
             body: JSON.stringify({
               input: { text: input.text },
               voice: { languageCode: input.languageCode, name: input.voiceName },
-              audioConfig: { audioEncoding: "MP3" },
+              audioConfig,
             }),
             redirect: "error",
             signal: controller.signal,

@@ -2,11 +2,19 @@ import { signal, Storage } from "nsh";
 import { t } from "nsh/i18n";
 import { createLogger } from "../../services/log";
 import { parseAzureSpeechRegion } from "./azure-regions";
+import {
+  DEFAULT_GOOGLE_VOICE_PREFERENCES,
+  normalizeGoogleVoicePreferences,
+  parseGoogleVoicePreferences,
+  type GoogleVoicePreferences,
+} from "./google-preferences";
 import type { TtsChannelId } from "./synthesis";
 
-export const TTS_STORAGE_KEY = "settings.tts.v1";
+/** Current settings record. Version 1 records stay untouched and do not load. */
+export const TTS_STORAGE_KEY = "settings.tts.v2";
+export const TTS_LEGACY_STORAGE_KEY = "settings.tts.v1";
 export const TTS_CREDENTIAL_KEY_PREFIX = "settings.tts.credentials.";
-const STORAGE_VERSION = 1;
+const STORAGE_VERSION = 2;
 
 const log = createLogger("tts/settings");
 
@@ -26,7 +34,12 @@ export interface TtsSettingsStorage {
 
 /** Saved channel. The API key lives in a separate storage entry. */
 export type TtsChannelBinding =
-  | { channel: "google-cloud"; enabled: boolean; credentialRef: string }
+  | {
+      channel: "google-cloud";
+      enabled: boolean;
+      credentialRef: string;
+      preferences: GoogleVoicePreferences;
+    }
   | { channel: "azure"; enabled: boolean; credentialRef: string; region: string };
 
 export type TtsSettingsErrorKey =
@@ -35,7 +48,13 @@ export type TtsSettingsErrorKey =
   | "storage_unsupported_version"
   | "storage_write_failed"
   | "api_key_blank"
+  | "api_key_required"
   | "invalid_region"
+  | "invalid_voice_tier"
+  | "invalid_voice_gender"
+  | "invalid_voice_override"
+  | "invalid_speaking_rate"
+  | "invalid_pitch"
   | "channel_unconfigured"
   | "credential_unreadable";
 
@@ -52,8 +71,12 @@ export type TtsActionResult =
   | { ok: true }
   | { ok: false; key: TtsSettingsErrorKey; message: string };
 
+/**
+ * A Google save may omit the key to reuse the readable saved one, and may omit
+ * the preferences to keep the saved ones. An Azure save still needs its key.
+ */
 export type TtsSaveChannelInput =
-  | { channel: "google-cloud"; apiKey: string }
+  | { channel: "google-cloud"; apiKey?: string; preferences?: GoogleVoicePreferences }
   | { channel: "azure"; apiKey: string; region: string };
 
 export interface TtsSettingsStore {
@@ -79,7 +102,13 @@ const ERROR_MESSAGES: Record<TtsSettingsErrorKey, string> = {
   storage_unsupported_version: "settings.tts.error.storageUnsupportedVersion",
   storage_write_failed: "settings.tts.error.storageWriteFailed",
   api_key_blank: "settings.tts.error.apiKeyBlank",
+  api_key_required: "settings.tts.error.apiKeyRequired",
   invalid_region: "settings.tts.error.invalidRegion",
+  invalid_voice_tier: "settings.tts.error.invalidVoiceTier",
+  invalid_voice_gender: "settings.tts.error.invalidVoiceGender",
+  invalid_voice_override: "settings.tts.error.invalidVoiceOverride",
+  invalid_speaking_rate: "settings.tts.error.invalidSpeakingRate",
+  invalid_pitch: "settings.tts.error.invalidPitch",
   channel_unconfigured: "settings.tts.error.channelUnconfigured",
   credential_unreadable: "settings.tts.error.credentialUnreadable",
 };
@@ -87,6 +116,7 @@ const ERROR_MESSAGES: Record<TtsSettingsErrorKey, string> = {
 interface GoogleStored {
   enabled: boolean;
   credentialRef: string;
+  preferences: GoogleVoicePreferences;
 }
 
 interface AzureStored {
@@ -128,7 +158,13 @@ function trimmedSecret(value: unknown): string | null {
 function cloneRecord(record: ChannelRecord): ChannelRecord {
   return {
     order: [...record.order],
-    googleCloud: record.googleCloud === null ? null : { ...record.googleCloud },
+    googleCloud:
+      record.googleCloud === null
+        ? null
+        : {
+            ...record.googleCloud,
+            preferences: normalizeGoogleVoicePreferences(record.googleCloud.preferences),
+          },
     azure: record.azure === null ? null : { ...record.azure },
   };
 }
@@ -137,7 +173,12 @@ function bindingFor(record: ChannelRecord, channel: TtsChannelId): TtsChannelBin
   if (channel === "google-cloud") {
     const google = record.googleCloud;
     if (google === null) return null;
-    return { channel, enabled: google.enabled, credentialRef: google.credentialRef };
+    return {
+      channel,
+      enabled: google.enabled,
+      credentialRef: google.credentialRef,
+      preferences: normalizeGoogleVoicePreferences(google.preferences),
+    };
   }
   const azure = record.azure;
   if (azure === null) return null;
@@ -165,11 +206,13 @@ function isEnabledIn(record: ChannelRecord, channel: TtsChannelId): boolean {
 }
 
 function parseGoogle(value: unknown): GoogleStored | null | "malformed" {
-  if (value === null) return null;
+  if (value === undefined || value === null) return null;
   if (!isPlainObject(value) || typeof value.enabled !== "boolean") return "malformed";
   const credentialRef = trimmedSecret(value.credentialRef);
   if (credentialRef === null || credentialRef !== value.credentialRef) return "malformed";
-  return { enabled: value.enabled, credentialRef };
+  const preferences = parseGoogleVoicePreferences(value.preferences, { mode: "load" });
+  if (!preferences.ok) return "malformed";
+  return { enabled: value.enabled, credentialRef, preferences: preferences.preferences };
 }
 
 function parseAzure(value: unknown): AzureStored | null | "malformed" {
@@ -229,7 +272,11 @@ function storagePayload(record: ChannelRecord): string {
     googleCloud:
       record.googleCloud === null
         ? null
-        : { enabled: record.googleCloud.enabled, credentialRef: record.googleCloud.credentialRef },
+        : {
+            enabled: record.googleCloud.enabled,
+            credentialRef: record.googleCloud.credentialRef,
+            preferences: normalizeGoogleVoicePreferences(record.googleCloud.preferences),
+          },
     azure:
       record.azure === null
         ? null
@@ -322,39 +369,92 @@ export function createTtsSettingsStore(storage: TtsSettingsStorage): TtsSettings
     activeBinding: () => activeFrom(settingsSignal()),
     readKey: (ref) => readStoredKey(ref),
     saveChannel: async (input) => {
-      const apiKey = trimmedSecret(input.apiKey);
-      if (apiKey === null) return failure("api_key_blank");
-      let azureRegion: string | null = null;
       if (input.channel === "azure") {
-        azureRegion = parseAzureSpeechRegion(input.region);
+        const apiKey = trimmedSecret(input.apiKey);
+        if (apiKey === null) return failure("api_key_blank");
+        const azureRegion = parseAzureSpeechRegion(input.region);
         if (azureRegion === null) return failure("invalid_region");
+        return enqueueWrite(async () => {
+          const current = cloneRecord(settingsSignal());
+          const existing = current.azure;
+          const enabled = existing?.enabled ?? false;
+          const credentialRef = crypto.randomUUID();
+          try {
+            await storage.setItem(
+              ttsCredentialStorageKey(credentialRef),
+              JSON.stringify({ apiKey }),
+            );
+          } catch {
+            return failure("storage_write_failed");
+          }
+          const next = cloneRecord(current);
+          next.azure = { enabled, credentialRef, region: azureRegion };
+          const written = await persistRecord(next);
+          if (!written.ok) {
+            await removeCredentialQuietly(credentialRef);
+            return written;
+          }
+          const previousRef = existing?.credentialRef ?? null;
+          if (previousRef !== null && previousRef !== credentialRef) {
+            await removeCredentialQuietly(previousRef);
+          }
+          const binding = bindingFor(next, "azure");
+          if (binding === null) return failure("storage_write_failed");
+          return { ok: true as const, binding };
+        });
+      }
+
+      if (input.apiKey !== undefined && trimmedSecret(input.apiKey) === null) {
+        return failure("api_key_blank");
       }
       return enqueueWrite(async () => {
         const current = cloneRecord(settingsSignal());
-        const existing = input.channel === "azure" ? current.azure : current.googleCloud;
-        const enabled = existing?.enabled ?? false;
-        const credentialRef = crypto.randomUUID();
-        try {
-          await storage.setItem(ttsCredentialStorageKey(credentialRef), JSON.stringify({ apiKey }));
-        } catch {
-          return failure("storage_write_failed");
+        const existing = current.googleCloud;
+        let preferences: GoogleVoicePreferences;
+        if (input.preferences === undefined) {
+          preferences =
+            existing?.preferences ??
+            normalizeGoogleVoicePreferences(DEFAULT_GOOGLE_VOICE_PREFERENCES);
+        } else {
+          const parsed = parseGoogleVoicePreferences(input.preferences, {
+            mode: "save",
+            current: existing?.preferences ?? null,
+          });
+          if (!parsed.ok) return failure(parsed.key);
+          preferences = parsed.preferences;
+        }
+        const proposedKey = input.apiKey === undefined ? null : trimmedSecret(input.apiKey);
+        let credentialRef: string;
+        let wroteCredential = false;
+        if (proposedKey !== null) {
+          credentialRef = crypto.randomUUID();
+          try {
+            await storage.setItem(
+              ttsCredentialStorageKey(credentialRef),
+              JSON.stringify({ apiKey: proposedKey }),
+            );
+          } catch {
+            return failure("storage_write_failed");
+          }
+          wroteCredential = true;
+        } else {
+          if (existing === null) return failure("api_key_required");
+          const readable = await readStoredKey(existing.credentialRef);
+          if (readable === null) return failure("credential_unreadable");
+          credentialRef = existing.credentialRef;
         }
         const next = cloneRecord(current);
-        if (input.channel === "azure" && azureRegion !== null) {
-          next.azure = { enabled, credentialRef, region: azureRegion };
-        } else {
-          next.googleCloud = { enabled, credentialRef };
-        }
+        next.googleCloud = { enabled: existing?.enabled ?? false, credentialRef, preferences };
         const written = await persistRecord(next);
         if (!written.ok) {
-          await removeCredentialQuietly(credentialRef);
+          if (wroteCredential) await removeCredentialQuietly(credentialRef);
           return written;
         }
         const previousRef = existing?.credentialRef ?? null;
-        if (previousRef !== null && previousRef !== credentialRef) {
+        if (wroteCredential && previousRef !== null && previousRef !== credentialRef) {
           await removeCredentialQuietly(previousRef);
         }
-        const binding = bindingFor(next, input.channel);
+        const binding = bindingFor(next, "google-cloud");
         if (binding === null) return failure("storage_write_failed");
         return { ok: true as const, binding };
       });

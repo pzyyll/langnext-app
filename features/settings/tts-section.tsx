@@ -27,11 +27,24 @@ import { Input } from "../../components/ui/input";
 import { Switch } from "../../components/ui/switch";
 import { toast } from "../../components/ui/toast";
 import { FormField } from "../../modules/ai/ui/form-field";
-import { sampleSpeechRequest, synthesizeSpeech } from "../tts/channels";
-import type { TtsCredentials, TtsFailure } from "../tts/synthesis";
+import type { LanguageId } from "../presets/languages";
+import { googleSampleSpeechRequest, sampleSpeechRequest, synthesizeSpeech } from "../tts/channels";
+import {
+  DEFAULT_GOOGLE_VOICE_PREFERENCES,
+  googlePreferencesSignature,
+  type GoogleVoicePreferences,
+} from "../tts/google-preferences";
+import { GOOGLE_SAMPLE_LANGUAGE } from "../tts/google-samples";
+import { resolveGoogleVoice } from "../tts/google-voices";
 import { canPlayTts, playMp3Bytes } from "../tts/playback";
 import { TTS_CHANNELS, ttsSettingsStore } from "../tts/settings";
-import type { TtsChannelId } from "../tts/synthesis";
+import type { TtsChannelId, TtsFailure, TtsSynthesisRequest } from "../tts/synthesis";
+import {
+  GoogleOverrideDialog,
+  GoogleTtsFields,
+  googlePreviewVoiceLabel,
+  googleVoiceProblem,
+} from "./google-tts-fields";
 
 export type { TtsChannelId };
 
@@ -404,6 +417,15 @@ function ChannelDetail(props: {
   credentialState: CredentialState;
 }) {
   const entrance = createMotion({ enter: motion.pageEnter });
+  const initialSaved = ttsSettingsStore.savedBinding(props.channel);
+  const googlePreferences = signal<GoogleVoicePreferences>(
+    initialSaved?.channel === "google-cloud"
+      ? initialSaved.preferences
+      : DEFAULT_GOOGLE_VOICE_PREFERENCES,
+  );
+  const sampleLanguage = signal<LanguageId>(GOOGLE_SAMPLE_LANGUAGE);
+  const overridesOpen = signal(false);
+  const overrideLanguage = signal<LanguageId>(GOOGLE_SAMPLE_LANGUAGE);
   const apiKeyDraft = signal("");
   const regionDraft = signal("");
   const error = signal<string | null>(null);
@@ -441,12 +463,27 @@ function ChannelDetail(props: {
   });
 
   const savedBinding = () => ttsSettingsStore.savedBinding(props.channel);
+  const savedGooglePreferences = () => {
+    const saved = ttsSettingsStore.savedBinding("google-cloud");
+    return saved?.channel === "google-cloud" ? saved.preferences : null;
+  };
+  const preferencesDirty = () => {
+    const saved = savedGooglePreferences();
+    return (
+      saved === null ||
+      googlePreferencesSignature(saved) !== googlePreferencesSignature(googlePreferences())
+    );
+  };
   const regionDirty = () => {
     if (props.channel !== "azure") return false;
     const saved = ttsSettingsStore.savedBinding("azure");
     if (saved?.channel !== "azure") return regionDraft().trim().length > 0;
     return regionDraft().trim() !== saved.region;
   };
+  const googleProblem = () =>
+    props.channel === "google-cloud"
+      ? googleVoiceProblem(googlePreferences(), sampleLanguage())
+      : null;
   const previewLabel = () => {
     if (phase() === "loading") return t("common.cancel");
     if (phase() === "playing") return t("settings.tts.stop");
@@ -461,21 +498,42 @@ function ChannelDetail(props: {
       return t("settings.tts.previewUnsaved");
     }
     if (phase() === "idle" && regionDirty()) return t("settings.tts.previewUnsavedRegion");
-    return undefined;
+    return googleProblem() ?? undefined;
   };
-  const previewDisabled = () =>
-    phase() === "idle" &&
-    (saving() ||
-      !playbackReady() ||
-      apiKeyDraft().trim().length > 0 ||
-      regionDirty() ||
-      savedBinding() === null ||
-      props.credentialState !== "readable");
+  const previewDisabled = () => {
+    if (phase() !== "idle") return false;
+    if (saving() || !playbackReady() || apiKeyDraft().trim().length > 0 || regionDirty()) {
+      return true;
+    }
+    if (savedBinding() === null || props.credentialState !== "readable") return true;
+    return googleProblem() !== null;
+  };
   const controlsLocked = () => saving() || phase() !== "idle";
-  const saveDisabled = () =>
-    controlsLocked() ||
-    apiKeyDraft().trim().length === 0 ||
-    (props.channel === "azure" && regionDraft().trim().length === 0);
+  const saveDisabled = () => {
+    if (controlsLocked()) return true;
+    if (props.channel === "azure") {
+      return apiKeyDraft().trim().length === 0 || regionDraft().trim().length === 0;
+    }
+    const hasNewKey = apiKeyDraft().trim().length > 0;
+    const canReuseKey = savedBinding() !== null && props.credentialState === "readable";
+    return !hasNewKey && !(canReuseKey && preferencesDirty());
+  };
+
+  const editOverrides = (language: LanguageId) => {
+    overrideLanguage.set(language);
+    overridesOpen.set(true);
+  };
+
+  const applyOverride = (language: LanguageId, voiceName: string | null) => {
+    const current = googlePreferences();
+    const overrides = { ...current.voiceOverrides };
+    if (voiceName === null) delete overrides[language];
+    else overrides[language] = voiceName;
+    googlePreferences.set({ ...current, voiceOverrides: overrides });
+    sampleLanguage.set(language);
+    error.set(null);
+    previewError.set(null);
+  };
 
   const handleSave = async () => {
     const apiKey = apiKeyDraft().trim();
@@ -483,21 +541,33 @@ function ChannelDetail(props: {
     error.set(null);
     saving.set(true);
     try {
-      const result =
-        props.channel === "azure"
-          ? await ttsSettingsStore.saveChannel({
-              channel: "azure",
-              apiKey,
-              region: regionDraft().trim(),
-            })
-          : await ttsSettingsStore.saveChannel({ channel: "google-cloud", apiKey });
-      if (!result.ok) {
-        error.set(result.message);
-        return;
-      }
-      if (result.binding.channel === "azure") {
-        regionTouched = false;
-        regionDraft.set(result.binding.region);
+      if (props.channel === "azure") {
+        const result = await ttsSettingsStore.saveChannel({
+          channel: "azure",
+          apiKey,
+          region: regionDraft().trim(),
+        });
+        if (!result.ok) {
+          error.set(result.message);
+          return;
+        }
+        if (result.binding.channel === "azure") {
+          regionTouched = false;
+          regionDraft.set(result.binding.region);
+        }
+      } else {
+        const result = await ttsSettingsStore.saveChannel({
+          channel: "google-cloud",
+          ...(apiKey.length > 0 ? { apiKey } : {}),
+          preferences: googlePreferences(),
+        });
+        if (!result.ok) {
+          error.set(result.message);
+          return;
+        }
+        if (result.binding.channel === "google-cloud") {
+          googlePreferences.set(result.binding.preferences);
+        }
       }
       apiKeyDraft.set("");
       if (mounted) apiKeyField?.blur();
@@ -547,13 +617,24 @@ function ChannelDetail(props: {
       previewError.set(t("settings.tts.keyUnreadable"));
       return;
     }
-    const credentials: TtsCredentials =
-      saved.channel === "azure"
-        ? { channel: "azure", apiKey, region: saved.region }
-        : { channel: "google-cloud", apiKey };
-    const synthesized = await synthesizeSpeech(sampleSpeechRequest(credentials), {
-      signal: controller.signal,
-    });
+    let request: TtsSynthesisRequest;
+    if (saved.channel === "azure") {
+      request = sampleSpeechRequest({ channel: "azure", apiKey, region: saved.region });
+    } else {
+      const resolved = resolveGoogleVoice(sampleLanguage(), googlePreferences());
+      if (!resolved.ok) {
+        phase.set("idle");
+        previewError.set(googleProblem());
+        return;
+      }
+      request = googleSampleSpeechRequest({
+        credentials: { channel: "google-cloud", apiKey },
+        language: sampleLanguage(),
+        voice: resolved.voice,
+        preferences: googlePreferences(),
+      });
+    }
+    const synthesized = await synthesizeSpeech(request, { signal: controller.signal });
     if (!mounted || token !== active.token || controller.signal.aborted) return;
     if (synthesized.status === "cancelled") {
       phase.set("idle");
@@ -636,6 +717,20 @@ function ChannelDetail(props: {
           </Text>
         </If>
 
+        <If when={props.channel === "google-cloud"}>
+          <GoogleTtsFields
+            disabled={controlsLocked()}
+            preferences={() => googlePreferences()}
+            sampleLanguage={() => sampleLanguage()}
+            onPreferencesChange={(next) => {
+              error.set(null);
+              googlePreferences.set(next);
+            }}
+            onSampleLanguageChange={(language) => sampleLanguage.set(language)}
+            onEditOverrides={editOverrides}
+          />
+        </If>
+
         <If when={error() !== null}>
           <Text testID="settings-tts-error" role="alert" class="text-sm text-destructive">
             {error()}
@@ -645,6 +740,15 @@ function ChannelDetail(props: {
         <If when={previewError() !== null}>
           <Text testID="settings-tts-preview-error" role="alert" class="text-sm text-destructive">
             {previewError()}
+          </Text>
+        </If>
+
+        <If when={props.channel === "google-cloud"}>
+          <Text
+            testID="settings-tts-google-preview-voice"
+            class={`text-xs ${googleProblem() !== null ? "text-destructive" : "text-muted-foreground"}`}
+          >
+            {googleProblem() ?? googlePreviewVoiceLabel(googlePreferences(), sampleLanguage())}
           </Text>
         </If>
 
@@ -668,6 +772,16 @@ function ChannelDetail(props: {
           />
         </View>
       </Card>
+
+      <If when={props.channel === "google-cloud"}>
+        <GoogleOverrideDialog
+          open={() => overridesOpen()}
+          initialLanguage={() => overrideLanguage()}
+          preferences={() => googlePreferences()}
+          onOpenChange={(open) => overridesOpen.set(open)}
+          onApply={applyOverride}
+        />
+      </If>
     </View>
   );
 }

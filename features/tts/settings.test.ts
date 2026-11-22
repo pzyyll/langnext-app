@@ -1,11 +1,42 @@
 import { expect, test } from "nsh/test";
 import {
+  DEFAULT_GOOGLE_VOICE_PREFERENCES,
+  type GoogleVoicePreferences,
+} from "./google-preferences";
+import {
   createTtsSettingsStore,
   TTS_CREDENTIAL_KEY_PREFIX,
+  TTS_LEGACY_STORAGE_KEY,
   TTS_STORAGE_KEY,
   ttsCredentialStorageKey,
+  type TtsChannelBinding,
   type TtsSettingsStorage,
 } from "./settings";
+
+const GOOGLE_PREFERENCES = DEFAULT_GOOGLE_VOICE_PREFERENCES;
+
+function googlePrefsOf(binding: TtsChannelBinding | null): GoogleVoicePreferences | null {
+  return binding?.channel === "google-cloud" ? binding.preferences : null;
+}
+
+function savedGooglePreferences(
+  store: ReturnType<typeof createTtsSettingsStore>,
+): GoogleVoicePreferences | null {
+  return googlePrefsOf(store.savedBinding("google-cloud"));
+}
+
+/** One saved v2 Google binding with normalized voice preferences. */
+function googleStored(options: {
+  enabled: boolean;
+  credentialRef: string;
+  preferences?: unknown;
+}): Record<string, unknown> {
+  return {
+    enabled: options.enabled,
+    credentialRef: options.credentialRef,
+    preferences: options.preferences ?? GOOGLE_PREFERENCES,
+  };
+}
 
 function createMemoryStorage(initial: Record<string, string> = {}) {
   const backing: Record<string, string> = { ...initial };
@@ -88,9 +119,12 @@ test("tts store: starts off, enables only on an explicit switch, and keeps a lat
   expect(await store.setEnabled("google-cloud", true)).toEqual({ ok: true });
   expect(store.activeBinding()?.channel === "google-cloud").toBe(true);
   expect(JSON.parse(mem.backing[TTS_STORAGE_KEY]!)).toEqual({
-    version: 1,
+    version: 2,
     order: ["google-cloud", "azure"],
-    googleCloud: { enabled: true, credentialRef: saved.binding.credentialRef },
+    googleCloud: googleStored({
+      enabled: true,
+      credentialRef: saved.binding.credentialRef,
+    }),
     azure: null,
   });
   expect(JSON.parse(mem.backing[ttsCredentialStorageKey(saved.binding.credentialRef)]!)).toEqual({
@@ -225,8 +259,8 @@ test("tts store: rejects enabling a missing or unreadable key and still allows d
   expect((await store.setEnabled("google-cloud", true)).ok).toBe(false);
 
   mem.backing[TTS_STORAGE_KEY] = JSON.stringify({
-    version: 1,
-    googleCloud: { enabled: true, credentialRef: saved.credentialRef },
+    version: 2,
+    googleCloud: googleStored({ enabled: true, credentialRef: saved.credentialRef }),
   });
   mem.backing[ttsCredentialStorageKey(saved.credentialRef)] = "{not json";
   const broken = createTtsSettingsStore(mem.storage);
@@ -267,11 +301,35 @@ test("tts store: a failed toggle keeps the last confirmed enabled state", async 
 test("tts store: reports malformed settings and a read failure without enabling the channel", async () => {
   const records: unknown[] = [
     "{ not json",
-    { version: 1 },
-    { version: 1, googleCloud: { enabled: "yes", credentialRef: "ref-1" } },
-    { version: 1, googleCloud: { enabled: true, credentialRef: "  " } },
-    { version: 1, googleCloud: { enabled: true } },
-    { version: 1, googleCloud: [] },
+    { version: 2 },
+    { version: 2, googleCloud: { enabled: "yes", credentialRef: "ref-1" } },
+    { version: 2, googleCloud: { enabled: true, credentialRef: "  " } },
+    { version: 2, googleCloud: { enabled: true } },
+    { version: 2, googleCloud: [] },
+    {
+      version: 2,
+      googleCloud: googleStored({
+        enabled: true,
+        credentialRef: "ref-1",
+        preferences: { voiceTier: "standard" },
+      }),
+    },
+    {
+      version: 2,
+      googleCloud: googleStored({
+        enabled: true,
+        credentialRef: "ref-1",
+        preferences: { ...GOOGLE_PREFERENCES, speakingRate: 3 },
+      }),
+    },
+    {
+      version: 2,
+      googleCloud: googleStored({
+        enabled: true,
+        credentialRef: "ref-1",
+        preferences: { ...GOOGLE_PREFERENCES, voiceOverrides: { nope: "x" } },
+      }),
+    },
     { googleCloud: null },
   ];
   for (const record of records) {
@@ -287,7 +345,7 @@ test("tts store: reports malformed settings and a read failure without enabling 
     expect(mem.getSetCalls()).toBe(0);
   }
 
-  const versioned = JSON.stringify({ version: 2, googleCloud: null });
+  const versioned = JSON.stringify({ version: 3, googleCloud: null });
   const unsupported = createMemoryStorage({ [TTS_STORAGE_KEY]: versioned });
   const versionStore = createTtsSettingsStore(unsupported.storage);
   await versionStore.load();
@@ -340,8 +398,8 @@ test("tts store: serializes overlapping saves and keeps only the last key", asyn
 test("tts store: saves Azure beside an active Google channel and follows priority order", async () => {
   const mem = createMemoryStorage({
     [TTS_STORAGE_KEY]: JSON.stringify({
-      version: 1,
-      googleCloud: { enabled: true, credentialRef: "google-ref" },
+      version: 2,
+      googleCloud: googleStored({ enabled: true, credentialRef: "google-ref" }),
     }),
     [ttsCredentialStorageKey("google-ref")]: JSON.stringify({ apiKey: "google-key" }),
   });
@@ -360,6 +418,7 @@ test("tts store: saves Azure beside an active Google channel and follows priorit
     channel: "google-cloud",
     enabled: true,
     credentialRef: "google-ref",
+    preferences: GOOGLE_PREFERENCES,
   });
   expect(store.savedBinding("azure")).toBeNull();
 
@@ -404,6 +463,7 @@ test("tts store: saves Azure beside an active Google channel and follows priorit
     channel: "google-cloud",
     enabled: true,
     credentialRef: "google-ref",
+    preferences: GOOGLE_PREFERENCES,
   });
 
   expect(await store.moveChannelTo("azure", 0)).toEqual({ ok: true });
@@ -500,8 +560,8 @@ test("tts store: a failed Azure switch or replacement keeps the previous channel
 test("tts store: accepts two enabled channels and rejects an invalid stored Azure region", async () => {
   const both = createMemoryStorage({
     [TTS_STORAGE_KEY]: JSON.stringify({
-      version: 1,
-      googleCloud: { enabled: true, credentialRef: "google-ref" },
+      version: 2,
+      googleCloud: googleStored({ enabled: true, credentialRef: "google-ref" }),
       azure: { enabled: true, credentialRef: "azure-ref", region: "eastus" },
     }),
   });
@@ -514,12 +574,12 @@ test("tts store: accepts two enabled channels and rejects an invalid stored Azur
 
   const records = [
     {
-      version: 1,
+      version: 2,
       googleCloud: null,
       azure: { enabled: true, credentialRef: "azure-ref", region: "EASTUS" },
     },
     {
-      version: 1,
+      version: 2,
       googleCloud: null,
       azure: { enabled: true, credentialRef: "azure-ref", region: "east.us" },
     },
@@ -536,4 +596,251 @@ test("tts store: accepts two enabled channels and rejects an invalid stored Azur
     expect(mem.backing[TTS_STORAGE_KEY]).toBe(raw);
     expect(mem.getSetCalls()).toBe(0);
   }
+});
+
+const PREFERENCE_DRAFT = {
+  voiceTier: "neural2" as const,
+  voiceGender: "female" as const,
+  voiceOverrides: { en: "en-GB-Neural2-A" },
+  speakingRate: 1.25,
+  pitch: 2,
+};
+
+function prefDraft(value: Record<string, unknown>): unknown {
+  return value as unknown;
+}
+
+test("tts store: saves Google voice preferences without replacing the saved key", async () => {
+  const mem = createMemoryStorage();
+  const store = createTtsSettingsStore(mem.storage);
+  const saved = await saveKey(store, FIRST_KEY);
+  const before = JSON.parse(mem.backing[TTS_STORAGE_KEY]!);
+
+  const updated = await store.saveChannel({
+    channel: "google-cloud",
+    preferences: PREFERENCE_DRAFT,
+  });
+  expect(updated.ok).toBe(true);
+  if (!updated.ok) throw new Error("expected the preference save to succeed");
+  expect(updated.binding).toEqual({
+    channel: "google-cloud",
+    enabled: true,
+    credentialRef: saved.credentialRef,
+    preferences: PREFERENCE_DRAFT,
+  });
+  expect(store.activeBinding()).toEqual(updated.binding);
+  expect(await store.readKey(saved.credentialRef)).toBe(FIRST_KEY);
+  expect(JSON.parse(mem.backing[TTS_STORAGE_KEY]!)).toEqual({
+    ...before,
+    googleCloud: {
+      enabled: true,
+      credentialRef: saved.credentialRef,
+      preferences: PREFERENCE_DRAFT,
+    },
+  });
+  expect(mem.backing[TTS_STORAGE_KEY]).not.toContain(FIRST_KEY);
+  expect(
+    Object.keys(mem.backing).filter((key) => key.startsWith(TTS_CREDENTIAL_KEY_PREFIX)),
+  ).toEqual([ttsCredentialStorageKey(saved.credentialRef)]);
+
+  const reloaded = createTtsSettingsStore(mem.storage);
+  await reloaded.load();
+  expect(reloaded.savedBinding("google-cloud")).toEqual(updated.binding);
+  expect(await reloaded.readKey(saved.credentialRef)).toBe(FIRST_KEY);
+});
+
+test("tts store: a first Google save still needs a readable key", async () => {
+  const mem = createMemoryStorage();
+  const store = createTtsSettingsStore(mem.storage);
+
+  const omitted = await store.saveChannel({
+    channel: "google-cloud",
+    preferences: PREFERENCE_DRAFT,
+  });
+  expect(omitted.ok).toBe(false);
+  if (omitted.ok) throw new Error("expected the first save to need a key");
+  expect(omitted.key).toBe("api_key_required");
+  expect(omitted.message).toBeTruthy();
+
+  const blank = await store.saveChannel({ channel: "google-cloud", apiKey: "   " });
+  expect(blank.ok).toBe(false);
+  if (blank.ok) throw new Error("expected a blank key to be rejected");
+  expect(blank.key).toBe("api_key_blank");
+  expect(mem.getSetCalls()).toBe(0);
+  expect(store.savedBinding("google-cloud")).toBeNull();
+});
+
+test("tts store: a preference save with an unreadable key asks for the key again", async () => {
+  const mem = createMemoryStorage();
+  const store = createTtsSettingsStore(mem.storage);
+  const saved = await saveKey(store, FIRST_KEY);
+  mem.backing[ttsCredentialStorageKey(saved.credentialRef)] = "not-json";
+
+  const result = await store.saveChannel({
+    channel: "google-cloud",
+    preferences: PREFERENCE_DRAFT,
+  });
+  expect(result.ok).toBe(false);
+  if (result.ok) throw new Error("expected the unreadable key to block the save");
+  expect(result.key).toBe("credential_unreadable");
+  expect(savedGooglePreferences(store)).toEqual(GOOGLE_PREFERENCES);
+});
+
+test("tts store: a Google key replacement keeps the saved preferences", async () => {
+  const mem = createMemoryStorage();
+  const store = createTtsSettingsStore(mem.storage);
+  const first = await store.saveChannel({
+    channel: "google-cloud",
+    apiKey: FIRST_KEY,
+    preferences: PREFERENCE_DRAFT,
+  });
+  expect(first.ok).toBe(true);
+  if (!first.ok) throw new Error("expected the first save to succeed");
+
+  const replaced = await store.saveChannel({ channel: "google-cloud", apiKey: NEXT_KEY });
+  expect(replaced.ok).toBe(true);
+  if (!replaced.ok) throw new Error("expected the replacement to succeed");
+  expect(googlePrefsOf(replaced.binding)).toEqual(PREFERENCE_DRAFT);
+  expect(replaced.binding.credentialRef).not.toBe(first.binding.credentialRef);
+  expect(await store.readKey(replaced.binding.credentialRef)).toBe(NEXT_KEY);
+  expect(savedGooglePreferences(store)).toEqual(PREFERENCE_DRAFT);
+});
+
+test("tts store: rejects invalid Google preference drafts", async () => {
+  const mem = createMemoryStorage();
+  const store = createTtsSettingsStore(mem.storage);
+  const saved = await saveKey(store, FIRST_KEY);
+
+  const cases = [
+    prefDraft({ ...GOOGLE_PREFERENCES, voiceTier: "gemini-tts" }),
+    prefDraft({ ...GOOGLE_PREFERENCES, voiceTier: "chirp-hd" }),
+    prefDraft({ ...GOOGLE_PREFERENCES, voiceGender: "robot" }),
+    prefDraft({ ...GOOGLE_PREFERENCES, voiceOverrides: { nope: "en-US-Standard-C" } }),
+    prefDraft({ ...GOOGLE_PREFERENCES, voiceOverrides: { en: "en-US-Removed-A" } }),
+    prefDraft({ ...GOOGLE_PREFERENCES, voiceOverrides: { en: "fr-FR-Wavenet-A" } }),
+    prefDraft({
+      ...GOOGLE_PREFERENCES,
+      voiceOverrides: { en: "en-US-Standard-C", hr: "hr-HR-Wavenet-A" },
+    }),
+    prefDraft({ ...GOOGLE_PREFERENCES, speakingRate: 0.1 }),
+    prefDraft({ ...GOOGLE_PREFERENCES, speakingRate: 2.5 }),
+    prefDraft({ ...GOOGLE_PREFERENCES, speakingRate: Number.POSITIVE_INFINITY }),
+    prefDraft({ ...GOOGLE_PREFERENCES, pitch: 1.5 }),
+    prefDraft({ ...GOOGLE_PREFERENCES, pitch: 21 }),
+  ];
+  const expectedKeys = [
+    "invalid_voice_tier",
+    "invalid_voice_tier",
+    "invalid_voice_gender",
+    "invalid_voice_override",
+    "invalid_voice_override",
+    "invalid_voice_override",
+    "invalid_voice_override",
+    "invalid_speaking_rate",
+    "invalid_speaking_rate",
+    "invalid_speaking_rate",
+    "invalid_pitch",
+    "invalid_pitch",
+  ];
+  for (let index = 0; index < cases.length; index += 1) {
+    const result = await store.saveChannel({
+      channel: "google-cloud",
+      preferences: cases[index] as never,
+    });
+    expect(result.ok).toBe(false);
+    if (result.ok) throw new Error("expected the draft to be rejected");
+    expect(result.key).toBe(expectedKeys[index]);
+    expect(result.message).toBeTruthy();
+  }
+  expect(store.savedBinding("google-cloud")).toEqual(saved);
+  expect(store.isEnabled("google-cloud")).toBe(true);
+});
+
+test("tts store: keeps a saved voice that left the catalog until the user changes it", async () => {
+  const unresolved: GoogleVoicePreferences = {
+    voiceTier: "chirp-hd",
+    voiceGender: "any",
+    voiceOverrides: { en: "en-US-Removed-A" },
+    speakingRate: 1,
+    pitch: 0,
+  };
+  const mem = createMemoryStorage({
+    [TTS_STORAGE_KEY]: JSON.stringify({
+      version: 2,
+      googleCloud: googleStored({
+        enabled: true,
+        credentialRef: "google-ref",
+        preferences: unresolved,
+      }),
+    }),
+    [ttsCredentialStorageKey("google-ref")]: JSON.stringify({ apiKey: "google-key" }),
+  });
+  const store = createTtsSettingsStore(mem.storage);
+  await store.load();
+  expect(store.loadError()).toBeNull();
+  expect(savedGooglePreferences(store)).toEqual(unresolved);
+
+  const retained = await store.saveChannel({
+    channel: "google-cloud",
+    preferences: unresolved,
+  });
+  expect(retained.ok).toBe(true);
+  if (!retained.ok) throw new Error("expected the retained voice to save");
+  expect(googlePrefsOf(retained.binding)).toEqual(unresolved);
+
+  const cleared = await store.saveChannel({
+    channel: "google-cloud",
+    preferences: { ...unresolved, voiceOverrides: {} },
+  });
+  expect(cleared.ok).toBe(true);
+  if (!cleared.ok) throw new Error("expected the cleared override to save");
+  expect(googlePrefsOf(cleared.binding)?.voiceOverrides).toEqual({});
+});
+
+test("tts store: a failed preference write keeps the previous preferences and key", async () => {
+  const mem = createMemoryStorage();
+  const store = createTtsSettingsStore(mem.storage);
+  const saved = await saveKey(store, FIRST_KEY);
+  const before = mem.backing[TTS_STORAGE_KEY];
+  mem.failSetOnCall(mem.getSetCalls() + 1);
+
+  const result = await store.saveChannel({
+    channel: "google-cloud",
+    preferences: PREFERENCE_DRAFT,
+  });
+  expect(result.ok).toBe(false);
+  if (result.ok) throw new Error("expected the write to fail");
+  expect(result.key).toBe("storage_write_failed");
+  expect(store.savedBinding("google-cloud")).toEqual(saved);
+  expect(mem.backing[TTS_STORAGE_KEY]).toBe(before);
+  expect(await store.readKey(saved.credentialRef)).toBe(FIRST_KEY);
+  expect(JSON.stringify(mem.backing[TTS_STORAGE_KEY])).not.toContain("en-GB-Neural2-A");
+});
+
+test("tts store: version 1 records do not load and stay untouched", async () => {
+  const legacy = JSON.stringify({
+    version: 1,
+    googleCloud: { enabled: true, credentialRef: "legacy-ref" },
+    azure: { enabled: true, credentialRef: "legacy-azure", region: "eastus" },
+  });
+  const mem = createMemoryStorage({
+    [TTS_LEGACY_STORAGE_KEY]: legacy,
+    [ttsCredentialStorageKey("legacy-ref")]: JSON.stringify({ apiKey: "legacy-key" }),
+  });
+  const store = createTtsSettingsStore(mem.storage);
+  const getsBefore = mem.getGets().length;
+  await store.load();
+  expect(store.loadError()).toBeNull();
+  expect(store.savedBinding("google-cloud")).toBeNull();
+  expect(store.savedBinding("azure")).toBeNull();
+  expect(store.activeBinding()).toBeNull();
+  expect(mem.backing[TTS_LEGACY_STORAGE_KEY]).toBe(legacy);
+  expect(mem.getSetCalls()).toBe(0);
+  expect(
+    mem
+      .getGets()
+      .slice(getsBefore)
+      .filter((key) => key.startsWith(TTS_CREDENTIAL_KEY_PREFIX)),
+  ).toEqual([]);
+  expect(await store.readKey("legacy-ref")).toBe("legacy-key");
 });
