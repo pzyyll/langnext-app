@@ -1,5 +1,6 @@
 import { atob } from "buffer";
 import type { FetchLike, HttpResponseLike } from "../../modules/ai/runtime/http";
+import type { GoogleTtsFailure, TtsResult } from "./synthesis";
 
 /** Cloud Text-to-Speech REST v1 synthesize endpoint. The key travels only in a header. */
 export const GOOGLE_CLOUD_TTS_URL = "https://texttospeech.googleapis.com/v1/text:synthesize";
@@ -22,20 +23,9 @@ export const TTS_RESPONSE_BYTE_LIMIT = 8 * 1024 * 1024;
 /** Deadline for the request and the body read. */
 export const TTS_DEFAULT_TIMEOUT_MS = 15_000;
 
-export type GoogleCloudTtsFailure =
-  | "text_blank"
-  | "text_too_long"
-  | "auth"
-  | "quota"
-  | "timeout"
-  | "network"
-  | "rejected"
-  | "malformed";
+export type GoogleCloudTtsFailure = GoogleTtsFailure;
 
-export type GoogleCloudTtsSynthesis =
-  | { status: "synthesized"; audio: Uint8Array }
-  | { status: "cancelled" }
-  | { status: "failed"; failure: GoogleCloudTtsFailure };
+export type GoogleCloudTtsSynthesis = TtsResult<GoogleCloudTtsFailure>;
 
 export interface GoogleCloudTtsSynthesizeInput {
   apiKey: string;
