@@ -16,6 +16,7 @@ import {
 } from "nsh";
 import { t } from "nsh/i18n";
 import googleCloudIcon from "../../assets/icons/google-cloud.svg";
+import microsoftAzureIcon from "../../assets/icons/microsoft-azure.svg";
 import { motion } from "../../components/motion";
 import { Avatar } from "../../components/ui/avatar";
 import { Badge } from "../../components/ui/badge";
@@ -50,35 +51,20 @@ function channelName(channel: TtsChannelId): string {
   return t(channel === "azure" ? "settings.tts.azure.channel" : "settings.tts.channel");
 }
 
-function GoogleCloudAvatar() {
+function ChannelAvatar(props: { channel: TtsChannelId }) {
   return (
     <Avatar
       size="md"
       accessibilityLabel=""
       fallback={
         <Image
-          src={googleCloudIcon}
+          src={props.channel === "azure" ? microsoftAzureIcon : googleCloudIcon}
           accessibilityElementsHidden={true}
           class="size-4 overflow-hidden"
         />
       }
     />
   );
-}
-
-function AzureAvatar() {
-  return (
-    <Avatar
-      size="md"
-      accessibilityLabel=""
-      fallback={<Icon name="speaker-one" tone="muted-foreground" class="size-4" />}
-    />
-  );
-}
-
-function ChannelAvatar(props: { channel: TtsChannelId }) {
-  if (props.channel === "azure") return <AzureAvatar />;
-  return <GoogleCloudAvatar />;
 }
 
 interface TtsChannelListProps {
