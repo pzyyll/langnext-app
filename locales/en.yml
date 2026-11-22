@@ -559,9 +559,9 @@ quickTranslate:
   removeCard: Remove card
   translating: Translating…
   detectingLanguage: Detecting language…
-  detectedLanguage: "Detected: %{language}"
   enableAutoTranslate: Enable automatic translation
   disableAutoTranslate: Disable automatic translation
+  speak: Read aloud
   copy: Copy
   copied: Copied
   sourceLabel: Source text

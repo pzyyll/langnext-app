@@ -21,7 +21,6 @@ import { Textarea } from "../../components/ui/textarea";
 import { ProviderMark } from "../../modules/ai/ui/provider-mark";
 import { providerSettingsRegistry } from "../../modules/ai/ui/registry";
 import { modelsStore } from "../models/store";
-import { getLanguageLabel } from "../presets/languages";
 import type { TranslationPreset } from "../presets/types";
 import type { CardViewItem, QuickTranslateSession, SourceDetectionState } from "./session";
 import { resolvePresetTemplate } from "./translate";
@@ -48,13 +47,7 @@ function buildTemplateItems(preset: TranslationPreset | null): SelectItem[] {
 }
 
 function resolveSourceDetectionLabel(state: SourceDetectionState): string | null {
-  if (state.status === "detecting") {
-    return t("quickTranslate.detectingLanguage");
-  }
-  if (state.status === "detected") {
-    return t("quickTranslate.detectedLanguage", { language: getLanguageLabel(state.language) });
-  }
-  return null;
+  return state.status === "detecting" ? t("quickTranslate.detectingLanguage") : null;
 }
 
 /** Shared icon-only retry trigger used across card failures, result actions, and preset reload. */
@@ -69,6 +62,22 @@ function RetryIconButton(props: { testID: string; onPress: () => void }) {
       onPress={() => props.onPress()}
     >
       <Icon name="refresh" tone="muted-foreground" class="size-3.5" />
+    </Button>
+  );
+}
+
+/** Disabled speech synthesis placeholder until TTS playback is implemented. */
+function SpeakerPlaceholderButton(props: { testID: string }) {
+  return (
+    <Button
+      testID={props.testID}
+      size="icon-xs"
+      variant="ghost"
+      disabled
+      tooltip={t("quickTranslate.speak")}
+      accessibilityLabel={t("quickTranslate.speak")}
+    >
+      <Icon name="speaker-one" tone="muted-foreground" class="size-3.5" />
     </Button>
   );
 }
@@ -373,24 +382,34 @@ function PresetCardRow(props: PresetCardRowProps) {
               </Text>
             </View>
             <View class="flex-row items-center justify-between gap-2 border-t border-border/60 px-2 py-1.5">
-              <Button
-                testID="quick-translate-copy"
-                size="icon-xs"
-                variant="ghost"
-                tooltip={
-                  props.card().copied ? t("quickTranslate.copied") : t("quickTranslate.copy")
-                }
-                accessibilityLabel={
-                  props.card().copied ? t("quickTranslate.copied") : t("quickTranslate.copy")
-                }
-                onPress={() => props.onCopy(props.card().id)}
-              >
-                <Icon
-                  name={props.card().copied ? "check" : "copy"}
-                  tone={props.card().copied ? "success" : "muted-foreground"}
-                  class="size-3.5"
-                />
-              </Button>
+              <View class="flex-row items-center gap-0.5">
+                <If
+                  when={(() => {
+                    const res = props.card().result;
+                    return res.status === "success" && res.text.trim().length > 0;
+                  })()}
+                >
+                  <SpeakerPlaceholderButton testID="quick-translate-speak-result" />
+                </If>
+                <Button
+                  testID="quick-translate-copy"
+                  size="icon-xs"
+                  variant="ghost"
+                  tooltip={
+                    props.card().copied ? t("quickTranslate.copied") : t("quickTranslate.copy")
+                  }
+                  accessibilityLabel={
+                    props.card().copied ? t("quickTranslate.copied") : t("quickTranslate.copy")
+                  }
+                  onPress={() => props.onCopy(props.card().id)}
+                >
+                  <Icon
+                    name={props.card().copied ? "check" : "copy"}
+                    tone={props.card().copied ? "success" : "muted-foreground"}
+                    class="size-3.5"
+                  />
+                </Button>
+              </View>
               <RetryIconButton
                 testID="quick-translate-retry"
                 onPress={() => props.onRetry(props.card().id)}
@@ -424,6 +443,7 @@ export function QuickTranslatePopup(props: QuickTranslatePopupProps) {
   const sourceInputClass = platform.os === "windows" ? "min-h-10 leading-[0]" : "min-h-10";
   const sourceText = () => props.session.sourceText();
   const hasSourceText = () => sourceText().length > 0;
+  const hasSpeakableSource = () => sourceText().trim().length > 0;
   // Collapse is a view-only mode: an empty field always shows the editor for the next input.
   // Clipboard and selection arrive collapsed: the user asked to translate, not to edit.
   const delivery = () => props.session.sourceDelivery();
@@ -480,6 +500,7 @@ export function QuickTranslatePopup(props: QuickTranslatePopupProps) {
   const showOcrBusy = () => !showOcrError() && ocrRecognizing();
   const showSourceDetection = () => !showOcrError() && !showOcrBusy() && detectionLabel() !== null;
   const hasToolbarStatus = () => showOcrError() || showOcrBusy() || showSourceDetection();
+  const hasSourceToolbar = () => hasSpeakableSource() || hasToolbarStatus();
 
   const renderSourceActions = (extraClass = "") => (
     <If when={hasSourceText()}>
@@ -530,22 +551,32 @@ export function QuickTranslatePopup(props: QuickTranslatePopupProps) {
   );
 
   const renderSourceStatus = () => (
-    <If when={hasToolbarStatus()}>
-      <View testID="quick-translate-source-toolbar" class="mt-1">
+    <If when={hasSourceToolbar()}>
+      <View testID="quick-translate-source-toolbar" class="mt-1 flex-row items-center gap-1.5">
+        <If when={hasSpeakableSource()}>
+          <SpeakerPlaceholderButton testID="quick-translate-speak-source" />
+        </If>
         <If when={showOcrError()}>
-          <Text testID="quick-translate-ocr-status" role="alert" class="text-xs text-destructive">
+          <Text
+            testID="quick-translate-ocr-status"
+            role="alert"
+            class="min-w-0 flex-1 text-xs text-destructive"
+          >
             {ocrMessage() ?? ""}
           </Text>
         </If>
         <If when={showOcrBusy()}>
-          <Text testID="quick-translate-ocr-busy" class="truncate text-xs text-muted-foreground">
+          <Text
+            testID="quick-translate-ocr-busy"
+            class="min-w-0 flex-1 truncate text-xs text-muted-foreground"
+          >
             {t("quickTranslate.ocrRecognizing")}
           </Text>
         </If>
         <If when={showSourceDetection()}>
           <Text
             testID="quick-translate-source-detection"
-            class="truncate text-xs text-muted-foreground"
+            class="min-w-0 flex-1 truncate text-xs text-muted-foreground"
           >
             {detectionLabel() ?? ""}
           </Text>

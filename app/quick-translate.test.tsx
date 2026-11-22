@@ -130,6 +130,8 @@ test("quick window fits cards and translation content within the display work ar
   await app.waitUntil(() => Math.abs(height() - compactHeight) < 1);
 
   await app.type("id:quick-translate-source", "Hello");
+  await app.waitUntil(() => height() > compactHeight);
+  const withSourceHeight = height();
   await app.keyboard.press("enter");
   await app.waitFor(`${firstCard} >> id:quick-translate-result-text`);
   // The test driver's WindowState exposes the display ID; read its work area in the app.
@@ -140,11 +142,12 @@ test("quick window fits cards and translation content within the display work ar
   expect(state().contentBounds.size.width).toBe(width);
 
   await app.press(`${firstCard} >> id:quick-translate-collapse`);
-  await app.waitUntil(() => Math.abs(height() - compactHeight) < 1);
+  await app.waitUntil(() => Math.abs(height() - withSourceHeight) < 1);
   await app.press(`${firstCard} >> id:quick-translate-collapse`);
   await app.waitUntil(() => Math.abs(state().bounds.size.height - workHeight!) < 1);
   expect(state().contentBounds.size.width).toBe(width);
 
+  await app.press("id:quick-translate-clear");
   await app.press(`${firstCard} >> id:quick-translate-remove`);
   await app.waitUntil(() => height() < compactHeight - 20);
   expect(height()).toBeGreaterThanOrEqual(POPUP_MIN_SIZE.height);

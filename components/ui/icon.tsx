@@ -30,6 +30,7 @@ import plusIcon from "../../assets/icons/plus.svg";
 import refreshIcon from "../../assets/icons/refresh.svg";
 import scanningIcon from "../../assets/icons/icon-park-outline--scanning.svg";
 import searchIcon from "../../assets/icons/search.svg";
+import speakerOneIcon from "../../assets/icons/icon-park-outline--speaker-one.svg";
 import switchIcon from "../../assets/icons/switch.svg";
 import videoIcon from "../../assets/icons/video.svg";
 
@@ -65,6 +66,7 @@ const ICONS = {
   refresh: refreshIcon,
   scanning: scanningIcon,
   search: searchIcon,
+  "speaker-one": speakerOneIcon,
   switch: switchIcon,
   video: videoIcon,
 } satisfies Record<string, ImageAsset>;

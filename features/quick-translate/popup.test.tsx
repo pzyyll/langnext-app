@@ -103,20 +103,27 @@ test("desktop: quick popup translates on Enter, preserves Shift+Enter newline, a
   await app.waitFor("id:quick-translate-source");
   expect(app.shows("id:quick-translate-submit")).toBe(false);
   expect(app.shows("id:quick-translate-swap-languages")).toBe(true);
+  expect(app.shows("id:quick-translate-speak-source")).toBe(false);
+  expect(app.shows("id:quick-translate-speak-result")).toBe(false);
   expect(app.shows("id:quick-translate-copy")).toBe(false);
 
-  // Whitespace-only Enter shows blank validation error and sends 0 requests.
+  // Whitespace-only Enter shows blank validation error, hides speech placeholder, and sends 0 requests.
   await app.type("id:quick-translate-source", "   ");
+  expect(app.shows("id:quick-translate-speak-source")).toBe(false);
   await app.keyboard.press("enter");
   expect(app.texts()).toContain(t("quickTranslate.error.blankInput"));
   expect(app.requests()).toHaveLength(0);
 
   await app.clear("id:quick-translate-source");
   await app.type("id:quick-translate-source", "Hello");
+  expect(app.shows("id:quick-translate-speak-source")).toBe(true);
+  expect(app.enabled("id:quick-translate-speak-source")).toBe(false);
   await app.keyboard.press("enter");
 
   await app.waitFor("id:quick-translate-copy");
   expect(app.texts()).toContain("Bonjour");
+  expect(app.shows("id:quick-translate-speak-result")).toBe(true);
+  expect(app.enabled("id:quick-translate-speak-result")).toBe(false);
   expect(app.requests()).toHaveLength(1);
 
   await app.press("id:quick-translate-copy");
@@ -1168,9 +1175,12 @@ test("language resolution: one detection request serves both expanded cards", as
   await app.waitUntil(() => requestsTo(app, TRANSLATE_URL).length === 2);
   await app.waitFor("id:quick-translate-result-text");
 
-  expect(app.texts()).toContain(
-    t("quickTranslate.detectedLanguage", { language: getLanguageLabel("fr") }),
-  );
+  expect(
+    app.shows(
+      `id:quick-translate-source-language >> text:${t("quickTranslate.autoDetectDetected", { language: getLanguageLabel("fr") })}`,
+    ),
+  ).toBe(true);
+  expect(app.shows("id:quick-translate-source-detection")).toBe(false);
 
   const prompts = translateBodies(app);
   expect(prompts).toHaveLength(2);
@@ -1333,9 +1343,12 @@ test("language resolution: retrying after a failure starts a new detection run",
 
   expect(requestsTo(app, TRANSLATE_URL)).toHaveLength(1);
   expect(app.texts()).toContain("Bonjour!");
-  expect(app.texts()).toContain(
-    t("quickTranslate.detectedLanguage", { language: getLanguageLabel("fr") }),
-  );
+  expect(
+    app.shows(
+      `id:quick-translate-source-language >> text:${t("quickTranslate.autoDetectDetected", { language: getLanguageLabel("fr") })}`,
+    ),
+  ).toBe(true);
+  expect(app.shows("id:quick-translate-source-detection")).toBe(false);
 });
 
 const DEEPL_URL = "POST https://api-free.deepl.com/v2/translate";
@@ -1649,7 +1662,7 @@ test("quick popup: renders OCR status and source detection in one bottom-left to
     app.shows("id:quick-translate-source-toolbar >> id:quick-translate-source-detection"),
   ).toBe(false);
 
-  // 2. Clear OCR status, enter source text, and resolve language detection.
+  // 2. Clear OCR status, enter source text, and start language detection (active status renders).
   await app.press("id:harness-ocr-idle");
   expect(app.shows("id:quick-translate-source-toolbar >> id:quick-translate-ocr-status")).toBe(
     false,
@@ -1657,11 +1670,8 @@ test("quick popup: renders OCR status and source detection in one bottom-left to
   await app.type("id:quick-translate-source", "Bonjour");
   await app.keyboard.press("enter");
   await app.waitUntil(() => app.texts().some((text) => text.includes("detects=1|")));
-  await app.press("id:harness-resolve-language-fr");
   await app.waitFor("id:quick-translate-source-toolbar >> id:quick-translate-source-detection");
-  expect(app.texts()).toContain(
-    t("quickTranslate.detectedLanguage", { language: getLanguageLabel("fr") }),
-  );
+  expect(app.texts()).toContain(t("quickTranslate.detectingLanguage"));
 
   // 3. Entering OCR recognizing replaces source detection inside the same toolbar.
   await app.press("id:harness-ocr-recognizing");
@@ -1683,23 +1693,30 @@ test("quick popup: renders OCR status and source detection in one bottom-left to
     app.shows("id:quick-translate-source-toolbar >> id:quick-translate-source-detection"),
   ).toBe(false);
 
-  // 5. Collapsing the source input keeps the OCR alert visible in the preview card's toolbar.
+  // 5. Collapsing the source input keeps the OCR alert and speech placeholder visible.
   await app.press("id:quick-translate-collapse-source");
   await app.waitFor("id:quick-translate-source-preview");
   expect(app.shows("id:quick-translate-source-toolbar >> id:quick-translate-ocr-status")).toBe(
     true,
   );
+  expect(app.shows("id:quick-translate-source-toolbar >> id:quick-translate-speak-source")).toBe(
+    true,
+  );
   expect(app.texts()).toContain(t("ocr.failure.malformedAnswer"));
 
-  // 6. Returning OCR to idle restores the detected-language label in the toolbar.
+  // 6. Returning OCR to idle restores the detecting status while unresolved, then resolution updates header capsule only.
   await app.press("id:harness-ocr-idle");
   await app.waitFor("id:quick-translate-source-toolbar >> id:quick-translate-source-detection");
   expect(app.shows("id:quick-translate-source-toolbar >> id:quick-translate-ocr-status")).toBe(
     false,
   );
-  expect(app.texts()).toContain(
-    t("quickTranslate.detectedLanguage", { language: getLanguageLabel("fr") }),
+  await app.press("id:harness-resolve-language-fr");
+  await app.waitUntil(() =>
+    app.shows(
+      `id:quick-translate-source-language >> text:${t("quickTranslate.autoDetectDetected", { language: getLanguageLabel("fr") })}`,
+    ),
   );
+  expect(app.shows("id:quick-translate-source-detection")).toBe(false);
 });
 
 test("quick popup: swap button swaps explicit or auto-detected languages and ignores unresolved auto", async () => {
@@ -1743,12 +1760,12 @@ test("quick popup: swap button swaps explicit or auto-detected languages and ign
   await app.keyboard.press("enter");
   await app.waitUntil(() => app.texts().some((text) => text.includes("detects=1|")));
   await app.press("id:harness-resolve-language-fr");
-  await app.waitFor("id:quick-translate-source-toolbar >> id:quick-translate-source-detection");
-  expect(
+  await app.waitUntil(() =>
     app.shows(
       `id:quick-translate-source-language >> text:${t("quickTranslate.autoDetectDetected", { language: getLanguageLabel("fr") })}`,
     ),
-  ).toBe(true);
+  );
+  expect(app.shows("id:quick-translate-source-detection")).toBe(false);
   expect(app.enabled("id:quick-translate-swap-languages")).toBe(true);
 
   await app.press("id:quick-translate-swap-languages");

@@ -546,8 +546,8 @@ quickTranslate:
   languages: "语言（%{source} → %{target}）"
   sourceLanguageLabel: 源语言
   targetLanguageLabel: 目标语言
-  autoDetect: 自动检测
-  autoDetectDetected: "自动检测 (%{language})"
+  autoDetect: 自动
+  autoDetectDetected: "自动 (%{language})"
   swapLanguages: 交换语言
   shortcutTranslate: 翻译
   shortcutHide: 隐藏
@@ -559,9 +559,9 @@ quickTranslate:
   removeCard: 移除卡片
   translating: 正在翻译…
   detectingLanguage: 正在检测语言…
-  detectedLanguage: "自动检测：%{language}"
   enableAutoTranslate: 开启自动翻译
   disableAutoTranslate: 关闭自动翻译
+  speak: 朗读
   copy: 复制
   copied: 已复制
   sourceLabel: 源文本
