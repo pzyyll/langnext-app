@@ -136,7 +136,7 @@ settings:
       channel: Azure Speech
       region: 区域
       regionExample: eastus
-    switchOffOther: 将关闭 %{name}
+    priorityHint: 已启用的渠道按从上到下的顺序使用。排在最前面的渠道用于朗读，关闭它后由下一条已启用的渠道接手。
     notConfigured: 未配置
     configured: 已配置
     savedKey: "\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022"
@@ -145,6 +145,13 @@ settings:
     configureLabel: 配置 %{name}
     enableLabel: 启用 %{name}
     itemLabel: "%{name}（%{status}）"
+    reorder: 调整「%{name}」的顺序
+    reorderHint: 拖动，或按上下方向键。
+    moveUp: 上移 %{name}
+    moveDown: 下移 %{name}
+    role:
+      primary: 主用
+      backup: 备用
     apiKey: API Key
     saved: 语音合成渠道已保存
     configureBeforeEnable: 请先配置此渠道再启用。

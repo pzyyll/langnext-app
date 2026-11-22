@@ -52,7 +52,7 @@ function createMemoryStorage(initial: Record<string, string> = {}) {
 const FIRST_KEY = "first-cloud-key";
 const NEXT_KEY = "next-cloud-key";
 
-test("tts store: starts off, enables on the first save, and keeps a later key disabled", async () => {
+test("tts store: starts off, enables only on an explicit switch, and keeps a later key disabled", async () => {
   const mem = createMemoryStorage();
   const store = createTtsSettingsStore(mem.storage);
 
@@ -80,13 +80,16 @@ test("tts store: starts off, enables on the first save, and keeps a later key di
   const saved = await store.saveChannel({ channel: "google-cloud", apiKey: `  ${FIRST_KEY}  ` });
   expect(saved.ok).toBe(true);
   if (!saved.ok) throw new Error("expected the first save to succeed");
-  expect(saved.binding.enabled).toBe(true);
-  expect(store.activeBinding()?.channel === "google-cloud").toBe(true);
+  expect(saved.binding.enabled).toBe(false);
+  expect(store.activeBinding()).toBeNull();
   expect(store.savedBinding("google-cloud")).toEqual(saved.binding);
   expect(JSON.stringify(store.savedBinding("google-cloud"))).not.toContain(FIRST_KEY);
   expect(await store.readKey(saved.binding.credentialRef)).toBe(FIRST_KEY);
+  expect(await store.setEnabled("google-cloud", true)).toEqual({ ok: true });
+  expect(store.activeBinding()?.channel === "google-cloud").toBe(true);
   expect(JSON.parse(mem.backing[TTS_STORAGE_KEY]!)).toEqual({
     version: 1,
+    order: ["google-cloud", "azure"],
     googleCloud: { enabled: true, credentialRef: saved.binding.credentialRef },
     azure: null,
   });
@@ -99,7 +102,7 @@ test("tts store: starts off, enables on the first save, and keeps a later key di
   await reloaded.load();
   expect(reloaded.loadError()).toBeNull();
   expect(reloaded.activeBinding()?.channel === "google-cloud").toBe(true);
-  expect(reloaded.savedBinding("google-cloud")).toEqual(saved.binding);
+  expect(reloaded.savedBinding("google-cloud")).toEqual({ ...saved.binding, enabled: true });
   expect(
     mem
       .getGets()
@@ -128,7 +131,11 @@ test("tts store: starts off, enables on the first save, and keeps a later key di
 async function saveKey(store: ReturnType<typeof createTtsSettingsStore>, apiKey: string) {
   const result = await store.saveChannel({ channel: "google-cloud", apiKey });
   if (!result.ok) throw new Error("expected a saved key");
-  return result.binding;
+  const enabled = await store.setEnabled("google-cloud", true);
+  if (!enabled.ok) throw new Error("expected the saved key to enable");
+  const current = store.savedBinding("google-cloud");
+  if (current === null) throw new Error("expected the enabled binding");
+  return current;
 }
 
 test("tts store: a failed credential write keeps the previous key usable", async () => {
@@ -320,8 +327,9 @@ test("tts store: serializes overlapping saves and keeps only the last key", asyn
   expect(savedFirst.ok).toBe(true);
   expect(savedSecond.ok).toBe(true);
   if (!savedSecond.ok) throw new Error("expected the second save to succeed");
+  expect(await store.setEnabled("google-cloud", true)).toEqual({ ok: true });
   expect(store.activeBinding()?.channel === "google-cloud").toBe(true);
-  expect(store.savedBinding("google-cloud")).toEqual(savedSecond.binding);
+  expect(store.savedBinding("google-cloud")).toEqual({ ...savedSecond.binding, enabled: true });
   expect(await store.readKey(savedSecond.binding.credentialRef)).toBe(NEXT_KEY);
   const credentialKeys = Object.keys(mem.backing).filter((key) =>
     key.startsWith(TTS_CREDENTIAL_KEY_PREFIX),
@@ -329,7 +337,7 @@ test("tts store: serializes overlapping saves and keeps only the last key", asyn
   expect(credentialKeys).toEqual([ttsCredentialStorageKey(savedSecond.binding.credentialRef)]);
 });
 
-test("tts store: saves Azure beside an active Google channel and switches exclusively", async () => {
+test("tts store: saves Azure beside an active Google channel and follows priority order", async () => {
   const mem = createMemoryStorage({
     [TTS_STORAGE_KEY]: JSON.stringify({
       version: 1,
@@ -347,6 +355,7 @@ test("tts store: saves Azure beside an active Google channel and switches exclus
       .slice(getsBeforeLoad)
       .some((key) => key.startsWith(TTS_CREDENTIAL_KEY_PREFIX)),
   ).toBe(false);
+  expect(store.channelOrder()).toEqual(["google-cloud", "azure"]);
   expect(store.activeBinding()).toEqual({
     channel: "google-cloud",
     enabled: true,
@@ -389,23 +398,36 @@ test("tts store: saves Azure beside an active Google channel and switches exclus
   expect(await store.readKey(saved.binding.credentialRef)).toBe("azure-key");
 
   expect(await store.setEnabled("azure", true)).toEqual({ ok: true });
-  const switched = createTtsSettingsStore(mem.storage);
-  await switched.load();
-  expect(switched.activeBinding()).toEqual({
+  expect(store.isEnabled("azure")).toBe(true);
+  expect(store.isEnabled("google-cloud")).toBe(true);
+  expect(store.activeBinding()).toEqual({
+    channel: "google-cloud",
+    enabled: true,
+    credentialRef: "google-ref",
+  });
+
+  expect(await store.moveChannelTo("azure", 0)).toEqual({ ok: true });
+  expect(store.channelOrder()).toEqual(["azure", "google-cloud"]);
+  expect(store.activeBinding()).toEqual({
     channel: "azure",
     enabled: true,
     credentialRef: saved.binding.credentialRef,
     region: "eastus",
   });
-  expect(switched.savedBinding("google-cloud")?.enabled).toBe(false);
 
-  expect(await switched.setEnabled("azure", false)).toEqual({ ok: true });
-  expect(switched.activeBinding()).toBeNull();
-  expect(await switched.readKey("google-ref")).toBe("google-key");
-  expect(await switched.readKey(saved.binding.credentialRef)).toBe("azure-key");
+  const reopened = createTtsSettingsStore(mem.storage);
+  await reopened.load();
+  expect(reopened.channelOrder()).toEqual(["azure", "google-cloud"]);
+  expect(reopened.activeBinding()?.channel).toBe("azure");
+  expect(JSON.parse(mem.backing[TTS_STORAGE_KEY]!).order).toEqual(["azure", "google-cloud"]);
+
+  expect(await reopened.setEnabled("azure", false)).toEqual({ ok: true });
+  expect(reopened.activeBinding()?.channel).toBe("google-cloud");
+  expect(await reopened.readKey("google-ref")).toBe("google-key");
+  expect(await reopened.readKey(saved.binding.credentialRef)).toBe("azure-key");
 });
 
-test("tts store: a first Azure save on an empty store becomes the active channel", async () => {
+test("tts store: a first Azure save stays off until it is enabled", async () => {
   const mem = createMemoryStorage();
   const store = createTtsSettingsStore(mem.storage);
   const saved = await store.saveChannel({
@@ -417,9 +439,12 @@ test("tts store: a first Azure save on an empty store becomes the active channel
   if (!saved.ok || saved.binding.channel !== "azure") {
     throw new Error("expected the first Azure save to succeed");
   }
-  expect(store.activeBinding()).toEqual(saved.binding);
-  expect(saved.binding.enabled).toBe(true);
+  expect(saved.binding.enabled).toBe(false);
   expect(saved.binding.region).toBe("westus2");
+  expect(store.activeBinding()).toBeNull();
+
+  expect(await store.setEnabled("azure", true)).toEqual({ ok: true });
+  expect(store.activeBinding()).toEqual({ ...saved.binding, enabled: true });
 });
 
 test("tts store: a failed Azure switch or replacement keeps the previous channels", async () => {
@@ -440,7 +465,8 @@ test("tts store: a failed Azure switch or replacement keeps the previous channel
   expect(switched.ok).toBe(false);
   if (switched.ok) throw new Error("expected the switch to fail");
   expect(switched.key).toBe("storage_write_failed");
-  expect(store.activeBinding()).toEqual(google.binding);
+  expect(store.activeBinding()).toBeNull();
+  expect(store.savedBinding("google-cloud")).toEqual(google.binding);
   expect(store.savedBinding("azure")).toEqual(azure.binding);
   expect(mem.backing[TTS_STORAGE_KEY]).toBe(before);
 
@@ -449,7 +475,7 @@ test("tts store: a failed Azure switch or replacement keeps the previous channel
   expect(unreadable.ok).toBe(false);
   if (unreadable.ok) throw new Error("expected an unreadable Azure key to block enabling");
   expect(unreadable.key).toBe("credential_unreadable");
-  expect(store.activeBinding()?.channel).toBe("google-cloud");
+  expect(store.activeBinding()).toBeNull();
   mem.backing[ttsCredentialStorageKey(azure.binding.credentialRef)] = JSON.stringify({
     apiKey: "azure-key",
   });
@@ -463,7 +489,7 @@ test("tts store: a failed Azure switch or replacement keeps the previous channel
   expect(replaced.ok).toBe(false);
   if (replaced.ok) throw new Error("expected the Azure replacement to fail");
   expect(store.savedBinding("azure")).toEqual(azure.binding);
-  expect(store.activeBinding()).toEqual(google.binding);
+  expect(store.activeBinding()).toBeNull();
   expect(mem.backing[TTS_STORAGE_KEY]).toBe(before);
   expect(await store.readKey(azure.binding.credentialRef)).toBe("azure-key");
   expect(await store.readKey(google.binding.credentialRef)).toBe("google-key");
@@ -471,13 +497,22 @@ test("tts store: a failed Azure switch or replacement keeps the previous channel
   expect(JSON.stringify(mem.backing)).not.toContain("westus2");
 });
 
-test("tts store: rejects two enabled channels and an invalid stored Azure region", async () => {
-  const records = [
-    {
+test("tts store: accepts two enabled channels and rejects an invalid stored Azure region", async () => {
+  const both = createMemoryStorage({
+    [TTS_STORAGE_KEY]: JSON.stringify({
       version: 1,
       googleCloud: { enabled: true, credentialRef: "google-ref" },
       azure: { enabled: true, credentialRef: "azure-ref", region: "eastus" },
-    },
+    }),
+  });
+  const bothStore = createTtsSettingsStore(both.storage);
+  await bothStore.load();
+  expect(bothStore.loadError()).toBeNull();
+  expect(bothStore.isEnabled("google-cloud")).toBe(true);
+  expect(bothStore.isEnabled("azure")).toBe(true);
+  expect(bothStore.activeBinding()?.channel).toBe("google-cloud");
+
+  const records = [
     {
       version: 1,
       googleCloud: null,

@@ -7,6 +7,9 @@ export const TTS_STORAGE_KEY = "settings.tts.v1";
 export const TTS_CREDENTIAL_KEY_PREFIX = "settings.tts.credentials.";
 const STORAGE_VERSION = 1;
 
+/** Channels in the default top-to-bottom priority order. */
+export const TTS_CHANNELS = ["google-cloud", "azure"] as const satisfies readonly TtsChannelId[];
+
 /** Storage key for one TTS API key, addressed by its non-secret reference. */
 export function ttsCredentialStorageKey(credentialRef: string): string {
   return TTS_CREDENTIAL_KEY_PREFIX + credentialRef;
@@ -53,10 +56,16 @@ export type TtsSaveChannelInput =
 export interface TtsSettingsStore {
   load(): Promise<void>;
   loadError(): TtsLoadError | null;
+  /** Channels in top-to-bottom priority order. */
+  channelOrder(): readonly TtsChannelId[];
+  isEnabled(channel: TtsChannelId): boolean;
   savedBinding(channel: TtsChannelId): TtsChannelBinding | null;
+  /** The first enabled channel in priority order, or null when both are off. */
   activeBinding(): TtsChannelBinding | null;
   saveChannel(input: TtsSaveChannelInput): Promise<TtsSaveResult>;
   setEnabled(channel: TtsChannelId, enabled: boolean): Promise<TtsActionResult>;
+  /** Moves one channel to a new top-to-bottom priority position, clamped to the list. */
+  moveChannelTo(channel: TtsChannelId, targetIndex: number): Promise<TtsActionResult>;
   /** Reads one stored key. Loading the configuration does not call this. */
   readKey(ref: string): Promise<string | null>;
 }
@@ -84,11 +93,16 @@ interface AzureStored {
 }
 
 interface ChannelRecord {
+  order: TtsChannelId[];
   googleCloud: GoogleStored | null;
   azure: AzureStored | null;
 }
 
-const EMPTY_RECORD: ChannelRecord = { googleCloud: null, azure: null };
+const EMPTY_RECORD: ChannelRecord = {
+  order: [...TTS_CHANNELS],
+  googleCloud: null,
+  azure: null,
+};
 
 function failure(key: TtsSettingsErrorKey): {
   ok: false;
@@ -110,6 +124,7 @@ function trimmedSecret(value: unknown): string | null {
 
 function cloneRecord(record: ChannelRecord): ChannelRecord {
   return {
+    order: [...record.order],
     googleCloud: record.googleCloud === null ? null : { ...record.googleCloud },
     azure: record.azure === null ? null : { ...record.azure },
   };
@@ -132,9 +147,18 @@ function bindingFor(record: ChannelRecord, channel: TtsChannelId): TtsChannelBin
 }
 
 function activeFrom(record: ChannelRecord): TtsChannelBinding | null {
-  if (record.googleCloud?.enabled) return bindingFor(record, "google-cloud");
-  if (record.azure?.enabled) return bindingFor(record, "azure");
+  for (const channel of record.order) {
+    if (!isEnabledIn(record, channel)) continue;
+    const binding = bindingFor(record, channel);
+    if (binding !== null) return binding;
+  }
   return null;
+}
+
+function isEnabledIn(record: ChannelRecord, channel: TtsChannelId): boolean {
+  return channel === "azure"
+    ? record.azure?.enabled === true
+    : record.googleCloud?.enabled === true;
 }
 
 function parseGoogle(value: unknown): GoogleStored | null | "malformed" {
@@ -174,13 +198,31 @@ function parseStoredSettings(raw: string): ParsedStorage {
   if (googleCloud === "malformed") return { ok: false, key: "storage_malformed" };
   const azure = parseAzure("azure" in parsed ? parsed.azure : undefined);
   if (azure === "malformed") return { ok: false, key: "storage_malformed" };
-  if (googleCloud?.enabled && azure?.enabled) return { ok: false, key: "storage_malformed" };
-  return { ok: true, record: { googleCloud, azure } };
+  const order = parseOrder("order" in parsed ? parsed.order : undefined);
+  if (order === null) return { ok: false, key: "storage_malformed" };
+  return { ok: true, record: { order, googleCloud, azure } };
+}
+
+/** A missing order means the default priority; anything else must list each channel once. */
+function parseOrder(value: unknown): TtsChannelId[] | null {
+  if (value === undefined) return [...TTS_CHANNELS];
+  if (!Array.isArray(value) || value.length !== TTS_CHANNELS.length) return null;
+  const seen = new Set<TtsChannelId>();
+  const order: TtsChannelId[] = [];
+  for (const item of value) {
+    if (!(TTS_CHANNELS as readonly unknown[]).includes(item) || seen.has(item as TtsChannelId)) {
+      return null;
+    }
+    seen.add(item as TtsChannelId);
+    order.push(item as TtsChannelId);
+  }
+  return seen.size === TTS_CHANNELS.length ? order : null;
 }
 
 function storagePayload(record: ChannelRecord): string {
   return JSON.stringify({
     version: STORAGE_VERSION,
+    order: record.order,
     googleCloud:
       record.googleCloud === null
         ? null
@@ -287,11 +329,7 @@ export function createTtsSettingsStore(storage: TtsSettingsStorage): TtsSettings
       return enqueueWrite(async () => {
         const current = cloneRecord(settingsSignal());
         const existing = input.channel === "azure" ? current.azure : current.googleCloud;
-        const otherActive =
-          input.channel === "azure"
-            ? current.googleCloud?.enabled === true
-            : current.azure?.enabled === true;
-        const enabled = existing === null ? !otherActive : existing.enabled;
+        const enabled = existing?.enabled ?? false;
         const credentialRef = crypto.randomUUID();
         try {
           await storage.setItem(ttsCredentialStorageKey(credentialRef), JSON.stringify({ apiKey }));
@@ -328,12 +366,6 @@ export function createTtsSettingsStore(storage: TtsSettingsStorage): TtsSettings
         if (enabled) {
           const key = await readStoredKey(target.credentialRef);
           if (key === null) return failure("credential_unreadable");
-          if (channel === "azure" && current.googleCloud?.enabled) {
-            current.googleCloud = { ...current.googleCloud, enabled: false };
-          }
-          if (channel === "google-cloud" && current.azure?.enabled) {
-            current.azure = { ...current.azure, enabled: false };
-          }
         }
         if (channel === "azure") {
           if (current.azure === null) return failure("storage_write_failed");
@@ -343,6 +375,22 @@ export function createTtsSettingsStore(storage: TtsSettingsStorage): TtsSettings
         } else {
           current.googleCloud = { ...current.googleCloud, enabled };
         }
+        return persistRecord(current);
+      }),
+    channelOrder: () => [...settingsSignal().order],
+    isEnabled: (channel) => isEnabledIn(settingsSignal(), channel),
+    moveChannelTo: async (channel, targetIndex) =>
+      enqueueWrite(async () => {
+        const current = cloneRecord(settingsSignal());
+        const index = current.order.indexOf(channel);
+        if (index === -1) return { ok: true as const };
+        const requested = Number.isFinite(targetIndex) ? Math.trunc(targetIndex) : index;
+        const target = Math.min(Math.max(requested, 0), current.order.length - 1);
+        if (target === index) return { ok: true as const };
+        const order = [...current.order];
+        order.splice(index, 1);
+        order.splice(target, 0, channel);
+        current.order = order;
         return persistRecord(current);
       }),
   };

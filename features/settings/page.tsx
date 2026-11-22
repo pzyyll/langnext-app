@@ -363,6 +363,18 @@ export function SettingsPage(props: {
                         <Icon name="info" tone="muted-foreground" class="size-4" />
                       </View>
                     </If>
+                    <If when={selectedSection() === "tts"}>
+                      <View
+                        testID="settings-tts-priority-info"
+                        accessibilityLabel={t("settings.tts.priorityHint")}
+                        tooltip={buildTooltip(t("settings.tts.priorityHint"), "top", {
+                          align: "start",
+                        })}
+                        class="shrink-0 items-center justify-center p-1"
+                      >
+                        <Icon name="info" tone="muted-foreground" class="size-4" />
+                      </View>
+                    </If>
                     <If when={selectedSection() === "language-detection"}>
                       <View
                         testID="settings-detection-priority-info"
