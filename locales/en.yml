@@ -45,6 +45,7 @@ settings:
     shortcuts: Shortcuts
     languageDetection: Language Detection
     ocr: OCR
+    tts: Text-to-Speech
   theme:
     title: Theme
   appearance:
@@ -129,6 +130,38 @@ settings:
       baiduKeysRequired: Enter both the API Key and the Secret Key.
       baiduOperationInvalid: Choose a Baidu OCR mode.
       channelUnconfigured: Configure this channel before enabling it.
+  tts:
+    channel: Google Cloud Text-to-Speech
+    notConfigured: Not configured
+    configured: Configured
+    savedKey: "\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022"
+    keyUnreadable: The saved API key could not be read. Enter it again.
+    keyStorage: The key is stored on this device and is not encrypted.
+    breadcrumbLabel: Text-to-speech navigation
+    configureLabel: Configure %{name}
+    enableLabel: Enable %{name}
+    itemLabel: "%{name} (%{status})"
+    apiKey: API Key
+    saved: Text-to-speech channel saved
+    configureBeforeEnable: Configure this channel before enabling it.
+    preview: Play sample
+    stop: Stop
+    previewHint: Sends a short English sample to Google.
+    previewUnavailable: Playback is unavailable on this device.
+    previewUnsaved: Save or clear the API key before playing the sample.
+    previewNeedsKey: Save an API key before playing the sample.
+    failure:
+      auth: Check the API key, Cloud Text-to-Speech access, and project billing.
+      quota: Google Cloud Text-to-Speech is rate limited. Try again.
+      playback: Could not play the sample. Try again.
+    error:
+      storageReadFailed: Could not read the saved text-to-speech settings.
+      storageMalformed: The saved text-to-speech settings are unreadable.
+      storageUnsupportedVersion: The saved text-to-speech settings use an unsupported version.
+      storageWriteFailed: Could not save the text-to-speech settings. Check storage and try again.
+      apiKeyBlank: Enter an API key.
+      channelUnconfigured: Configure Google Cloud Text-to-Speech before enabling it.
+      credentialUnreadable: The saved API key could not be read. Enter it again.
   languageDetection:
     title: Language Detection
     detection: Detection
@@ -564,6 +597,13 @@ quickTranslate:
   enableAutoTranslate: Enable automatic translation
   disableAutoTranslate: Disable automatic translation
   speak: Read aloud
+  speakOff: Turn on Google Cloud Text-to-Speech in Settings.
+  speakSending: Sends this text to Google.
+  speakChooseSource: Choose a source language.
+  speakTranslateFirst: Translate first so the source language can be detected.
+  speakUnsupported: This language has no Google Cloud Standard voice.
+  speakTooLong: Shorten the text. Google accepts at most 5,000 bytes.
+  speakPlayback: Could not play the audio. Try again.
   copy: Copy
   copied: Copied
   sourceLabel: Source text

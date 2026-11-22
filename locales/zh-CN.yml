@@ -45,6 +45,7 @@ settings:
     shortcuts: 快捷键
     languageDetection: 语言检测
     ocr: OCR
+    tts: 语音合成
   theme:
     title: 主题
   appearance:
@@ -129,6 +130,38 @@ settings:
       baiduKeysRequired: 请同时填写 API Key 和 Secret Key。
       baiduOperationInvalid: 请选择百度 OCR 模式。
       channelUnconfigured: 请先配置此渠道再启用。
+  tts:
+    channel: Google Cloud Text-to-Speech
+    notConfigured: 未配置
+    configured: 已配置
+    savedKey: "\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022"
+    keyUnreadable: 无法读取已保存的 API Key。请重新填写。
+    keyStorage: 密钥保存在本机，且未加密。
+    breadcrumbLabel: 语音合成导航
+    configureLabel: 配置 %{name}
+    enableLabel: 启用 %{name}
+    itemLabel: "%{name}（%{status}）"
+    apiKey: API Key
+    saved: 语音合成渠道已保存
+    configureBeforeEnable: 请先配置此渠道再启用。
+    preview: 播放示例
+    stop: 停止
+    previewHint: 向 Google 发送一段简短的英文示例。
+    previewUnavailable: 此设备无法播放音频。
+    previewUnsaved: 请先保存或清除 API Key，再播放示例。
+    previewNeedsKey: 请先保存 API Key，再播放示例。
+    failure:
+      auth: 请检查 API Key、Cloud Text-to-Speech 权限和项目结算。
+      quota: Google Cloud Text-to-Speech 已达到配额或速率限制。请重试。
+      playback: 无法播放示例。请重试。
+    error:
+      storageReadFailed: 无法读取已保存的语音合成设置。
+      storageMalformed: 已保存的语音合成设置无法解析。
+      storageUnsupportedVersion: 已保存的语音合成设置版本不受支持。
+      storageWriteFailed: 无法保存语音合成设置，请检查存储后重试。
+      apiKeyBlank: 请填写 API Key。
+      channelUnconfigured: 请先配置 Google Cloud Text-to-Speech 再启用。
+      credentialUnreadable: 无法读取已保存的 API Key。请重新填写。
   languageDetection:
     title: 语言检测
     detection: 检测
@@ -564,6 +597,13 @@ quickTranslate:
   enableAutoTranslate: 开启自动翻译
   disableAutoTranslate: 关闭自动翻译
   speak: 朗读
+  speakOff: 在设置中打开 Google Cloud 文字转语音。
+  speakSending: 将这段文字发送到 Google。
+  speakChooseSource: 请先选择源语言。
+  speakTranslateFirst: 请先翻译，以便确定源语言。
+  speakUnsupported: 此语言没有 Google Cloud 标准语音。
+  speakTooLong: 请缩短文字。Google 最多接受 5000 字节。
+  speakPlayback: 无法播放音频。请重试。
   copy: 复制
   copied: 已复制
   sourceLabel: 源文本

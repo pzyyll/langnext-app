@@ -3,6 +3,8 @@ import { SPLIT_RAIL_STORAGE_KEYS } from "../../components/layout/split-rail";
 import { LANGUAGE_DETECTION_STORAGE_KEY } from "../language-detection/settings";
 import { makeChannel, makeModel, makeSeedStorage } from "../models/__tests__/fixtures";
 import { baiduCredentialStorageKey, OCR_STORAGE_KEY } from "../ocr/settings";
+import { GOOGLE_CLOUD_TTS_URL, TTS_SAMPLE_TEXT } from "../tts/google-cloud";
+import { TTS_STORAGE_KEY, ttsCredentialStorageKey } from "../tts/settings";
 import { SELECTION_COPY_STORAGE_KEY } from "./selection-copy";
 import { SILENT_LAUNCH_STORAGE_KEY } from "./silent-launch";
 
@@ -1174,4 +1176,359 @@ test("ocr settings: renders cleanly at minimum viewport in dark mode with reduce
   expect(app.shows("id:settings-ocr-breadcrumb")).toBe(true);
   await app.press("id:settings-ocr-breadcrumb-root");
   await app.waitFor("id:settings-ocr-card");
+});
+
+test("tts settings: opens the Google Cloud channel and discards an unsaved key", async () => {
+  const app = await open(APP_ENTRY, {
+    ...viewport,
+    storage: { "settings.language": "en" },
+  });
+
+  await app.press("id:nav-settings");
+  await app.waitFor("id:settings-nav-tts");
+  await app.press("id:settings-nav-tts");
+  await app.waitFor("id:settings-tts-card");
+
+  expect(app.texts()).toContain("Text-to-Speech");
+  expect(app.texts()).toContain("Google Cloud Text-to-Speech");
+  expect(app.count("text:Google Cloud Text-to-Speech")).toBe(1);
+  expect(app.texts()).toContain("Not configured");
+  expect(app.enabled("id:settings-tts-toggle-google-cloud")).toBe(false);
+  expect(app.shows("id:settings-tts-open-google-cloud")).toBe(true);
+  await app.hover("id:settings-tts-toggle-google-cloud");
+  await app.waitUntil(() => app.texts().includes("Configure this channel before enabling it."));
+
+  await app.press("id:settings-tts-channel-google-cloud");
+  await app.waitFor("id:settings-tts-detail-card");
+  expect(app.shows("id:settings-tts-breadcrumb-root")).toBe(true);
+  expect(app.texts()).toContain("Text-to-Speech");
+  expect(app.texts()).toContain("Google Cloud Text-to-Speech");
+  expect(app.shows("id:settings-tts-card")).toBe(false);
+
+  await app.type("id:settings-tts-api-key", "draft-key");
+  await app.press("id:settings-tts-breadcrumb-root");
+  await app.waitFor("id:settings-tts-card");
+  expect(app.shows("id:settings-tts-detail-card")).toBe(false);
+  expect(app.storage()["settings.tts.v1"]).toBeUndefined();
+
+  await app.press("id:settings-tts-open-google-cloud");
+  await app.waitFor("id:settings-tts-detail-card");
+  expect(app.value("id:settings-tts-api-key")).toBe("");
+  await app.type("id:settings-tts-api-key", "another-draft");
+  await app.press("id:settings-nav-tts");
+  await app.waitFor("id:settings-tts-card");
+  expect(app.value("id:settings-tts-api-key")).toBeNull();
+  expect(app.storage()["settings.tts.v1"]).toBeUndefined();
+  expect(app.requests().some((request) => String(request.url).includes("texttospeech"))).toBe(
+    false,
+  );
+});
+
+test("tts settings: enables on the first save and keeps a replaced key off", async () => {
+  const app = await open(APP_ENTRY, {
+    ...viewport,
+    storage: { "settings.language": "en" },
+  });
+  await app.press("id:nav-settings");
+  await app.press("id:settings-nav-tts");
+  await app.press("id:settings-tts-open-google-cloud");
+  await app.waitFor("id:settings-tts-detail-card");
+  expect(app.enabled("id:settings-tts-save")).toBe(false);
+  expect(app.texts()).toContain("The key is stored on this device and is not encrypted.");
+
+  await app.type("id:settings-tts-api-key", "synthetic-tts-key");
+  expect(app.enabled("id:settings-tts-save")).toBe(true);
+  await app.press("id:settings-tts-save");
+  await app.waitUntil(() => Boolean(app.storage()[TTS_STORAGE_KEY]));
+  const saved = JSON.parse(app.storage()[TTS_STORAGE_KEY]!) as {
+    version: number;
+    googleCloud: { enabled: boolean; credentialRef: string };
+  };
+  expect(saved.version).toBe(1);
+  expect(saved.googleCloud.enabled).toBe(true);
+  expect(JSON.stringify(saved).includes("synthetic-tts-key")).toBe(false);
+  expect(
+    JSON.parse(app.storage()[ttsCredentialStorageKey(saved.googleCloud.credentialRef)]!),
+  ).toEqual({ apiKey: "synthetic-tts-key" });
+  expect(app.value("id:settings-tts-api-key")).toBe("");
+  expect(app.enabled("id:settings-tts-save")).toBe(false);
+  expect(app.requests().some((request) => request.url.includes("texttospeech"))).toBe(false);
+
+  await app.press("id:settings-tts-breadcrumb-root");
+  await app.waitFor("id:settings-tts-card");
+  expect(app.texts()).toContain("Configured");
+  await app.press("id:settings-tts-toggle-google-cloud");
+  await app.waitUntil(
+    () => JSON.parse(app.storage()[TTS_STORAGE_KEY]!).googleCloud.enabled === false,
+  );
+  expect(app.requests().some((request) => request.url.includes("texttospeech"))).toBe(false);
+
+  await app.press("id:settings-tts-channel-google-cloud");
+  await app.waitFor("id:settings-tts-api-key");
+  expect(app.value("id:settings-tts-api-key")).toBe("");
+  await app.type("id:settings-tts-api-key", "replacement-tts-key");
+  await app.press("id:settings-tts-save");
+  await app.waitUntil(() => {
+    const next = JSON.parse(app.storage()[TTS_STORAGE_KEY]!) as {
+      googleCloud: { credentialRef: string; enabled: boolean };
+    };
+    return next.googleCloud.credentialRef !== saved.googleCloud.credentialRef;
+  });
+  const replaced = JSON.parse(app.storage()[TTS_STORAGE_KEY]!) as {
+    googleCloud: { enabled: boolean; credentialRef: string };
+  };
+  expect(replaced.googleCloud.enabled).toBe(false);
+  expect(
+    JSON.parse(app.storage()[ttsCredentialStorageKey(replaced.googleCloud.credentialRef)]!),
+  ).toEqual({ apiKey: "replacement-tts-key" });
+  expect(app.storage()[ttsCredentialStorageKey(saved.googleCloud.credentialRef)]).toBeUndefined();
+  expect(app.value("id:settings-tts-api-key")).toBe("");
+  expect(app.texts()).not.toContain("synthetic-tts-key");
+  expect(app.texts()).not.toContain("replacement-tts-key");
+
+  const reopened = await open(APP_ENTRY, { ...viewport, storage: app.storage() });
+  await reopened.press("id:nav-settings");
+  await reopened.press("id:settings-nav-tts");
+  await reopened.waitFor("id:settings-tts-card");
+  expect(JSON.parse(reopened.storage()[TTS_STORAGE_KEY]!).googleCloud.enabled).toBe(false);
+  await reopened.press("id:settings-tts-open-google-cloud");
+  await reopened.waitFor("id:settings-tts-api-key");
+  expect(reopened.value("id:settings-tts-api-key")).toBe("");
+  await reopened.press("id:settings-nav-general");
+  await reopened.press("id:language-zh-CN");
+  await reopened.press("id:settings-nav-tts");
+  await reopened.waitFor("id:settings-tts-card");
+  expect(reopened.texts()).toContain("语音合成");
+  expect(reopened.texts()).toContain("已配置");
+  await reopened.press("id:settings-tts-channel-google-cloud");
+  await reopened.waitFor("id:settings-tts-detail-card");
+  expect(reopened.texts()).toContain("密钥保存在本机，且未加密。");
+  expect(reopened.value("id:settings-tts-api-key")).toBe("");
+});
+
+test("tts settings: a missing key can be turned off and a failed save keeps the draft", async () => {
+  const ref = "broken-tts-ref";
+  const app = await open(APP_ENTRY, {
+    ...viewport,
+    storage: {
+      "settings.language": "en",
+      [TTS_STORAGE_KEY]: JSON.stringify({
+        version: 1,
+        googleCloud: { enabled: true, credentialRef: ref },
+      }),
+      [ttsCredentialStorageKey(ref)]: "not-json",
+    },
+  });
+  await app.press("id:nav-settings");
+  await app.press("id:settings-nav-tts");
+  await app.waitFor("id:settings-tts-summary-google-cloud");
+  expect(app.texts()).toContain("The saved API key could not be read. Enter it again.");
+  expect(app.enabled("id:settings-tts-toggle-google-cloud")).toBe(true);
+  await app.press("id:settings-tts-toggle-google-cloud");
+  await app.waitUntil(
+    () => JSON.parse(app.storage()[TTS_STORAGE_KEY]!).googleCloud.enabled === false,
+  );
+
+  await app.press("id:settings-tts-toggle-google-cloud");
+  await app.waitFor("id:settings-tts-list-error");
+  expect(JSON.parse(app.storage()[TTS_STORAGE_KEY]!).googleCloud.enabled).toBe(false);
+  expect(app.texts()).toContain("The saved API key could not be read. Enter it again.");
+
+  const failing = await open(APP_ENTRY, {
+    ...viewport,
+    storage: {
+      "settings.language": "en",
+      [TTS_STORAGE_KEY]: JSON.stringify({
+        version: 1,
+        googleCloud: { enabled: false, credentialRef: ref },
+      }),
+      [ttsCredentialStorageKey(ref)]: JSON.stringify({ apiKey: "kept-tts-key" }),
+    },
+    modules: {
+      nsh: {
+        "Storage.setItem": async (key: string) => {
+          if (key === TTS_STORAGE_KEY) throw new Error("Simulated write failure");
+        },
+      },
+    },
+  });
+  await failing.press("id:nav-settings");
+  await failing.press("id:settings-nav-tts");
+  await failing.press("id:settings-tts-toggle-google-cloud");
+  await failing.waitFor("id:settings-tts-list-error");
+  expect(JSON.parse(failing.storage()[TTS_STORAGE_KEY]!).googleCloud.enabled).toBe(false);
+  expect(failing.texts()).toContain(
+    "Could not save the text-to-speech settings. Check storage and try again.",
+  );
+
+  await failing.press("id:settings-tts-open-google-cloud");
+  await failing.waitFor("id:settings-tts-detail-card");
+  await failing.type("id:settings-tts-api-key", "replacement-tts-key");
+  await failing.press("id:settings-tts-save");
+  await failing.waitFor("id:settings-tts-error");
+  expect(failing.value("id:settings-tts-api-key")).toBe("replacement-tts-key");
+  expect(JSON.parse(failing.storage()[TTS_STORAGE_KEY]!).googleCloud.credentialRef).toBe(ref);
+  expect(JSON.parse(failing.storage()[ttsCredentialStorageKey(ref)]!).apiKey).toBe("kept-tts-key");
+  expect(failing.requests().some((request) => request.url.includes("texttospeech"))).toBe(false);
+});
+
+const TTS_PREVIEW_MP3 = Uint8Array.from([0xff, 0xfb, 0x90, 0x64, 0x00, 0x01, 0x02, 0x7f]);
+
+function ttsPreviewNetwork(status = 200, body?: unknown) {
+  return {
+    ["POST " + GOOGLE_CLOUD_TTS_URL]: {
+      status,
+      body: body ?? { audioContent: Buffer.from(TTS_PREVIEW_MP3).toString("base64") },
+    },
+  };
+}
+
+function savedTtsStorage(enabled: boolean, apiKey = "saved-preview-key", ref = "preview-ref") {
+  return {
+    "settings.language": "en",
+    [TTS_STORAGE_KEY]: JSON.stringify({
+      version: 1,
+      googleCloud: { enabled, credentialRef: ref },
+    }),
+    [ttsCredentialStorageKey(ref)]: JSON.stringify({ apiKey }),
+  };
+}
+
+test("tts preview: plays the saved sample and ignores drafts, saves, and toggles", async () => {
+  const app = await open(APP_ENTRY, {
+    ...viewport,
+    storage: savedTtsStorage(false),
+    network: ttsPreviewNetwork(),
+  });
+  await app.press("id:nav-settings");
+  await app.press("id:settings-nav-tts");
+  await app.press("id:settings-tts-open-google-cloud");
+  await app.waitFor("id:settings-tts-preview");
+  expect(app.requests()).toHaveLength(0);
+  expect(app.texts()).toContain("Sends a short English sample to Google.");
+
+  await app.type("id:settings-tts-api-key", "draft-preview-key");
+  expect(app.enabled("id:settings-tts-preview")).toBe(false);
+  await app.hover("id:settings-tts-preview");
+  await app.waitUntil(() =>
+    app.texts().includes("Save or clear the API key before playing the sample."),
+  );
+  expect(app.requests()).toHaveLength(0);
+  await app.clear("id:settings-tts-api-key");
+  await app.waitUntil(() => app.enabled("id:settings-tts-preview"));
+
+  await app.press("id:settings-tts-preview");
+  await app.waitFor("text:Stop");
+  expect(app.requests()).toHaveLength(1);
+  const request = app.requests()[0]!;
+  expect(request.method).toBe("POST");
+  expect(request.url).toBe(GOOGLE_CLOUD_TTS_URL);
+  expect(request.headers["x-goog-api-key"] ?? request.headers["X-Goog-Api-Key"]).toBe(
+    "saved-preview-key",
+  );
+  expect(JSON.parse(request.body ?? "").input.text).toBe(TTS_SAMPLE_TEXT);
+  expect(JSON.parse(request.body ?? "").voice).toEqual({
+    languageCode: "en-US",
+    name: "en-US-Standard-C",
+  });
+  expect(
+    app.audio().some((call) => call.command === "open" && call.src.includes("tts-playback")),
+  ).toBe(true);
+  expect(app.enabled("id:settings-tts-api-key")).toBe(false);
+  expect(app.enabled("id:settings-tts-save")).toBe(false);
+  await app.endAudio();
+  await app.waitFor("text:Play sample");
+  expect(app.audio().some((call) => call.command === "close")).toBe(true);
+
+  await app.type("id:settings-tts-api-key", "replacement-preview-key");
+  await app.press("id:settings-tts-save");
+  await app.waitUntil(() => {
+    const saved = JSON.parse(app.storage()[TTS_STORAGE_KEY]!) as {
+      googleCloud: { credentialRef: string; enabled: boolean };
+    };
+    return saved.googleCloud.credentialRef !== "preview-ref";
+  });
+  expect(app.requests()).toHaveLength(1);
+  expect(JSON.parse(app.storage()[TTS_STORAGE_KEY]!).googleCloud.enabled).toBe(false);
+  await app.press("id:settings-tts-breadcrumb-root");
+  await app.waitFor("id:settings-tts-card");
+  await app.press("id:settings-tts-toggle-google-cloud");
+  await app.waitUntil(
+    () => JSON.parse(app.storage()[TTS_STORAGE_KEY]!).googleCloud.enabled === true,
+  );
+  expect(app.requests()).toHaveLength(1);
+});
+
+test("tts preview: reports an auth failure without opening a player", async () => {
+  const app = await open(APP_ENTRY, {
+    ...viewport,
+    storage: savedTtsStorage(true),
+    network: ttsPreviewNetwork(401, {
+      error: {
+        message: "provider secret text",
+        details: [{ reason: "API_KEY_INVALID" }],
+      },
+    }),
+  });
+  await app.press("id:nav-settings");
+  await app.press("id:settings-nav-tts");
+  await app.press("id:settings-tts-open-google-cloud");
+  await app.waitUntil(() => app.enabled("id:settings-tts-preview"));
+  await app.press("id:settings-tts-preview");
+  await app.waitFor("id:settings-tts-preview-error");
+  expect(app.texts()).toContain(
+    "Check the API key, Cloud Text-to-Speech access, and project billing.",
+  );
+  expect(app.texts()).not.toContain("provider secret text");
+  expect(app.audio()).toEqual([]);
+  expect(app.texts()).toContain("Play sample");
+});
+
+test("tts preview: leaving or cancelling drops a late response and closes playback", async () => {
+  const loading = await open(APP_ENTRY, {
+    ...viewport,
+    storage: savedTtsStorage(false),
+    network: {
+      ["POST " + GOOGLE_CLOUD_TTS_URL]: {
+        status: 200,
+        delay: 400,
+        body: { audioContent: Buffer.from(TTS_PREVIEW_MP3).toString("base64") },
+      },
+    },
+  });
+  await loading.press("id:nav-settings");
+  await loading.press("id:settings-nav-tts");
+  await loading.press("id:settings-tts-open-google-cloud");
+  await loading.waitUntil(() => loading.enabled("id:settings-tts-preview"));
+  await loading.press("id:settings-tts-preview");
+  await loading.waitFor("text:Cancel");
+  await loading.press("id:settings-tts-breadcrumb-root");
+  await loading.waitFor("id:settings-tts-card");
+  await loading.wait(500);
+  expect(loading.audio().some((call) => call.command === "open")).toBe(false);
+  expect(loading.texts()).not.toContain("Could not play the sample. Try again.");
+
+  const playing = await open(APP_ENTRY, {
+    ...viewport,
+    storage: savedTtsStorage(false),
+    network: ttsPreviewNetwork(),
+  });
+  await playing.press("id:nav-settings");
+  await playing.press("id:settings-nav-tts");
+  await playing.press("id:settings-tts-open-google-cloud");
+  await playing.waitUntil(() => playing.enabled("id:settings-tts-preview"));
+  await playing.press("id:settings-tts-preview");
+  await playing.waitFor("text:Stop");
+  await playing.press("id:settings-tts-preview");
+  await playing.waitFor("text:Play sample");
+  expect(playing.requests()).toHaveLength(1);
+  expect(playing.audio().some((call) => call.command === "close")).toBe(true);
+
+  await playing.press("id:settings-tts-preview");
+  await playing.waitFor("text:Stop");
+  await playing.press("id:settings-tts-breadcrumb-root");
+  await playing.waitFor("id:settings-tts-card");
+  expect(playing.audio().filter((call) => call.command === "open").length).toBe(
+    playing.audio().filter((call) => call.command === "close").length,
+  );
 });
