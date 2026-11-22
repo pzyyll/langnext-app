@@ -52,7 +52,7 @@ export function AddPresetDialog(props: AddPresetDialogProps) {
           onPress={() => props.onSelect("ai")}
           class="w-full"
         >
-          <Icon name="lightning" tone="foreground" class="size-4" />
+          <Icon name="cube-outline" tone="foreground" class="size-4" />
           <Text class="min-w-0 flex-1 truncate text-sm font-medium text-foreground">
             {t("presets.engine.ai")}
           </Text>
@@ -65,7 +65,7 @@ export function AddPresetDialog(props: AddPresetDialogProps) {
           onPress={() => props.onSelect("deepl")}
           class="w-full"
         >
-          <Icon name="english" tone="foreground" class="size-4" />
+          <Icon name="deepl" tone="foreground" class="size-4" />
           <Text class="min-w-0 flex-1 truncate text-sm font-medium text-foreground">
             {t("presets.engine.deepl")}
           </Text>
