@@ -136,7 +136,6 @@ settings:
     configured: 已配置
     savedKey: "\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022"
     keyUnreadable: 无法读取已保存的 API Key。请重新填写。
-    keyStorage: 密钥保存在本机，且未加密。
     breadcrumbLabel: 语音合成导航
     configureLabel: 配置 %{name}
     enableLabel: 启用 %{name}
@@ -146,7 +145,6 @@ settings:
     configureBeforeEnable: 请先配置此渠道再启用。
     preview: 播放示例
     stop: 停止
-    previewHint: 向 Google 发送一段简短的英文示例。
     previewUnavailable: 此设备无法播放音频。
     previewUnsaved: 请先保存或清除 API Key，再播放示例。
     previewNeedsKey: 请先保存 API Key，再播放示例。

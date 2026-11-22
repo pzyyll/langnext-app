@@ -222,14 +222,14 @@ function GoogleCloudDetail(props: { compact: boolean; credentialState: Credentia
     if (phase() === "playing") return t("settings.tts.stop");
     return t("settings.tts.preview");
   };
-  const previewNote = () => {
+  const previewNote = (): string | undefined => {
     if (!playbackReady()) return t("settings.tts.previewUnavailable");
     if (ttsSettingsStore.savedBinding() === null || props.credentialState !== "readable") {
       return t("settings.tts.previewNeedsKey");
     }
     if (phase() === "idle" && apiKeyDraft().trim().length > 0)
       return t("settings.tts.previewUnsaved");
-    return t("settings.tts.previewHint");
+    return undefined;
   };
   const previewDisabled = () =>
     phase() === "idle" &&
@@ -360,14 +360,6 @@ function GoogleCloudDetail(props: { compact: boolean; credentialState: Credentia
             }}
           />
         </FormField>
-
-        <Text testID="settings-tts-key-storage" class="text-xs text-muted-foreground">
-          {t("settings.tts.keyStorage")}
-        </Text>
-
-        <Text testID="settings-tts-preview-note" class="text-xs text-muted-foreground">
-          {previewNote()}
-        </Text>
 
         <If when={props.credentialState === "missing"}>
           <Text testID="settings-tts-key-missing" role="alert" class="text-sm text-destructive">

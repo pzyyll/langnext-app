@@ -136,7 +136,6 @@ settings:
     configured: Configured
     savedKey: "\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022"
     keyUnreadable: The saved API key could not be read. Enter it again.
-    keyStorage: The key is stored on this device and is not encrypted.
     breadcrumbLabel: Text-to-speech navigation
     configureLabel: Configure %{name}
     enableLabel: Enable %{name}
@@ -146,7 +145,6 @@ settings:
     configureBeforeEnable: Configure this channel before enabling it.
     preview: Play sample
     stop: Stop
-    previewHint: Sends a short English sample to Google.
     previewUnavailable: Playback is unavailable on this device.
     previewUnsaved: Save or clear the API key before playing the sample.
     previewNeedsKey: Save an API key before playing the sample.
