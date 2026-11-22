@@ -12,10 +12,10 @@ use windows_sys::Win32::Graphics::Gdi::{
     AC_SRC_OVER, BI_RGB, BITMAPINFO, BITMAPINFOHEADER, BLACK_BRUSH, BLENDFUNCTION, BeginPaint,
     BitBlt, CreateCompatibleDC, CreateDIBSection, CreatePen, CreateSolidBrush, DEFAULT_GUI_FONT,
     DIB_RGB_COLORS, DT_CENTER, DT_NOPREFIX, DT_SINGLELINE, DT_VCENTER, DeleteDC, DeleteObject,
-    DrawTextW, EndPaint, EnumDisplayMonitors, FillRect, FrameRect, GdiAlphaBlend, GetDC,
-    GetMonitorInfoW, GetStockObject, HDC, HGDIOBJ, HMONITOR, InvalidateRect, LineTo, MONITORINFO,
-    MONITORINFOEXW, MoveToEx, PAINTSTRUCT, PS_DOT, ReleaseDC, SRCCOPY, SelectObject, SetBkMode,
-    SetTextColor, TRANSPARENT, WHITE_BRUSH,
+    DrawTextW, EndPaint, EnumDisplayMonitors, FillRect, GdiAlphaBlend, GetDC, GetMonitorInfoW,
+    GetStockObject, HDC, HGDIOBJ, HMONITOR, InvalidateRect, LineTo, MONITORINFO, MONITORINFOEXW,
+    MoveToEx, PAINTSTRUCT, PS_DOT, ReleaseDC, SRCCOPY, SelectObject, SetBkMode, SetTextColor,
+    TRANSPARENT, WHITE_BRUSH,
 };
 use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows_sys::Win32::System::Threading::GetCurrentThreadId;
@@ -49,6 +49,10 @@ const CAPTION_MIN_WIDTH: i32 = 240;
 
 /// The black preview mask uses 40% opacity, independent of the app theme.
 const MASK_ALPHA: u8 = 102;
+
+/// Thickness and dash length of the selection frame, in physical pixels.
+const FRAME_STROKE: i32 = 1;
+const FRAME_DASH: i32 = 6;
 
 /// Request posted to the capture worker's queue when TSX cancels the session.
 const WM_APP_CANCEL: u32 = WM_APP + 1;
@@ -653,16 +657,66 @@ fn paint_preview(hdc: HDC, snapshot: &Snapshot, dimmed: &Snapshot, crop: Option<
                 right: crop.x + crop.width,
                 bottom: crop.y + crop.height,
             };
-            // Adjacent dark and light strokes remain distinct on any screenshot background.
-            FrameRect(hdc, &rect, GetStockObject(BLACK_BRUSH));
-            if rect.right - rect.left > 2 && rect.bottom - rect.top > 2 {
-                let inner = RECT {
-                    left: rect.left + 1,
-                    top: rect.top + 1,
-                    right: rect.right - 1,
-                    bottom: rect.bottom - 1,
-                };
-                FrameRect(hdc, &inner, GetStockObject(WHITE_BRUSH));
+            draw_selection_frame(hdc, rect);
+        }
+    }
+}
+
+/// Paints the selection edge as alternating dark and light dashes, so the boundary reads as
+/// dashed and stays visible on light and dark content.
+fn draw_selection_frame(hdc: HDC, rect: RECT) {
+    let width = rect.right - rect.left;
+    let height = rect.bottom - rect.top;
+    if width <= 0 || height <= 0 {
+        return;
+    }
+    let stroke = FRAME_STROKE.min(width / 2).min(height / 2).max(1);
+    let mut dark = true;
+    let mut remaining = FRAME_DASH;
+
+    // Walk clockwise from the top-left corner so the dash rhythm carries across corners.
+    for (band, horizontal, forward, length) in [
+        (rect.top, true, true, width),
+        (rect.right - stroke, false, true, height),
+        (rect.bottom - stroke, true, false, width),
+        (rect.left, false, false, height),
+    ] {
+        let mut offset = 0;
+        while offset < length {
+            let run = remaining.min(length - offset);
+            let first = if forward {
+                offset
+            } else {
+                length - offset - run
+            };
+            let dash = if horizontal {
+                RECT {
+                    left: rect.left + first,
+                    top: band,
+                    right: rect.left + first + run,
+                    bottom: band + stroke,
+                }
+            } else {
+                RECT {
+                    left: band,
+                    top: rect.top + first,
+                    right: band + stroke,
+                    bottom: rect.top + first + run,
+                }
+            };
+            // SAFETY: FillRect only reads the dash rectangle and the stock brush.
+            unsafe {
+                FillRect(
+                    hdc,
+                    &dash,
+                    GetStockObject(if dark { BLACK_BRUSH } else { WHITE_BRUSH }),
+                );
+            }
+            offset += run;
+            remaining -= run;
+            if remaining == 0 {
+                dark = !dark;
+                remaining = FRAME_DASH;
             }
         }
     }
@@ -1116,9 +1170,26 @@ mod tests {
 
             paint_preview(preview.dc, &frame, &dimmed, Some(crop));
             assert!(dim_range.contains(&(pixel(4, 4) & 0xff)));
-            assert_eq!(pixel(8, 16), 0);
-            assert_eq!(pixel(9, 16), 0x00ff_ffff);
+            assert_eq!(pixel(7, 16), pixel(4, 4));
             assert_eq!(pixel(16, 16), original);
+
+            let inside = 8 + FRAME_STROKE..24 - FRAME_STROKE;
+            let edge: Vec<(u32, i32)> = inside.fold(Vec::new(), |mut runs, y| {
+                let color = pixel(8, y);
+                assert_eq!(
+                    pixel(8 + FRAME_STROKE, y),
+                    original,
+                    "the frame is {FRAME_STROKE} pixels thick"
+                );
+                match runs.last_mut() {
+                    Some((last, count)) if *last == color => *count += 1,
+                    _ => runs.push((color, 1)),
+                }
+                runs
+            });
+            assert!(edge.iter().any(|&(color, _)| color == 0));
+            assert!(edge.iter().any(|&(color, _)| color == 0x00ff_ffff));
+            assert!(edge.iter().all(|&(_, count)| count <= FRAME_DASH));
             assert_eq!(unsafe { GetPixel(frame.dc, 8, 16) }, original);
             assert_eq!(unsafe { GetPixel(frame.dc, 4, 4) }, original);
 
