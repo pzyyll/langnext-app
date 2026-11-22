@@ -1486,6 +1486,7 @@ test("tts settings: keeps a saved channel off until enabled and preserves the sw
   await reopened.waitFor("id:settings-tts-card");
   expect(reopened.texts()).toContain("语音合成");
   expect(reopened.texts()).toContain("已配置");
+  expect(reopened.texts()).toContain("首选");
   await reopened.press("id:settings-tts-channel-google-cloud");
   await reopened.waitFor("id:settings-tts-detail-card");
   expect(reopened.value("id:settings-tts-api-key")).toBe("");

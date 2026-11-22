@@ -150,7 +150,7 @@ settings:
     moveUp: 上移 %{name}
     moveDown: 下移 %{name}
     role:
-      primary: 主用
+      primary: 首选
       backup: 备用
     apiKey: API Key
     saved: 语音合成渠道已保存
