@@ -1490,7 +1490,7 @@ test("tts settings: enables on the first save and keeps a replaced key off", asy
   expect(reopened.value("id:settings-tts-api-key")).toBe("");
 });
 
-test("tts settings: a missing key can be turned off and a failed save keeps the draft", async () => {
+test("tts settings: a missing key can be turned off", async () => {
   const ref = "broken-tts-ref";
   const app = await open(APP_ENTRY, {
     ...viewport,
@@ -1517,7 +1517,10 @@ test("tts settings: a missing key can be turned off and a failed save keeps the 
   await app.waitFor("id:settings-tts-list-error");
   expect(JSON.parse(app.storage()[TTS_STORAGE_KEY]!).googleCloud.enabled).toBe(false);
   expect(app.texts()).toContain("The saved API key could not be read. Enter it again.");
+});
 
+test("tts storage: a failed save keeps the draft", async () => {
+  const ref = "broken-tts-ref";
   const failing = await open(APP_ENTRY, {
     ...viewport,
     storage: {
