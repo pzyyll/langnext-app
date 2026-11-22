@@ -1,0 +1,161 @@
+#!/usr/bin/env bash
+#MISE description="Regenerate the bundled Google Cloud TTS voice catalog from Google's supported-voices table."
+set -euo pipefail
+
+# Source: https://cloud.google.com/text-to-speech/docs/list-voices-and-types
+# This task parses the "List of all supported languages" table only; the overview,
+# the per-family guides, and the audio samples never contribute a voice.
+#
+#   mise run voices                       # download the current table
+#   mise run voices -- path/to/saved.html # parse a saved copy (repeatable check)
+#
+# The reviewed allowlist, SKUs, and published pricing live in
+# assets/catalog/google-tts-families.json, which this task shares with the app.
+# It writes a temporary file and replaces the snapshot only after every check
+# passes, so a failed run leaves the last good catalog in place.
+
+root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
+cd "$root"
+
+url=https://cloud.google.com/text-to-speech/docs/list-voices-and-types
+families=assets/catalog/google-tts-families.json
+out=assets/catalog/google-tts-voices.json
+
+work="$(mktemp -d)"
+trap 'rm -rf "$work"' EXIT
+
+html="$work/voices.html"
+if [ "$#" -gt 0 ]; then
+  if [ ! -f "$1" ]; then
+    echo "voices: no such file: $1" >&2
+    exit 1
+  fi
+  cp "$1" "$html"
+else
+  curl --fail --silent --show-error --location --max-time 60 "$url" --output "$html"
+fi
+
+script="$work/generate.mjs"
+cat >"$script" <<'EOF'
+import { readFile, writeFile } from "node:fs/promises";
+
+const [htmlPath, familiesPath, outPath] = process.argv.slice(2);
+
+function fail(message) {
+  console.error("voices: " + message);
+  process.exit(1);
+}
+
+const familiesDoc = JSON.parse(await readFile(familiesPath, "utf8"));
+const html = await readFile(htmlPath, "utf8");
+
+const REQUIRED_HEADERS = [
+  "Language",
+  "Voice type",
+  "Language code",
+  "Voice name",
+  "SSML Gender",
+];
+const header = html.indexOf("<th>Language</th>");
+if (header === -1) fail("the supported-voices table header is missing");
+const headerBlock = html.slice(header, header + 1000);
+for (const column of REQUIRED_HEADERS) {
+  if (!headerBlock.includes("<th>" + column + "</th>")) {
+    fail('the supported-voices table has no "' + column + '" column');
+  }
+}
+const tableEnd = html.indexOf("</table>", header);
+if (tableEnd === -1) fail("the supported-voices table is not closed");
+const table = html.slice(header, tableEnd);
+
+function decode(value) {
+  return value
+    .replace(/<[^>]*>/g, " ")
+    .replace(/&nbsp;/g, " ")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'")
+    .replace(/&amp;/g, "&")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+const LOCALE_PATTERN = /^[a-z]{2,3}-[A-Z]{2}$/;
+const GENDERS = new Map([
+  ["FEMALE", "female"],
+  ["MALE", "male"],
+]);
+const families = [...familiesDoc.families].sort(
+  (left, right) => right.voiceNameToken.length - left.voiceNameToken.length,
+);
+
+const voices = new Map();
+const rows = [...table.matchAll(/<tr>([\s\S]*?)<\/tr>/g)].map((match) => match[1]);
+for (const row of rows) {
+  const cells = [...row.matchAll(/<td(?:[^>]*)>([\s\S]*?)<\/td>/g)].map((match) =>
+    decode(match[1]),
+  );
+  if (cells.length < 5) continue;
+  const locale = cells[2];
+  const name = cells[3];
+  if (!LOCALE_PATTERN.test(locale)) continue;
+  if (!name.startsWith(locale + "-")) continue;
+  if (/gemini/i.test(name) || /multi-?speaker/i.test(name)) continue;
+  const family = families.find((entry) =>
+    name.startsWith(locale + "-" + entry.voiceNameToken + "-"),
+  );
+  if (family === undefined) continue;
+  const gender = GENDERS.get(cells[4]);
+  if (gender === undefined) fail('unknown gender "' + cells[4] + '" for ' + name);
+  if (voices.has(name)) fail("duplicate voice " + name);
+  voices.set(name, { name, locale, family: family.id, gender });
+}
+
+if (voices.size === 0) fail("the table has no approved voices");
+
+function compare(left, right) {
+  return left < right ? -1 : left > right ? 1 : 0;
+}
+
+const sorted = [...voices.values()].sort(
+  (left, right) => compare(left.locale, right.locale) || compare(left.name, right.name),
+);
+
+const names = new Set(sorted.map((voice) => voice.name));
+for (const family of familiesDoc.families) {
+  if (!sorted.some((voice) => voice.family === family.id)) {
+    fail("the " + family.name + " family has no voices in the table");
+  }
+  if (!names.has(family.referenceVoice)) {
+    fail("the " + family.name + " reference voice " + family.referenceVoice + " is missing");
+  }
+}
+
+const payload = {
+  checkedAt: familiesDoc.checkedAt,
+  sourceUrl: familiesDoc.voiceCatalogUrl,
+  voices: sorted,
+};
+await writeFile(outPath, JSON.stringify(payload) + "\n", "utf8");
+console.log(
+  "voices: " +
+    sorted.length +
+    " voices in " +
+    new Set(sorted.map((voice) => voice.family)).size +
+    " families",
+);
+EOF
+
+node "$script" "$html" "$families" "$work/out.json"
+
+mv "$work/out.json" "$out"
+trap - EXIT
+rm -rf "$work"
+
+# Lay the snapshot out the way the repository formatter does, so the diff is one
+# voice per line and the format check stays clean.
+pnpm exec oxfmt "$out" >/dev/null
+
+bytes="$(wc -c <"$out" | tr -d ' ')"
+echo "voices: wrote $out (${bytes} bytes)"

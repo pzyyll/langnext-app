@@ -1,0 +1,58 @@
+{
+  "checkedAt": "2026-11-22",
+  "pricingUrl": "https://cloud.google.com/text-to-speech/pricing",
+  "voiceCatalogUrl": "https://cloud.google.com/text-to-speech/docs/list-voices-and-types",
+  "sourceTable": "Google Cloud Text-to-Speech supported voices",
+  "families": [
+    {
+      "id": "standard",
+      "name": "Standard",
+      "voiceNameToken": "Standard",
+      "sku": "9D01-5995-B545",
+      "freeCharactersPerMonth": 4000000,
+      "sharedWith": ["wavenet"],
+      "usdPerMillionCharacters": 4,
+      "referenceVoice": "en-US-Standard-C"
+    },
+    {
+      "id": "wavenet",
+      "name": "WaveNet",
+      "voiceNameToken": "Wavenet",
+      "sku": "9D01-5995-B545",
+      "freeCharactersPerMonth": 4000000,
+      "sharedWith": ["standard"],
+      "usdPerMillionCharacters": 4,
+      "referenceVoice": "en-US-Wavenet-C"
+    },
+    {
+      "id": "neural2",
+      "name": "Neural2",
+      "voiceNameToken": "Neural2",
+      "sku": "FEBD-04B6-769B",
+      "freeCharactersPerMonth": 1000000,
+      "sharedWith": [],
+      "usdPerMillionCharacters": 16,
+      "referenceVoice": "en-US-Neural2-D"
+    },
+    {
+      "id": "chirp3-hd",
+      "name": "Chirp 3: HD",
+      "voiceNameToken": "Chirp3-HD",
+      "sku": "F977-2280-6F1B",
+      "freeCharactersPerMonth": 1000000,
+      "sharedWith": [],
+      "usdPerMillionCharacters": 30,
+      "referenceVoice": "en-US-Chirp3-HD-Kore"
+    },
+    {
+      "id": "studio",
+      "name": "Studio",
+      "voiceNameToken": "Studio",
+      "sku": "84AB-48C0-F9C3",
+      "freeCharactersPerMonth": 1000000,
+      "sharedWith": [],
+      "usdPerMillionCharacters": 160,
+      "referenceVoice": "en-US-Studio-O"
+    }
+  ]
+}

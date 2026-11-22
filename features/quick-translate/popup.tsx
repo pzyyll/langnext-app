@@ -26,6 +26,7 @@ import { AUTO_LANGUAGE, type LanguageId, type SourceLanguageId } from "../preset
 import { modelsStore } from "../models/store";
 import type { TranslationPreset } from "../presets/types";
 import { synthesizeSpeech } from "../tts/channels";
+import { googlePreferencesSignature } from "../tts/google-preferences";
 import { playMp3Bytes } from "../tts/playback";
 import { prepareQuickSpeech, quickSpeechFailureMessage } from "../tts/quick-speech";
 import { ttsSettingsStore } from "../tts/settings";
@@ -558,7 +559,7 @@ export function QuickTranslatePopup(props: QuickTranslatePopupProps) {
     if (active.channel === "azure") {
       return `azure\0${active.credentialRef}\0${active.region}`;
     }
-    return `google-cloud\0${active.credentialRef}`;
+    return `google-cloud\0${active.credentialRef}\0${googlePreferencesSignature(active.preferences)}`;
   };
 
   const cancelSpeech = () => {

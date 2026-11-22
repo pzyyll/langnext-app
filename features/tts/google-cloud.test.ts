@@ -1,5 +1,6 @@
 import { expect, test } from "nsh/test";
 import type { FetchLike, HttpResponseLike } from "../../modules/ai/runtime/http";
+import { DEFAULT_GOOGLE_VOICE_PREFERENCES, googleAudioOptions } from "./google-preferences";
 import {
   createGoogleCloudTtsClient,
   GOOGLE_CLOUD_TTS_URL,
@@ -109,6 +110,59 @@ test("google cloud tts: posts the v1 synthesize body and returns mp3 bytes", asy
     expect(Buffer.from(result.audio).toString("utf8")).not.toBe(audioContent);
   }
   assertNoSecret(result, API_KEY);
+});
+
+test("google cloud tts: serializes only the effective audio fields", async () => {
+  const audioContent = Buffer.from(MP3).toString("base64");
+  const harness = createHarness(() => streamResponse({ audioContent }));
+  const preferences = {
+    ...DEFAULT_GOOGLE_VOICE_PREFERENCES,
+    voiceTier: "neural2" as const,
+    speakingRate: 1.25,
+    pitch: 2,
+  };
+
+  const result = await harness.client.synthesize({
+    apiKey: API_KEY,
+    text: "Hello",
+    languageCode: "en-US",
+    voiceName: "en-US-Neural2-D",
+    audio: googleAudioOptions(preferences, "neural2"),
+  });
+  expect(result).toEqual({ status: "synthesized", audio: MP3 });
+  expect(JSON.parse(harness.requests[0]!.body ?? "").audioConfig).toEqual({
+    audioEncoding: "MP3",
+    speakingRate: 1.25,
+    pitch: 2,
+  });
+
+  const defaults = createHarness(() => streamResponse({ audioContent }));
+  await defaults.client.synthesize({
+    apiKey: API_KEY,
+    text: "Hello",
+    languageCode: "en-US",
+    voiceName: "en-US-Standard-C",
+    audio: googleAudioOptions(DEFAULT_GOOGLE_VOICE_PREFERENCES, "standard"),
+  });
+  expect(JSON.parse(defaults.requests[0]!.body ?? "").audioConfig).toEqual({
+    audioEncoding: "MP3",
+  });
+
+  const chirp = createHarness(() => streamResponse({ audioContent }));
+  await chirp.client.synthesize({
+    apiKey: API_KEY,
+    text: "Hello",
+    languageCode: "en-US",
+    voiceName: "en-US-Chirp3-HD-Kore",
+    audio: googleAudioOptions({ ...preferences, voiceTier: "chirp3-hd" }, "chirp3-hd"),
+  });
+  expect(JSON.parse(chirp.requests[0]!.body ?? "").audioConfig).toEqual({
+    audioEncoding: "MP3",
+  });
+  expect(JSON.parse(chirp.requests[0]!.body ?? "").voice).toEqual({
+    languageCode: "en-US",
+    name: "en-US-Chirp3-HD-Kore",
+  });
 });
 
 const VOICE = { languageCode: "en-US", voiceName: "en-US-Standard-C" };

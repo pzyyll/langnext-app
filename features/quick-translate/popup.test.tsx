@@ -9,6 +9,7 @@ import { deepLCredentialStorageKey, PRESETS_STORAGE_KEY } from "../presets/store
 import type { TranslationPreset } from "../presets/types";
 import { QUICK_TRANSLATE_PREFERENCES_KEY } from "./preferences";
 import { GOOGLE_CLOUD_TTS_URL } from "../tts/google-cloud";
+import { DEFAULT_GOOGLE_VOICE_PREFERENCES } from "../tts/google-preferences";
 import { TTS_STORAGE_KEY, ttsCredentialStorageKey } from "../tts/settings";
 
 initializeAiModules();
@@ -1901,8 +1902,12 @@ const QUICK_TTS_MP3 = {
 function enabledTtsStorage(enabled = true): Record<string, string> {
   return {
     [TTS_STORAGE_KEY]: JSON.stringify({
-      version: 1,
-      googleCloud: { enabled, credentialRef: "tts-ref" },
+      version: 2,
+      googleCloud: {
+        enabled,
+        credentialRef: "tts-ref",
+        preferences: DEFAULT_GOOGLE_VOICE_PREFERENCES,
+      },
     }),
     [ttsCredentialStorageKey("tts-ref")]: JSON.stringify({ apiKey: "tts-key" }),
   };
@@ -1963,8 +1968,12 @@ const AZURE_QUICK_TTS_URL = "https://eastus.tts.speech.microsoft.com/cognitivese
 function azureActiveStorage(): Record<string, string> {
   return {
     [TTS_STORAGE_KEY]: JSON.stringify({
-      version: 1,
-      googleCloud: { enabled: false, credentialRef: "google-ref" },
+      version: 2,
+      googleCloud: {
+        enabled: false,
+        credentialRef: "google-ref",
+        preferences: DEFAULT_GOOGLE_VOICE_PREFERENCES,
+      },
       azure: { enabled: true, credentialRef: "azure-ref", region: "eastus" },
     }),
     [ttsCredentialStorageKey("google-ref")]: JSON.stringify({ apiKey: "google-key" }),
@@ -2154,7 +2163,7 @@ test("quick tts: refuses a disabled channel, an unsupported language, and unreso
   await unsupported.type("id:quick-translate-source", "Bok");
   await unsupported.press("id:quick-translate-speak-source");
   await unsupported.waitFor("id:quick-translate-speak-source-error");
-  expect(unsupported.texts()).toContain(t("quickTranslate.speakUnsupported"));
+  expect(unsupported.texts()).toContain(t("quickTranslate.speakVoiceNeedsSettings"));
   expect(unsupported.requests()).toHaveLength(0);
 
   const unresolved = await open(POPUP_HARNESS, {
@@ -2271,4 +2280,99 @@ test("quick tts: a later speaker replaces a delayed request, and Stop closes pla
   await app.waitFor("id:quick-translate-card-card-1 >> role:button[Read aloud]");
   expect(app.requests()).toHaveLength(beforeStop);
   expect(app.audio().some((call) => call.command === "close")).toBe(true);
+});
+
+function googleTtsStorage(): Record<string, string> {
+  return {
+    [TTS_STORAGE_KEY]: JSON.stringify({
+      version: 2,
+      googleCloud: {
+        enabled: true,
+        credentialRef: "tts-ref",
+        preferences: {
+          ...DEFAULT_GOOGLE_VOICE_PREFERENCES,
+          voiceOverrides: { en: "en-GB-Wavenet-A", fr: "fr-CA-Standard-A" },
+          speakingRate: 1.25,
+          pitch: -2,
+        },
+      },
+    }),
+    [ttsCredentialStorageKey("tts-ref")]: JSON.stringify({ apiKey: "tts-key" }),
+  };
+}
+
+test("quick tts: saved Google voices and audio values apply to the source and the result", async () => {
+  const source = await open(POPUP_HARNESS, {
+    ...viewport,
+    storage: seedWithPresets([makePreset()], googleTtsStorage()),
+    network: { [QUICK_TTS_URL]: { status: 200, body: QUICK_TTS_MP3 } },
+  });
+  await source.waitFor("id:quick-translate-source");
+  await source.type("id:quick-translate-source", "Hello");
+  await source.waitUntil(() => source.enabled("id:quick-translate-speak-source"));
+  await source.press("id:quick-translate-speak-source");
+  await source.waitUntil(() => source.requests().length === 1);
+  const spoken = source.requests()[0]!;
+  expect(JSON.parse(spoken.body ?? "").voice).toEqual({
+    languageCode: "en-GB",
+    name: "en-GB-Wavenet-A",
+  });
+  expect(JSON.parse(spoken.body ?? "").audioConfig).toEqual({
+    audioEncoding: "MP3",
+    speakingRate: 1.25,
+    pitch: -2,
+  });
+
+  const result = await open(POPUP_HARNESS, {
+    ...viewport,
+    storage: seedWithPresets([makePreset()], googleTtsStorage()),
+    network: {
+      "POST https://api.openai.com/v1/chat/completions": {
+        status: 200,
+        body: { choices: [{ message: { content: "Bonjour" } }] },
+      },
+      [QUICK_TTS_URL]: { status: 200, body: QUICK_TTS_MP3 },
+    },
+  });
+  await result.waitFor("id:quick-translate-source");
+  await result.type("id:quick-translate-source", "Hello");
+  await result.keyboard.press("enter");
+  await result.waitFor("id:quick-translate-card-card-1 >> id:quick-translate-speak-result");
+  await result.press("id:quick-translate-card-card-1 >> id:quick-translate-speak-result");
+  await result.waitUntil(() =>
+    result.requests().some((request) => request.url === GOOGLE_CLOUD_TTS_URL),
+  );
+  const speech = result.requests().filter((request) => request.url === GOOGLE_CLOUD_TTS_URL);
+  expect(speech).toHaveLength(1);
+  expect(JSON.parse(speech[0]!.body ?? "").input.text).toBe("Bonjour");
+  expect(JSON.parse(speech[0]!.body ?? "").voice).toEqual({
+    languageCode: "fr-CA",
+    name: "fr-CA-Standard-A",
+  });
+});
+
+test("quick tts: a Google preference change during synthesis drops the obsolete request", async () => {
+  const storage = seedWithPresets([makePreset()], {
+    ...googleTtsStorage(),
+    [POPUP_HARNESS_MODE_KEY]: "tts-switch",
+  });
+  const app = await open(POPUP_HARNESS, {
+    ...viewport,
+    storage,
+    network: {
+      [QUICK_TTS_URL]: { status: 200, delay: 800, body: QUICK_TTS_MP3 },
+    },
+  });
+  await app.waitFor("id:quick-translate-source");
+  await app.type("id:quick-translate-source", "Hello");
+  await app.waitUntil(() => app.enabled("id:quick-translate-speak-source"));
+  await app.press("id:quick-translate-speak-source");
+  await app.waitFor("role:button[Cancel]");
+  await app.press("id:harness-change-google-preferences");
+  await app.waitFor("role:button[Read aloud]");
+  await app.wait(900);
+  expect(app.audio().some((call) => call.command === "open")).toBe(false);
+  expect(app.texts()).not.toContain("Could not play the audio. Try again.");
+  const saved = JSON.parse(app.storage()[TTS_STORAGE_KEY]!).googleCloud.preferences;
+  expect(saved.speakingRate).toBe(1.5);
 });

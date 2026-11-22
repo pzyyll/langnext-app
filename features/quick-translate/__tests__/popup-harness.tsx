@@ -22,6 +22,7 @@ import { loadModelsState } from "../../models/store";
 import { createPresetsStore } from "../../presets/store";
 import { loadAppearance } from "../../settings/appearance";
 import { loadLanguage } from "../../settings/language";
+import { DEFAULT_GOOGLE_VOICE_PREFERENCES } from "../../tts/google-preferences";
 import { ttsSettingsStore } from "../../tts/settings";
 import {
   createQuickTranslatePreferencesStore,
@@ -257,6 +258,18 @@ function PopupHarnessApp(props: {
               void ttsSettingsStore.saveChannel({
                 channel: "google-cloud",
                 apiKey: "next-google-key",
+              })
+            }
+          />
+          <Button
+            testID="harness-change-google-preferences"
+            size="xs"
+            variant="outline"
+            label="Change Google preferences"
+            onPress={() =>
+              void ttsSettingsStore.saveChannel({
+                channel: "google-cloud",
+                preferences: { ...DEFAULT_GOOGLE_VOICE_PREFERENCES, speakingRate: 1.5 },
               })
             }
           />
