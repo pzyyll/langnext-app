@@ -88,6 +88,8 @@ export interface LanguageDetectionSettingsStore {
   enabledDetectors(): readonly LanguageDetectorBinding[];
   /** The detector chain and preferences one translation action reads once. */
   snapshot(): LanguageDetectionSnapshot;
+  /** The saved Automatic-target language preferences. */
+  preferences(): LanguageDetectionPreferences;
   loadError(): LanguageDetectionLoadError | null;
   saveAiModel(modelId: string): Promise<LanguageDetectionSaveResult>;
   setEnabled(kind: LanguageDetectorKind, enabled: boolean): Promise<LanguageDetectionActionResult>;
@@ -96,8 +98,10 @@ export interface LanguageDetectionSettingsStore {
     kind: LanguageDetectorKind,
     targetIndex: number,
   ): Promise<LanguageDetectionActionResult>;
-  savePreferences(
-    preferences: LanguageDetectionPreferences,
+  /** Saves one Automatic-target language preference and keeps the other one. */
+  setPreference(
+    field: keyof LanguageDetectionPreferences,
+    value: LanguageId | null,
   ): Promise<LanguageDetectionActionResult>;
 }
 
@@ -332,6 +336,13 @@ export function createLanguageDetectionSettingsStore(
         preferredTranslationLanguage: current.preferredTranslationLanguage,
       };
     },
+    preferences: () => {
+      const current = settingsSignal();
+      return {
+        nativeLanguage: current.nativeLanguage,
+        preferredTranslationLanguage: current.preferredTranslationLanguage,
+      };
+    },
     loadError: () => loadErrorSignal(),
     saveAiModel: async (modelId) => {
       if (!isNonblankModelId(modelId)) return failure("model_id_blank");
@@ -381,21 +392,23 @@ export function createLanguageDetectionSettingsStore(
           preferredTranslationLanguage: current.preferredTranslationLanguage,
         });
       }),
-    savePreferences: async (preferences) => {
-      const invalid = validatePreferences(preferences);
-      if (invalid !== null) return failure(invalid);
-      const snapshot = {
-        nativeLanguage: preferences.nativeLanguage,
-        preferredTranslationLanguage: preferences.preferredTranslationLanguage,
-      };
+    setPreference: async (field, value) => {
+      if (!isPreference(value)) return failure("preference_invalid");
       return enqueueWrite(async () => {
         const current = settingsSignal();
+        const preferences: LanguageDetectionPreferences = {
+          nativeLanguage: current.nativeLanguage,
+          preferredTranslationLanguage: current.preferredTranslationLanguage,
+        };
+        preferences[field] = value;
+        const invalid = validatePreferences(preferences);
+        if (invalid !== null) return failure(invalid);
         return persistSnapshot({
           order: [...current.order],
           enabled: { ...current.enabled },
           ai: current.ai,
-          nativeLanguage: snapshot.nativeLanguage,
-          preferredTranslationLanguage: snapshot.preferredTranslationLanguage,
+          nativeLanguage: preferences.nativeLanguage,
+          preferredTranslationLanguage: preferences.preferredTranslationLanguage,
         });
       });
     },

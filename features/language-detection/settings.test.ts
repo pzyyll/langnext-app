@@ -194,8 +194,11 @@ test("detection settings: saves and restores the language preferences", async ()
   const store = createLanguageDetectionSettingsStore(mem.storage);
   await store.load();
 
-  const saved = await store.savePreferences(PREFERENCES);
-  expect(saved.ok).toBe(true);
+  const native = await store.setPreference("nativeLanguage", "zh");
+  expect(native.ok).toBe(true);
+  const preferred = await store.setPreference("preferredTranslationLanguage", "en");
+  expect(preferred.ok).toBe(true);
+  expect(store.preferences()).toEqual(PREFERENCES);
   expect(store.snapshot()).toEqual({
     detectors: [],
     nativeLanguage: "zh",
@@ -221,24 +224,24 @@ test("detection settings: rejects invalid and identical preferences without writ
   const store = createLanguageDetectionSettingsStore(mem.storage);
   await store.load();
 
-  const automatic = await store.savePreferences({
-    nativeLanguage: "auto" as unknown as LanguageDetectionPreferences["nativeLanguage"],
-    preferredTranslationLanguage: null,
-  });
+  const automatic = await store.setPreference(
+    "nativeLanguage",
+    "auto" as unknown as LanguageDetectionPreferences["nativeLanguage"],
+  );
   expect(automatic.ok).toBe(false);
   if (!automatic.ok) expect(automatic.key).toBe("preference_invalid");
 
-  const identical = await store.savePreferences({
-    nativeLanguage: "zh",
-    preferredTranslationLanguage: "zh",
-  });
+  const native = await store.setPreference("nativeLanguage", "zh");
+  expect(native.ok).toBe(true);
+
+  const identical = await store.setPreference("preferredTranslationLanguage", "zh");
   expect(identical.ok).toBe(false);
   if (!identical.ok) expect(identical.key).toBe("preferences_identical");
 
-  expect(mem.getSetCalls()).toBe(0);
+  expect(mem.getSetCalls()).toBe(1);
   expect(store.snapshot()).toEqual({
     detectors: [],
-    nativeLanguage: null,
+    nativeLanguage: "zh",
     preferredTranslationLanguage: null,
   });
 });
@@ -381,7 +384,7 @@ test("detection settings: serializes writes so a late failure cannot replace a s
   });
 
   const first = store.saveAiModel("m-1");
-  const second = store.savePreferences(PREFERENCES);
+  const second = store.setPreference("nativeLanguage", "zh");
   releaseFirstWrite();
 
   const [firstResult, secondResult] = await Promise.all([first, second]);
@@ -392,7 +395,7 @@ test("detection settings: serializes writes so a late failure cannot replace a s
   expect(store.snapshot()).toEqual({
     detectors: [{ kind: "ai", modelId: "m-1" }],
     nativeLanguage: "zh",
-    preferredTranslationLanguage: "en",
+    preferredTranslationLanguage: null,
   });
 });
 

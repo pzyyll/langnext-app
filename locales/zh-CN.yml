@@ -202,7 +202,7 @@ settings:
       primary: 首选
       backup: 备用
     model: 模型
-    languages: 检测语言
+    preferences: 自动检测语言偏好
     nativeLanguage: 母语
     nativeLanguageHelp: 目标语言设为自动时，非母语内容译为母语。
     preferredTranslation: 母语译为

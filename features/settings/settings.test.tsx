@@ -553,7 +553,7 @@ test("language detection: lists detectors, configures AI on its detail page, and
   expect(reopened.texts()).toContain("模型");
 });
 
-test("language detection: saves preferences and rejects identical languages", async () => {
+test("language detection: applies preference changes immediately and rejects identical languages", async () => {
   const seed = makeSeedStorage({
     channels: [makeChannel({ id: "ch-openai", displayName: "OpenAI Main", enabled: true })],
     models: [
@@ -565,17 +565,23 @@ test("language detection: saves preferences and rejects identical languages", as
   await app.press("id:nav-settings");
   await app.press("id:settings-nav-language-detection");
   await app.waitFor("id:settings-detection-preferences-card");
+  expect(app.shows("id:settings-detection-save")).toBe(false);
   expect(app.storage()[LANGUAGE_DETECTION_STORAGE_KEY]).toBeUndefined();
 
   await app.press("id:settings-detection-native-language");
   await app.waitFor("role:option[Chinese]");
   await app.press("role:option[Chinese]");
+  await app.waitUntil(
+    () => JSON.parse(app.storage()[LANGUAGE_DETECTION_STORAGE_KEY]!).nativeLanguage === "zh",
+  );
+
   await app.press("id:settings-detection-preferred-language");
   await app.waitFor("role:option[English]");
   await app.press("role:option[English]");
-  await app.press("id:settings-detection-save");
   await app.waitUntil(
-    () => JSON.parse(app.storage()[LANGUAGE_DETECTION_STORAGE_KEY]!).nativeLanguage === "zh",
+    () =>
+      JSON.parse(app.storage()[LANGUAGE_DETECTION_STORAGE_KEY]!).preferredTranslationLanguage ===
+      "en",
   );
   expect(JSON.parse(app.storage()[LANGUAGE_DETECTION_STORAGE_KEY]!)).toMatchObject({
     version: 2,
@@ -586,11 +592,11 @@ test("language detection: saves preferences and rejects identical languages", as
   await app.press("id:settings-detection-preferred-language");
   await app.waitFor("role:option[Chinese]");
   await app.press("role:option[Chinese]");
-  await app.press("id:settings-detection-save");
   await app.waitFor("id:settings-detection-error");
   expect(app.texts()).toContain(
     "The native language and the preferred translation language must differ.",
   );
+  expect(app.texts()).toContain("English");
   expect(
     JSON.parse(app.storage()[LANGUAGE_DETECTION_STORAGE_KEY]!).preferredTranslationLanguage,
   ).toBe("en");
@@ -598,7 +604,6 @@ test("language detection: saves preferences and rejects identical languages", as
   await app.press("id:settings-detection-preferred-language");
   await app.waitFor("role:option[German]");
   await app.press("role:option[German]");
-  await app.press("id:settings-detection-save");
   await app.waitUntil(
     () =>
       JSON.parse(app.storage()[LANGUAGE_DETECTION_STORAGE_KEY]!).preferredTranslationLanguage ===
@@ -792,7 +797,7 @@ test("language detection: localizes detector labels and preference help in both 
   expect(app.texts()).toContain("Google");
   expect(app.texts()).toContain("Not configured");
   expect(app.texts()).toContain("Free Google Translate endpoint");
-  expect(app.texts()).toContain("Detection languages");
+  expect(app.texts()).toContain("Automatic detection preferences");
   expect(app.texts()).toContain("Native language");
   expect(app.texts()).toContain("Translate my native language into");
 
@@ -809,7 +814,7 @@ test("language detection: localizes detector labels and preference help in both 
   expect(app.texts()).toContain("语言检测");
   expect(app.texts()).toContain("未配置");
   expect(app.texts()).toContain("免费的 Google 翻译接口");
-  expect(app.texts()).toContain("检测语言");
+  expect(app.texts()).toContain("自动检测语言偏好");
   expect(app.texts()).toContain("母语");
   expect(app.texts()).toContain("母语译为");
   expect(app.texts()).not.toContain(LANGUAGE_DETECTION_HELP.zh.native);

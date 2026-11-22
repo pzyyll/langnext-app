@@ -31,12 +31,7 @@ import {
   type LanguageDetectorKind,
 } from "../language-detection/settings";
 import { modelsStore } from "../models/store";
-import {
-  getLanguageLabel,
-  isLanguageId,
-  LANGUAGE_IDS,
-  type LanguageId,
-} from "../presets/languages";
+import { getLanguageLabel, isLanguageId, LANGUAGE_IDS } from "../presets/languages";
 import { readAvailableModelChoices, resolveModelBindingInfo } from "../presets/model-choices";
 
 /** Time a reordered row takes to settle into its new slot. */
@@ -464,37 +459,23 @@ function DetectionChannelList(props: DetectionChannelListProps) {
 }
 
 function LanguagePreferencesCard(props: { compact: boolean }) {
-  const initial = languageDetectionStore.snapshot();
-  const draft = signal<LanguageDetectionPreferences>({
-    nativeLanguage: initial.nativeLanguage,
-    preferredTranslationLanguage: initial.preferredTranslationLanguage,
-  });
   const error = signal<string | null>(null);
-  const saving = signal(false);
 
-  const setPreference = (
-    field: "nativeLanguage" | "preferredTranslationLanguage",
+  const preferenceValue = (field: keyof LanguageDetectionPreferences): string =>
+    languageDetectionStore.preferences()[field] ?? UNSET_LANGUAGE_CHOICE;
+
+  const selectPreference = async (
+    field: keyof LanguageDetectionPreferences,
     value: string | null,
   ) => {
     if (value === null) return;
     if (value !== UNSET_LANGUAGE_CHOICE && !isLanguageId(value)) return;
     error.set(null);
-    draft.set({
-      ...draft(),
-      [field]: value === UNSET_LANGUAGE_CHOICE ? null : (value as LanguageId),
-    });
-  };
-
-  const handleSave = async () => {
-    if (saving()) return;
-    error.set(null);
-    saving.set(true);
-    try {
-      const result = await languageDetectionStore.savePreferences({ ...draft() });
-      if (!result.ok) error.set(result.message);
-    } finally {
-      saving.set(false);
-    }
+    const result = await languageDetectionStore.setPreference(
+      field,
+      value === UNSET_LANGUAGE_CHOICE ? null : value,
+    );
+    if (!result.ok) error.set(result.message);
   };
 
   return (
@@ -502,7 +483,7 @@ function LanguagePreferencesCard(props: { compact: boolean }) {
       testID="settings-detection-preferences-card"
       class={props.compact ? "gap-4 p-4" : "gap-5 p-6"}
     >
-      <SectionHeading title={t("settings.languageDetection.languages")} />
+      <SectionHeading title={t("settings.languageDetection.preferences")} />
 
       <View class={props.compact ? "gap-4" : "flex-row gap-4"}>
         <FormField
@@ -514,10 +495,9 @@ function LanguagePreferencesCard(props: { compact: boolean }) {
           <Select
             testID="settings-detection-native-language"
             items={languageItems()}
-            value={draft().nativeLanguage ?? UNSET_LANGUAGE_CHOICE}
-            disabled={saving()}
+            value={preferenceValue("nativeLanguage")}
             accessibilityLabel={t("settings.languageDetection.nativeLanguage")}
-            onChange={(value) => setPreference("nativeLanguage", value)}
+            onChange={(value) => void selectPreference("nativeLanguage", value)}
           />
         </FormField>
         <FormField
@@ -529,10 +509,9 @@ function LanguagePreferencesCard(props: { compact: boolean }) {
           <Select
             testID="settings-detection-preferred-language"
             items={languageItems()}
-            value={draft().preferredTranslationLanguage ?? UNSET_LANGUAGE_CHOICE}
-            disabled={saving()}
+            value={preferenceValue("preferredTranslationLanguage")}
             accessibilityLabel={t("settings.languageDetection.preferredTranslation")}
-            onChange={(value) => setPreference("preferredTranslationLanguage", value)}
+            onChange={(value) => void selectPreference("preferredTranslationLanguage", value)}
           />
         </FormField>
       </View>
@@ -542,17 +521,6 @@ function LanguagePreferencesCard(props: { compact: boolean }) {
           {error()}
         </Text>
       </If>
-
-      <View class="flex-row justify-end">
-        <Button
-          testID="settings-detection-save"
-          variant="primary"
-          size="sm"
-          label={saving() ? t("common.saving") : t("common.save")}
-          disabled={saving()}
-          onPress={() => void handleSave()}
-        />
-      </View>
     </Card>
   );
 }

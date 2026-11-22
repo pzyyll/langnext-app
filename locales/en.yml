@@ -202,7 +202,7 @@ settings:
       primary: Primary
       backup: Backup
     model: Model
-    languages: Detection languages
+    preferences: Automatic detection preferences
     nativeLanguage: Native language
     nativeLanguageHelp: With an Automatic target, other languages are translated into your native language.
     preferredTranslation: Translate my native language into
