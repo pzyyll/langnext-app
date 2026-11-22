@@ -6,6 +6,7 @@ import { loadSplitRailWidths } from "./components/layout/split-rail";
 import { languageDetectionStore } from "./features/language-detection/settings";
 import { loadModelsState } from "./features/models/store";
 import { ocrSettingsStore } from "./features/ocr/settings";
+import { cleanupTtsPlaybackFiles } from "./features/tts/playback";
 import { ttsSettingsStore } from "./features/tts/settings";
 import { loadSkippedNoticeDismissal } from "./features/presets/skipped-notice";
 import { presetsStore } from "./features/presets/store";
@@ -19,6 +20,7 @@ import { loadTransparency } from "./features/settings/transparency";
 async function startApp() {
   initializeAiModules();
   try {
+    await cleanupTtsPlaybackFiles();
     await Promise.all([
       loadAppearance(),
       loadLanguage(),

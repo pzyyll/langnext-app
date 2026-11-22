@@ -20,6 +20,14 @@ import { Input } from "../../components/ui/input";
 import { Switch } from "../../components/ui/switch";
 import { toast } from "../../components/ui/toast";
 import { FormField } from "../../modules/ai/ui/form-field";
+import {
+  createGoogleCloudTtsClient,
+  TTS_SAMPLE_LANGUAGE_CODE,
+  TTS_SAMPLE_TEXT,
+  TTS_SAMPLE_VOICE_NAME,
+  type GoogleCloudTtsFailure,
+} from "../tts/google-cloud";
+import { canPlayTts, playMp3Bytes } from "../tts/playback";
 import { ttsSettingsStore } from "../tts/settings";
 
 export type TtsChannelId = "google-cloud";
@@ -171,21 +179,70 @@ function TtsChannelList(props: TtsChannelListProps) {
   );
 }
 
+type PreviewPhase = "idle" | "loading" | "playing";
+
+function previewFailureMessage(failure: GoogleCloudTtsFailure): string {
+  if (failure === "auth") return t("settings.tts.failure.auth");
+  if (failure === "quota") return t("settings.tts.failure.quota");
+  return t("settings.tts.failure.playback");
+}
+
 function GoogleCloudDetail(props: { compact: boolean; credentialState: CredentialState }) {
   const entrance = createMotion({ enter: motion.pageEnter });
   const apiKeyDraft = signal("");
   const error = signal<string | null>(null);
+  const previewError = signal<string | null>(null);
   const saving = signal(false);
+  const playbackReady = signal(false);
+  const phase = signal<PreviewPhase>("idle");
   let apiKeyField: InputRef | undefined;
   let mounted = true;
+  const active = {
+    token: 0,
+    abort: null as AbortController | null,
+    stop: null as (() => void) | null,
+  };
 
   cleanup(() => {
     mounted = false;
+    active.token += 1;
+    active.abort?.abort();
+    active.stop?.();
+    active.stop = null;
   });
+
+  effect(() => {
+    void canPlayTts().then((ready) => {
+      if (mounted) playbackReady.set(ready);
+    });
+  });
+
+  const previewLabel = () => {
+    if (phase() === "loading") return t("common.cancel");
+    if (phase() === "playing") return t("settings.tts.stop");
+    return t("settings.tts.preview");
+  };
+  const previewNote = () => {
+    if (!playbackReady()) return t("settings.tts.previewUnavailable");
+    if (ttsSettingsStore.savedBinding() === null || props.credentialState !== "readable") {
+      return t("settings.tts.previewNeedsKey");
+    }
+    if (phase() === "idle" && apiKeyDraft().trim().length > 0)
+      return t("settings.tts.previewUnsaved");
+    return t("settings.tts.previewHint");
+  };
+  const previewDisabled = () =>
+    phase() === "idle" &&
+    (saving() ||
+      !playbackReady() ||
+      apiKeyDraft().trim().length > 0 ||
+      ttsSettingsStore.savedBinding() === null ||
+      props.credentialState !== "readable");
+  const controlsLocked = () => saving() || phase() !== "idle";
 
   const handleSave = async () => {
     const apiKey = apiKeyDraft().trim();
-    if (saving() || apiKey.length === 0) return;
+    if (controlsLocked() || apiKey.length === 0) return;
     error.set(null);
     saving.set(true);
     try {
@@ -200,6 +257,76 @@ function GoogleCloudDetail(props: { compact: boolean; credentialState: Credentia
     } finally {
       saving.set(false);
     }
+  };
+
+  const handlePreview = async () => {
+    if (phase() === "loading") {
+      active.token += 1;
+      active.abort?.abort();
+      active.stop?.();
+      active.stop = null;
+      phase.set("idle");
+      previewError.set(null);
+      return;
+    }
+    if (phase() === "playing") {
+      active.token += 1;
+      active.stop?.();
+      active.stop = null;
+      phase.set("idle");
+      previewError.set(null);
+      return;
+    }
+    if (previewDisabled()) return;
+    const saved = ttsSettingsStore.savedBinding();
+    if (saved === null) return;
+    const token = active.token + 1;
+    active.token = token;
+    const controller = new AbortController();
+    active.abort = controller;
+    previewError.set(null);
+    phase.set("loading");
+    const apiKey = await ttsSettingsStore.readGoogleCloudKey(saved.credentialRef);
+    if (!mounted || token !== active.token) return;
+    if (apiKey === null || saved.credentialRef !== ttsSettingsStore.savedBinding()?.credentialRef) {
+      phase.set("idle");
+      previewError.set(t("settings.tts.keyUnreadable"));
+      return;
+    }
+    const synthesized = await createGoogleCloudTtsClient().synthesize(
+      {
+        apiKey,
+        text: TTS_SAMPLE_TEXT,
+        languageCode: TTS_SAMPLE_LANGUAGE_CODE,
+        voiceName: TTS_SAMPLE_VOICE_NAME,
+      },
+      { signal: controller.signal },
+    );
+    if (!mounted || token !== active.token || controller.signal.aborted) return;
+    if (synthesized.status === "cancelled") {
+      phase.set("idle");
+      return;
+    }
+    if (synthesized.status === "failed") {
+      phase.set("idle");
+      previewError.set(previewFailureMessage(synthesized.failure));
+      return;
+    }
+    const playback = playMp3Bytes(synthesized.audio, {
+      onPlaying: () => {
+        if (!mounted || token !== active.token) {
+          playback.stop();
+          return;
+        }
+        phase.set("playing");
+      },
+    });
+    active.stop = () => playback.stop();
+    const played = await playback.result;
+    if (!mounted || token !== active.token) return;
+    active.stop = null;
+    phase.set("idle");
+    if (played.status === "failed") previewError.set(t("settings.tts.failure.playback"));
   };
 
   return (
@@ -225,7 +352,7 @@ function GoogleCloudDetail(props: { compact: boolean; credentialState: Credentia
               props.credentialState === "readable" ? t("settings.tts.savedKey") : undefined
             }
             masked={true}
-            disabled={saving()}
+            disabled={controlsLocked()}
             accessibilityLabel={t("settings.tts.apiKey")}
             onChange={(value) => {
               error.set(null);
@@ -236,6 +363,10 @@ function GoogleCloudDetail(props: { compact: boolean; credentialState: Credentia
 
         <Text testID="settings-tts-key-storage" class="text-xs text-muted-foreground">
           {t("settings.tts.keyStorage")}
+        </Text>
+
+        <Text testID="settings-tts-preview-note" class="text-xs text-muted-foreground">
+          {previewNote()}
         </Text>
 
         <If when={props.credentialState === "missing"}>
@@ -250,13 +381,28 @@ function GoogleCloudDetail(props: { compact: boolean; credentialState: Credentia
           </Text>
         </If>
 
-        <View class="flex-row justify-end">
+        <If when={previewError() !== null}>
+          <Text testID="settings-tts-preview-error" role="alert" class="text-sm text-destructive">
+            {previewError()}
+          </Text>
+        </If>
+
+        <View class="flex-row justify-end gap-2">
+          <Button
+            testID="settings-tts-preview"
+            variant="outline"
+            size="sm"
+            label={previewLabel()}
+            disabled={previewDisabled()}
+            tooltip={previewDisabled() ? previewNote() : undefined}
+            onPress={() => void handlePreview()}
+          />
           <Button
             testID="settings-tts-save"
             variant="primary"
             size="sm"
             label={saving() ? t("common.saving") : t("common.save")}
-            disabled={saving() || apiKeyDraft().trim().length === 0}
+            disabled={controlsLocked() || apiKeyDraft().trim().length === 0}
             onPress={() => void handleSave()}
           />
         </View>

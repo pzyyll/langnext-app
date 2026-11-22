@@ -142,6 +142,16 @@ settings:
     apiKey: API Key
     saved: 语音合成渠道已保存
     configureBeforeEnable: 请先配置此渠道再启用。
+    preview: 播放示例
+    stop: 停止
+    previewHint: 向 Google 发送一段简短的英文示例。
+    previewUnavailable: 此设备无法播放音频。
+    previewUnsaved: 请先保存或清除 API Key，再播放示例。
+    previewNeedsKey: 请先保存 API Key，再播放示例。
+    failure:
+      auth: 请检查 API Key、Cloud Text-to-Speech 权限和项目结算。
+      quota: Google Cloud Text-to-Speech 已达到配额或速率限制。请重试。
+      playback: 无法播放示例。请重试。
     error:
       storageReadFailed: 无法读取已保存的语音合成设置。
       storageMalformed: 已保存的语音合成设置无法解析。
