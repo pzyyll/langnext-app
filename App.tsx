@@ -6,6 +6,7 @@ import { loadSplitRailWidths } from "./components/layout/split-rail";
 import { languageDetectionStore } from "./features/language-detection/settings";
 import { loadModelsState } from "./features/models/store";
 import { ocrSettingsStore } from "./features/ocr/settings";
+import { ttsSettingsStore } from "./features/tts/settings";
 import { loadSkippedNoticeDismissal } from "./features/presets/skipped-notice";
 import { presetsStore } from "./features/presets/store";
 import { loadQuickTranslatePreferences } from "./features/quick-translate/preferences";
@@ -30,6 +31,7 @@ async function startApp() {
       loadSkippedNoticeDismissal(),
       languageDetectionStore.load(),
       ocrSettingsStore.load(),
+      ttsSettingsStore.load(),
       loadSplitRailWidths(),
     ]);
     mount(AppShell);

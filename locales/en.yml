@@ -45,6 +45,7 @@ settings:
     shortcuts: Shortcuts
     languageDetection: Language Detection
     ocr: OCR
+    tts: Text-to-Speech
   theme:
     title: Theme
   appearance:
@@ -128,6 +129,19 @@ settings:
       baiduOperationInvalid: Choose a Baidu OCR mode.
       channelUnconfigured: Configure this channel before enabling it.
   tts:
+    channel: Google Cloud Text-to-Speech
+    notConfigured: Not configured
+    configured: Configured
+    savedKey: "\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022"
+    keyUnreadable: The saved API key could not be read. Enter it again.
+    keyStorage: The key is stored on this device and is not encrypted.
+    breadcrumbLabel: Text-to-speech navigation
+    configureLabel: Configure %{name}
+    enableLabel: Enable %{name}
+    itemLabel: "%{name} (%{status})"
+    apiKey: API Key
+    saved: Text-to-speech channel saved
+    configureBeforeEnable: Configure this channel before enabling it.
     error:
       storageReadFailed: Could not read the saved text-to-speech settings.
       storageMalformed: The saved text-to-speech settings are unreadable.

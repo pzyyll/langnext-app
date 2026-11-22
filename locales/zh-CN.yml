@@ -45,6 +45,7 @@ settings:
     shortcuts: 快捷键
     languageDetection: 语言检测
     ocr: OCR
+    tts: 语音合成
   theme:
     title: 主题
   appearance:
@@ -128,6 +129,19 @@ settings:
       baiduOperationInvalid: 请选择百度 OCR 模式。
       channelUnconfigured: 请先配置此渠道再启用。
   tts:
+    channel: Google Cloud Text-to-Speech
+    notConfigured: 未配置
+    configured: 已配置
+    savedKey: "\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022"
+    keyUnreadable: 无法读取已保存的 API Key。请重新填写。
+    keyStorage: 密钥保存在本机，且未加密。
+    breadcrumbLabel: 语音合成导航
+    configureLabel: 配置 %{name}
+    enableLabel: 启用 %{name}
+    itemLabel: "%{name}（%{status}）"
+    apiKey: API Key
+    saved: 语音合成渠道已保存
+    configureBeforeEnable: 请先配置此渠道再启用。
     error:
       storageReadFailed: 无法读取已保存的语音合成设置。
       storageMalformed: 已保存的语音合成设置无法解析。
