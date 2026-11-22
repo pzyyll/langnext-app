@@ -1879,7 +1879,7 @@ function enabledTtsStorage(enabled = true): Record<string, string> {
   };
 }
 
-function ttsVoice(requestBody: string | null): { languageCode: string; name: string } {
+function ttsVoice(requestBody: string | null | undefined): { languageCode: string; name: string } {
   return JSON.parse(requestBody ?? "").voice;
 }
 

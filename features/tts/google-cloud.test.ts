@@ -370,7 +370,7 @@ test("google cloud tts: cancellation before and during the request returns no au
   expect(earlyHarness.requests).toHaveLength(0);
 
   const controller = new AbortController();
-  let release: ((response: HttpResponseLike) => void) | null = null;
+  const late: { send: ((response: HttpResponseLike) => void) | null } = { send: null };
   const requests: RecordedRequest[] = [];
   const fetchImpl: FetchLike = async (url, init) => {
     requests.push({
@@ -381,10 +381,10 @@ test("google cloud tts: cancellation before and during the request returns no au
       ...(init.redirect !== undefined ? { redirect: init.redirect } : {}),
       signal: init.signal,
     });
-    return new Promise((resolve) => {
-      release = resolve;
+    return new Promise<HttpResponseLike>((resolve) => {
+      late.send = resolve;
       init.signal.addEventListener("abort", () => {
-        release = null;
+        late.send = null;
       });
     });
   };
@@ -403,7 +403,12 @@ test("google cloud tts: cancellation before and during the request returns no au
   }
   controller.abort();
   expect(await pending).toEqual({ status: "cancelled" });
-  release?.(streamResponse({ audioContent: Buffer.from(MP3).toString("base64"), leaked: API_KEY }));
+  const sendLate = late.send;
+  if (typeof sendLate === "function") {
+    sendLate(
+      streamResponse({ audioContent: Buffer.from(MP3).toString("base64"), leaked: API_KEY }),
+    );
+  }
   await new Promise((resolve) => setTimeout(resolve, 20));
   expect(requests).toHaveLength(1);
 });
