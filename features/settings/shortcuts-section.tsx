@@ -190,14 +190,13 @@ export function ShortcutsSection(props: {
           <View class="gap-2">
             <Switch
               testID="settings-selection-copy-switch"
+              labelTestID="settings-selection-copy-label"
               label={t("settings.selectionCopy.label")}
+              tooltip={t("settings.selectionCopy.description")}
               checked={selectionCopyEnabled()}
               disabled={selectionCopySaving()}
               onChange={(checked) => void selectSelectionCopy(checked)}
             />
-            <Text class="px-3 text-xs text-muted-foreground">
-              {t("settings.selectionCopy.description")}
-            </Text>
             <If when={selectionCopySaveFailed()}>
               <Text
                 testID="settings-selection-copy-error"
@@ -214,13 +213,12 @@ export function ShortcutsSection(props: {
         <Card testID="settings-double-copy-card" class={props.compact ? "gap-2 p-2" : "gap-2 p-3"}>
           <Switch
             testID="settings-double-copy-switch"
+            labelTestID="settings-double-copy-label"
             label={t("settings.doubleCopy.label")}
+            tooltip={t("settings.doubleCopy.description")}
             checked={doubleCopyEnabled()}
             onChange={(checked) => void selectDoubleCopy(checked)}
           />
-          <Text class="px-3 text-xs text-muted-foreground">
-            {t("settings.doubleCopy.description")}
-          </Text>
           <If when={doubleCopyError() !== null}>
             <Text
               testID="settings-double-copy-error"

@@ -8,6 +8,14 @@ import { SILENT_LAUNCH_STORAGE_KEY } from "./silent-launch";
 
 const APP_ENTRY = "../../App.tsx";
 const viewport = { width: 1040, height: 720, platform: "windows" as const };
+const COPY_SWITCH_HELP = {
+  selectionCopy:
+    "When the selection cannot be read directly, try copying it. This can replace your clipboard contents.",
+  doubleCopy:
+    "Reads copied text after two quick Ctrl+C presses and translates it with your enabled presets.",
+  doubleCopyZh: "连续按两次 Ctrl+C 会读取复制的文本，并使用已启用的预设进行翻译。",
+};
+
 const LANGUAGE_DETECTION_HELP = {
   en: {
     native: "With an Automatic target, other languages are translated into your native language.",
@@ -229,6 +237,9 @@ test("selection copy: defaults off and restores the saved setting", async () => 
   await app.press("id:settings-nav-shortcuts");
   await app.waitFor(switchId);
   expect(app.texts()).toContain("Simulate Copy to Get Text");
+  expect(app.texts()).not.toContain(COPY_SWITCH_HELP.selectionCopy);
+  await app.hover("id:settings-selection-copy-label");
+  await app.waitUntil(() => app.texts().includes(COPY_SWITCH_HELP.selectionCopy));
   expect(app.storage()[SELECTION_COPY_STORAGE_KEY]).toBeUndefined();
 
   await app.press(switchId);
@@ -293,7 +304,9 @@ test("double copy: shows Windows-only opt-in off by default, hides outside Windo
   await winApp.waitFor("id:settings-double-copy-card");
   expect(winApp.shows("id:settings-double-copy-switch")).toBe(true);
   expect(winApp.storage()["quickTranslate.preferences.v1"]).toBeUndefined();
-  expect(winApp.texts().some((text) => text.includes("enabled presets"))).toBe(true);
+  expect(winApp.texts()).not.toContain(COPY_SWITCH_HELP.doubleCopy);
+  await winApp.hover("id:settings-double-copy-label");
+  await winApp.waitUntil(() => winApp.texts().includes(COPY_SWITCH_HELP.doubleCopy));
 
   await winApp.press("id:settings-double-copy-switch");
   await winApp.waitUntil(() => Boolean(winApp.storage()["quickTranslate.preferences.v1"]));
@@ -307,6 +320,8 @@ test("double copy: shows Windows-only opt-in off by default, hides outside Windo
   await winApp.press("id:language-zh-CN");
   await winApp.press("id:settings-nav-shortcuts");
   await winApp.waitUntil(() => winApp.texts().some((text) => text.includes("双击 Ctrl+C")));
+  await winApp.hover("id:settings-double-copy-label");
+  await winApp.waitUntil(() => winApp.texts().includes(COPY_SWITCH_HELP.doubleCopyZh));
 
   // Toggle back off.
   await winApp.press("id:settings-double-copy-switch");

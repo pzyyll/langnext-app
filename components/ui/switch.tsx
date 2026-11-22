@@ -1,9 +1,12 @@
 import { Text } from "nsh";
 import { Switch as BaseSwitch } from "nsh/base";
 import { motion } from "../motion";
+import { buildTooltip } from "./tooltip";
 
 interface SwitchProps {
   label?: string;
+  labelTestID?: string;
+  tooltip?: string;
   accessibilityLabel?: string;
   checked: boolean;
   disabled?: boolean;
@@ -33,6 +36,11 @@ export function Switch(props: SwitchProps) {
     >
       <If when={props.label !== undefined}>
         <Text
+          testID={props.labelTestID}
+          accessibilityDescription={props.tooltip}
+          tooltip={
+            props.tooltip ? buildTooltip(props.tooltip, "top", { align: "start" }) : undefined
+          }
           class={
             mode() === "row"
               ? "text-sm font-medium text-card-foreground"
