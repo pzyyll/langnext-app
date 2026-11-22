@@ -1,5 +1,6 @@
 .nsh/
-.stitch/
+.stitch/*
+!.stitch/DESIGN.md
 .agents/skills/stitch/
 target/
 node_modules/
