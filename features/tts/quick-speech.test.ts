@@ -56,7 +56,6 @@ test("quick speech: over-limit text is refused before a key read", async () => {
     {
       text: "a".repeat(TTS_MAX_UTF8_BYTES + 1),
       language: "en",
-      unresolvedAuto: null,
     },
     {
       activeBinding: () => settings.activeBinding(),
@@ -96,10 +95,7 @@ test("quick speech: prepares the active Azure channel and drops a stale binding"
     ["fr", "fr-FR", "fr-FR-DeniseNeural"],
   ] as const;
   for (const [language, languageCode, voiceName] of voices) {
-    const result = await prepareQuickSpeech(
-      { text: "Hello", language, unresolvedAuto: null },
-      settings,
-    );
+    const result = await prepareQuickSpeech({ text: "Hello", language }, settings);
     expect(result).toEqual({
       ok: true,
       speech: {
@@ -117,7 +113,7 @@ test("quick speech: prepares the active Azure channel and drops a stale binding"
     release = resolve;
   });
   const pending = prepareQuickSpeech(
-    { text: "Hello", language: "en", unresolvedAuto: null },
+    { text: "Hello", language: "en" },
     {
       activeBinding: () => settings.activeBinding(),
       readKey: async (ref) => {
@@ -163,12 +159,12 @@ test("quick speech: Azure refuses illegal text and the app byte limit before a k
     },
   };
   const illegal = await prepareQuickSpeech(
-    { text: "bad" + String.fromCharCode(0), language: "en", unresolvedAuto: null },
+    { text: "bad" + String.fromCharCode(0), language: "en" },
     speechSettings,
   );
   expect(illegal).toEqual({ ok: false, message: t("quickTranslate.speakInvalidText") });
   const tooLong = await prepareQuickSpeech(
-    { text: "a".repeat(5001), language: "en", unresolvedAuto: null },
+    { text: "a".repeat(5001), language: "en" },
     speechSettings,
   );
   expect(tooLong).toEqual({ ok: false, message: t("quickTranslate.speakTooLongAzure") });

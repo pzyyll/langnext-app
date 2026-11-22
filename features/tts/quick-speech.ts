@@ -19,26 +19,12 @@ export type QuickSpeechPreparation =
 
 /** Resolves a local refusal or the saved request. It does not call a speech service. */
 export async function prepareQuickSpeech(
-  input: {
-    text: string;
-    language: LanguageId | null;
-    unresolvedAuto: "choose-source" | "translate-first" | null;
-  },
+  input: { text: string; language: LanguageId },
   settings: SpeechSettings = ttsSettingsStore,
 ): Promise<QuickSpeechPreparation> {
   const binding = settings.activeBinding();
   if (binding === null || !binding.enabled) {
     return { ok: false, message: t("quickTranslate.speakOff") };
-  }
-  if (input.language === null) {
-    return {
-      ok: false,
-      message: t(
-        input.unresolvedAuto === "translate-first"
-          ? "quickTranslate.speakTranslateFirst"
-          : "quickTranslate.speakChooseSource",
-      ),
-    };
   }
   const voice =
     binding.channel === "azure"
