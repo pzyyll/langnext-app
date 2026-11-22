@@ -61,7 +61,8 @@ App code logs through `createLogger` in `services/log.ts`; native code logs thro
   or limit it with `RUST_LOG=my-translator=debug`.
 - **Development**: `nsh run` (`mise run dev`) also prints every kept line to the terminal.
 - **Path**: `logFile()` (or `process.logFile`) returns the file's path, `null` where the
-  lines go to the platform's log only.
+  lines go to the platform's log only. `Settings → General → Logs → Open folder` opens
+  the folder that holds it.
 - **Secrets**: never log API keys, credentials, selected or translated text, or request
   bodies.
 

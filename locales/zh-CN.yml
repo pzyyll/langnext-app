@@ -66,6 +66,11 @@ settings:
   silentLaunch:
     label: 静默启动
     error: 无法保存静默启动设置，请重试。
+  logs:
+    label: 日志
+    open: 打开文件夹
+    openLabel: 打开日志文件夹
+    error: 无法打开日志文件夹。
   shortcuts:
     quickTranslate: 打开快速翻译
     screenshotTranslate: 截图翻译
