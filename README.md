@@ -117,9 +117,14 @@ local detector.
   Translate language menu offers **Automatic** for both selections. With no
   detector enabled, an **Automatic** source needs a manual source selection, and
   an **Automatic** target needs a native language.
-- **Fallback behavior**: A blocked or failed detection never guesses. The card
-  shows a localized message that asks you to choose the source manually.
-  Cancellation stays silent.
+- **Reuse**: The popup detects an **Automatic** source once for one input. Reading
+  the source aloud starts the same detection when it has not run yet, and later
+  translations of that input, including card expands and retries, reuse the
+  answer. Editing the input or changing the detector chain starts a new
+  detection, and a failed detection is not reused.
+- **Fallback behavior**: A blocked or failed detection never guesses. The card or
+  the reading error shows a localized message that asks you to choose the source
+  manually. Cancellation stays silent.
 - **Request shape**: AI detection uses one buffered request per enabled AI
   detector, never a stream, and asks the model to skip reasoning because the
   answer is a single language ID. Google detection uses one form-encoded request,
@@ -128,13 +133,12 @@ local detector.
   (`zh-CN` → `zh`, `pt-BR` → `pt`), legacy `iw` and `in` map to Hebrew and
   Indonesian, and any other language is reported as unsupported instead of
   translated as a guess.
-- **Privacy**: Detection runs only inside a translation action with an
-  automatic source. Every enabled detector tried receives the first 2,048
-  characters of the trimmed text, and may use a different provider than the
-  translation model. The
-  full source text still goes to the selected translation model. Only settings
-  and model IDs are stored; samples, detected values, and model replies are
-  never stored or logged.
+- **Privacy**: Detection runs only when a translation action or a reading request
+  needs an automatic source, once per input. Every enabled detector tried receives
+  the first 2,048 characters of the trimmed text, and may use a different provider
+  than the translation model. The full source text still goes to the selected
+  translation model. Only settings and model IDs are stored; samples, detected
+  values, and model replies are never stored or logged.
 
 The bundle identifier is a development placeholder. Set it before distribution.
 Headless tests do not verify native dragging, caption buttons, tooltips, or

@@ -1,14 +1,5 @@
-import {
-  AUTO_LANGUAGE,
-  type LanguageId,
-  type SourceLanguageId,
-  type TargetLanguageId,
-} from "../presets/languages";
-import {
-  detectLanguage,
-  type DetectLanguageOptions,
-  type LanguageDetectionFailureCode,
-} from "./detect";
+import { AUTO_LANGUAGE, type LanguageId, type TargetLanguageId } from "../presets/languages";
+import type { LanguageDetectionFailureCode } from "./detect";
 import type { LanguageDetectionSnapshot } from "./settings";
 
 export type LanguageResolutionFailureCode =
@@ -16,9 +7,8 @@ export type LanguageResolutionFailureCode =
   | "missing_native_language"
   | "missing_preferred_language";
 
-export interface ResolveTranslationLanguagesInput {
-  sourceText: string;
-  sourceLanguage: SourceLanguageId;
+export interface ResolveTargetLanguageInput {
+  sourceLanguage: LanguageId;
   targetLanguage: TargetLanguageId;
   detection: LanguageDetectionSnapshot;
 }
@@ -32,43 +22,26 @@ function failure(code: LanguageResolutionFailureCode): ResolveTranslationLanguag
 }
 
 /**
- * Turns the card's source and target selections into concrete languages.
+ * Turns a detected or selected source into a concrete target language.
  * An automatic target translates other languages into the native language,
  * and the native language into the preferred translation language.
  */
-export async function resolveTranslationLanguages(
-  input: ResolveTranslationLanguagesInput,
-  options: DetectLanguageOptions = {},
-): Promise<ResolveTranslationLanguagesResult> {
-  if (options.signal?.aborted) return failure("cancelled");
+export function resolveTargetLanguage(
+  input: ResolveTargetLanguageInput,
+): ResolveTranslationLanguagesResult {
+  const { sourceLanguage, targetLanguage, detection } = input;
 
-  const { sourceText, sourceLanguage, targetLanguage, detection } = input;
+  if (targetLanguage !== AUTO_LANGUAGE) {
+    return { ok: true, sourceLanguage, targetLanguage };
+  }
+
   const nativeLanguage = detection.nativeLanguage;
-  const automaticTarget = targetLanguage === AUTO_LANGUAGE;
-
-  // An automatic target cannot resolve without a native language, so fail before any request.
-  if (automaticTarget && nativeLanguage === null) return failure("missing_native_language");
-
-  let resolvedSource: LanguageId;
-  if (sourceLanguage === AUTO_LANGUAGE) {
-    const detected = await detectLanguage(sourceText, detection.detectors, options);
-    if (!detected.ok) return failure(detected.code);
-    resolvedSource = detected.language;
-  } else {
-    resolvedSource = sourceLanguage;
-  }
-
-  if (options.signal?.aborted) return failure("cancelled");
-  if (!automaticTarget) {
-    return { ok: true, sourceLanguage: resolvedSource, targetLanguage };
-  }
-
-  if (nativeLanguage !== null && resolvedSource !== nativeLanguage) {
-    return { ok: true, sourceLanguage: resolvedSource, targetLanguage: nativeLanguage };
+  if (nativeLanguage === null) return failure("missing_native_language");
+  if (sourceLanguage !== nativeLanguage) {
+    return { ok: true, sourceLanguage, targetLanguage: nativeLanguage };
   }
 
   const preferred = detection.preferredTranslationLanguage;
   if (preferred === null) return failure("missing_preferred_language");
-
-  return { ok: true, sourceLanguage: resolvedSource, targetLanguage: preferred };
+  return { ok: true, sourceLanguage, targetLanguage: preferred };
 }

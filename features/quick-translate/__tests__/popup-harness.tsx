@@ -12,12 +12,11 @@ import { t } from "nsh/i18n";
 import { initializeAiModules } from "../../../app/ai-setup";
 import { Button } from "../../../components/ui/button";
 import { Card } from "../../../components/ui/card";
-import type { DetectLanguageOptions } from "../../language-detection/detect";
 import {
-  resolveTranslationLanguages,
-  type ResolveTranslationLanguagesInput,
-  type ResolveTranslationLanguagesResult,
-} from "../../language-detection/resolve";
+  detectLanguage,
+  type DetectLanguageOptions,
+  type LanguageDetectionResult,
+} from "../../language-detection/detect";
 import { languageDetectionStore } from "../../language-detection/settings";
 import { loadModelsState } from "../../models/store";
 import { createPresetsStore } from "../../presets/store";
@@ -107,25 +106,23 @@ function PopupHarnessApp(props: {
   const abortEvents = signal<string[]>([]);
   const languageCalls = signal<string[]>([]);
   const languageAborts = signal<string[]>([]);
-  let languageDeferred: Deferred<ResolveTranslationLanguagesResult> | null = null;
+  let languageDeferred: Deferred<LanguageDetectionResult> | null = null;
 
-  const languageResolverStub = async (
-    input: ResolveTranslationLanguagesInput,
+  const detectStub = async (
+    text: string,
+    detectors: Parameters<typeof detectLanguage>[1],
     options?: DetectLanguageOptions,
-  ): Promise<ResolveTranslationLanguagesResult> => {
+  ): Promise<LanguageDetectionResult> => {
     const seq = languageCalls().length + 1;
-    languageCalls.set([
-      ...languageCalls(),
-      `${input.sourceLanguage}->${input.targetLanguage}:${input.sourceText}`,
-    ]);
+    languageCalls.set([...languageCalls(), text]);
     options?.signal?.addEventListener("abort", () => {
       languageAborts.set([...languageAborts(), `aborted-${seq}`]);
     });
     if (props.mode === "language-resolution" || props.mode === "ocr-status") {
-      languageDeferred = createDeferred<ResolveTranslationLanguagesResult>();
+      languageDeferred = createDeferred<LanguageDetectionResult>();
       return languageDeferred.promise;
     }
-    return resolveTranslationLanguages(input, options);
+    return detectLanguage(text, detectors, options);
   };
 
   const customStorage = {
@@ -433,18 +430,14 @@ function PopupHarnessApp(props: {
               size="xs"
               variant="outline"
               label="Resolve FR"
-              onPress={() =>
-                languageDeferred?.resolve({ ok: true, sourceLanguage: "fr", targetLanguage: "zh" })
-              }
+              onPress={() => languageDeferred?.resolve({ ok: true, language: "fr" })}
             />
             <Button
               testID="harness-resolve-language-zh"
               size="xs"
               variant="outline"
               label="Resolve ZH"
-              onPress={() =>
-                languageDeferred?.resolve({ ok: true, sourceLanguage: "zh", targetLanguage: "en" })
-              }
+              onPress={() => languageDeferred?.resolve({ ok: true, language: "zh" })}
             />
             <Button
               testID="harness-resolve-language-und"
@@ -485,9 +478,7 @@ function PopupHarnessApp(props: {
               size="xs"
               variant="outline"
               label="Resolve FR"
-              onPress={() =>
-                languageDeferred?.resolve({ ok: true, sourceLanguage: "fr", targetLanguage: "zh" })
-              }
+              onPress={() => languageDeferred?.resolve({ ok: true, language: "fr" })}
             />
           </View>
         </If>
@@ -510,7 +501,7 @@ function PopupHarnessApp(props: {
           presetsStore={store}
           preferences={props.prefs}
           translate={translateStub}
-          resolveLanguages={languageResolverStub}
+          detectSource={detectStub}
           clipboard={clipboardStub}
         />
       </If>
