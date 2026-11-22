@@ -126,9 +126,6 @@ function GeneralSection(props: { compact: boolean }) {
           checked={silentLaunch()}
           onChange={(checked) => void selectSilentLaunch(checked)}
         />
-        <Text class="px-3 text-xs text-muted-foreground">
-          {t("settings.silentLaunch.description")}
-        </Text>
         <If when={silentLaunchError() !== null}>
           <Text
             testID="settings-silent-launch-error"

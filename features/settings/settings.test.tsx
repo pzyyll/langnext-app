@@ -90,7 +90,6 @@ test("silent launch: saves the switch and starts the next launch in the backgrou
   await app.press("id:nav-settings");
   await app.waitFor("id:settings-silent-launch-switch");
   expect(app.texts()).toContain("Silent launch");
-  expect(app.texts()).toContain("Applies from the next launch.");
   expect(app.storage()[SILENT_LAUNCH_STORAGE_KEY]).toBeUndefined();
 
   await app.press("id:settings-silent-launch-switch");

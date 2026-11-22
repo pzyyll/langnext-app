@@ -64,7 +64,6 @@ settings:
     error: Could not save language. Your choice will apply until you close the app.
   silentLaunch:
     label: Silent launch
-    description: Applies from the next launch.
     error: Could not save silent launch. Try again.
   shortcuts:
     quickTranslate: Open Quick Translate
