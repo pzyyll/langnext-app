@@ -103,7 +103,7 @@ function detectionRecord(options: {
   });
 }
 
-/** One saved v3 OCR record; each channel keeps its own config, enabled state, and priority order. */
+/** One saved v4 OCR record; each channel keeps its own config, enabled state, and priority order. */
 function ocrRecord(options: {
   order?: readonly ("ai" | "baidu")[];
   enabled?: Partial<Record<"ai" | "baidu", boolean>>;
@@ -113,7 +113,7 @@ function ocrRecord(options: {
   const ai = options.modelId === undefined ? null : { modelId: options.modelId };
   const baidu = options.baidu ?? null;
   return JSON.stringify({
-    version: 3,
+    version: 4,
     order: options.order ?? ["ai", "baidu"],
     enabled: {
       ai: options.enabled?.ai ?? ai !== null,
@@ -1099,7 +1099,7 @@ test("language detection: renders detector list and detail in dark compact mode 
   expect(app.shows("id:settings-detection-preferences-card")).toBe(false);
 });
 
-test("ocr settings: lists all channels, configures AI OCR on its detail page, and returns via breadcrumb", async () => {
+test("ocr settings: starts empty, adds AI via the header picker, and configures it on its detail page", async () => {
   const seed = makeSeedStorage({
     channels: [makeChannel({ id: "ch-openai", displayName: "OpenAI Main", enabled: true })],
     models: [
@@ -1124,29 +1124,41 @@ test("ocr settings: lists all channels, configures AI OCR on its detail page, an
   await app.press("id:nav-settings");
   await app.waitFor("id:settings-nav-ocr");
   await app.press("id:settings-nav-ocr");
-  await app.waitFor("id:settings-ocr-card");
+  await app.waitFor("id:settings-ocr-add");
 
-  expect(app.shows("id:settings-ocr-channel-ai")).toBe(true);
-  expect(app.shows("id:settings-ocr-channel-baidu")).toBe(true);
+  // Default state shows the header add button and no pre-populated channel card.
+  expect(app.shows("id:settings-ocr-card")).toBe(false);
+  expect(app.shows("id:settings-ocr-row-ai")).toBe(false);
+  expect(app.shows("id:settings-ocr-row-baidu")).toBe(false);
   expect(app.shows("id:settings-ocr-priority-info")).toBe(true);
-  expect(app.texts()).not.toContain(OCR_PRIORITY_HINT.en);
-  await app.hover("id:settings-ocr-priority-info");
-  await app.waitUntil(() => app.texts().includes(OCR_PRIORITY_HINT.en));
-  expect(app.enabled("id:settings-ocr-toggle-ai")).toBe(false);
-  expect(app.enabled("id:settings-ocr-toggle-baidu")).toBe(false);
-  expect(app.texts()).toContain("AI OCR");
-  expect(app.texts()).toContain("Baidu OCR");
-  expect(app.texts()).toContain("Not configured");
   expect(app.storage()[OCR_STORAGE_KEY]).toBeUndefined();
 
-  await app.hover("id:settings-ocr-toggle-ai");
-  await app.waitUntil(() => app.texts().includes("Configure this channel before enabling it."));
+  // Escape and Cancel dismiss the picker cleanly without writing.
+  await app.press("id:settings-ocr-add");
+  await app.waitFor("id:settings-ocr-option-ai");
+  expect(app.shows("id:settings-ocr-option-baidu")).toBe(true);
+  await app.keyboard.press("escape");
+  await app.waitUntil(() => !app.shows("id:settings-ocr-add-dialog"));
+  expect(app.shows("id:settings-ocr-card")).toBe(false);
+  expect(app.storage()[OCR_STORAGE_KEY]).toBeUndefined();
 
-  await app.press("id:settings-ocr-channel-ai");
+  await app.press("id:settings-ocr-add");
+  await app.waitFor("id:settings-ocr-add-dialog");
+  await app.press("id:settings-ocr-add-cancel");
+  await app.waitUntil(() => !app.shows("id:settings-ocr-add-dialog"));
+  expect(app.storage()[OCR_STORAGE_KEY]).toBeUndefined();
+
+  // Selecting AI adds it to the list and navigates straight to its configuration page.
+  await app.press("id:settings-ocr-add");
+  await app.waitFor("id:settings-ocr-add-dialog");
+  await app.press("id:settings-ocr-option-ai");
+  await app.waitUntil(() => !app.shows("id:settings-ocr-add-dialog"));
   await app.waitFor("id:settings-ocr-detail-card");
   expect(app.shows("id:settings-ocr-breadcrumb")).toBe(true);
   expect(app.shows("id:settings-ocr-breadcrumb-root")).toBe(true);
   expect(app.shows("id:settings-ocr-detail-title")).toBe(true);
+  expect(app.shows("id:settings-ocr-priority-info")).toBe(false);
+  expect(app.shows("id:settings-ocr-add")).toBe(false);
   expect(app.enabled("id:settings-ocr-save")).toBe(false);
 
   await app.press("id:settings-ocr-model");
@@ -1159,8 +1171,8 @@ test("ocr settings: lists all channels, configures AI OCR on its detail page, an
   await app.press("id:settings-ocr-save");
   await app.waitUntil(() => Boolean(app.storage()[OCR_STORAGE_KEY]));
   expect(JSON.parse(app.storage()[OCR_STORAGE_KEY]!)).toEqual({
-    version: 3,
-    order: ["ai", "baidu"],
+    version: 4,
+    order: ["ai"],
     enabled: { ai: true, baidu: false },
     ai: { modelId: "m-vision" },
     baidu: null,
@@ -1174,6 +1186,7 @@ test("ocr settings: lists all channels, configures AI OCR on its detail page, an
   expect(app.texts()).toContain("Primary");
   expect(app.texts()).toContain("OpenAI Main · gpt-4.1");
   expect(app.enabled("id:settings-ocr-toggle-ai")).toBe(true);
+  expect(app.shows("id:settings-ocr-grip-ai")).toBe(false);
 
   // Leaving the category and returning keeps the saved configuration.
   await app.press("id:settings-nav-general");
@@ -1183,12 +1196,17 @@ test("ocr settings: lists all channels, configures AI OCR on its detail page, an
   await app.waitFor("id:settings-ocr-card");
   expect(app.texts()).toContain("OpenAI Main · gpt-4.1");
 
+  expect(app.texts()).not.toContain(OCR_PRIORITY_HINT.en);
+  await app.hover("id:settings-ocr-priority-info");
+  await app.waitUntil(() => app.texts().includes(OCR_PRIORITY_HINT.en));
+
   const reopened = await open(APP_ENTRY, { ...viewport, storage: app.storage() });
   await reopened.press("id:nav-settings");
   await reopened.press("id:settings-nav-ocr");
   await reopened.waitFor("id:settings-ocr-card");
   expect(reopened.texts()).toContain("OpenAI Main · gpt-4.1");
   expect(reopened.shows("id:settings-ocr-role-ai")).toBe(true);
+  expect(reopened.shows("id:settings-ocr-add")).toBe(true);
   expect(reopened.shows("id:settings-ocr-windows-only")).toBe(false);
   expect(reopened.requests()).toHaveLength(0);
 
@@ -1196,11 +1214,17 @@ test("ocr settings: lists all channels, configures AI OCR on its detail page, an
   await reopened.press("id:language-zh-CN");
   await reopened.press("id:settings-nav-ocr");
   await reopened.waitFor("id:settings-ocr-card");
+  expect(reopened.texts()).toContain("添加渠道");
   expect(reopened.texts()).not.toContain(OCR_PRIORITY_HINT.zh);
   await reopened.hover("id:settings-ocr-priority-info");
   await reopened.waitUntil(() => reopened.texts().includes(OCR_PRIORITY_HINT.zh));
   expect(reopened.texts()).toContain("首选");
+  await reopened.press("id:settings-ocr-add");
+  await reopened.waitFor("id:settings-ocr-add-dialog");
+  expect(reopened.shows("id:settings-ocr-option-ai")).toBe(false);
+  expect(reopened.shows("id:settings-ocr-option-baidu")).toBe(true);
   expect(reopened.texts()).toContain("百度 OCR");
+  await reopened.press("id:settings-ocr-add-cancel");
   await reopened.press("id:settings-ocr-channel-ai");
   await reopened.waitFor("id:settings-ocr-detail-card");
   expect(reopened.texts()).toContain("模型");
@@ -1353,9 +1377,12 @@ test("ocr settings: saves Baidu keys on detail page and restores a blank form", 
   const app = await open(APP_ENTRY, { ...viewport, storage: makeSeedStorage({}) });
   await app.press("id:nav-settings");
   await app.press("id:settings-nav-ocr");
-  await app.waitFor("id:settings-ocr-card");
+  await app.waitFor("id:settings-ocr-add");
 
-  await app.press("id:settings-ocr-open-baidu");
+  await app.press("id:settings-ocr-add");
+  await app.waitFor("id:settings-ocr-add-dialog");
+  await app.press("id:settings-ocr-option-baidu");
+  await app.waitUntil(() => !app.shows("id:settings-ocr-add-dialog"));
   await app.waitFor("id:settings-ocr-detail-card");
 
   expect(app.texts()).toContain("Accurate with Location");
@@ -1378,8 +1405,8 @@ test("ocr settings: saves Baidu keys on detail page and restores a blank form", 
     ai: unknown;
     baidu: { operation: string; credentialRef: string };
   };
-  expect(saved.version).toBe(3);
-  expect(saved.order).toEqual(["ai", "baidu"]);
+  expect(saved.version).toBe(4);
+  expect(saved.order).toEqual(["baidu"]);
   expect(saved.enabled).toEqual({ ai: false, baidu: true });
   expect(saved.ai).toBeNull();
   expect(saved.baidu.operation).toBe("accurate");
@@ -1421,6 +1448,124 @@ test("ocr settings: saves Baidu keys on detail page and restores a blank form", 
   await reopened.press("id:settings-ocr-channel-baidu");
   await reopened.waitFor("id:settings-ocr-detail-card");
   expect(reopened.texts()).toContain("模式");
+});
+
+test("ocr settings: removes channels, confirms saved configs, and re-offers the picker", async () => {
+  const ref = "removable-baidu-ref";
+  const app = await open(APP_ENTRY, {
+    ...viewport,
+    storage: makeSeedStorage({
+      channels: [makeChannel({ id: "ch-openai", displayName: "OpenAI Main", enabled: true })],
+      models: [
+        makeModel({
+          id: "m-vision",
+          providerId: "ch-openai",
+          modelKey: "gpt-4.1",
+          enabled: true,
+          capabilities: { text: true, image: true, pdf: false, video: false },
+        }),
+      ],
+      extra: {
+        [OCR_STORAGE_KEY]: ocrRecord({
+          order: ["ai", "baidu"],
+          enabled: { ai: true, baidu: true },
+          modelId: "m-vision",
+          baidu: { operation: "accurate", credentialRef: ref },
+        }),
+        [baiduCredentialStorageKey(ref)]: JSON.stringify({
+          apiKey: "saved-api-key",
+          secretKey: "saved-secret-key",
+        }),
+      },
+    }),
+  });
+  await app.press("id:nav-settings");
+  await app.press("id:settings-nav-ocr");
+  await app.waitFor("id:settings-ocr-card");
+  expect(app.shows("id:settings-ocr-add")).toBe(false);
+
+  // A configured channel confirms before removing.
+  await app.press("id:settings-ocr-remove-ai");
+  await app.waitFor("id:settings-ocr-remove-dialog");
+  await app.press("role:button[Cancel]");
+  await app.waitUntil(() => !app.shows("id:settings-ocr-remove-dialog"));
+  expect(app.shows("id:settings-ocr-row-ai")).toBe(true);
+
+  await app.press("id:settings-ocr-remove-ai");
+  await app.waitFor("id:settings-ocr-remove-dialog");
+  await app.press("role:button[Remove]");
+  await app.waitUntil(() => !app.shows("id:settings-ocr-row-ai"));
+  const afterAi = JSON.parse(app.storage()[OCR_STORAGE_KEY]!);
+  expect(afterAi.order).toEqual(["baidu"]);
+  expect(afterAi.ai).toBeNull();
+  expect(afterAi.enabled.ai).toBe(false);
+  expect(app.shows("id:settings-ocr-add")).toBe(true);
+  expect(app.shows("id:settings-ocr-grip-baidu")).toBe(false);
+
+  // Removing Baidu clears its credential and leaves the empty list.
+  await app.press("id:settings-ocr-remove-baidu");
+  await app.waitFor("id:settings-ocr-remove-dialog");
+  await app.press("role:button[Remove]");
+  await app.waitUntil(() => !app.shows("id:settings-ocr-card"));
+  expect(app.shows("id:settings-ocr-row-baidu")).toBe(false);
+  expect(app.storage()[baiduCredentialStorageKey(ref)]).toBeUndefined();
+  expect(JSON.parse(app.storage()[OCR_STORAGE_KEY]!)).toMatchObject({
+    version: 4,
+    order: [],
+    enabled: { ai: false, baidu: false },
+    ai: null,
+    baidu: null,
+  });
+  expect(app.shows("id:settings-ocr-add")).toBe(true);
+});
+
+test("ocr settings: an unconfigured channel removes without confirmation", async () => {
+  const app = await open(APP_ENTRY, {
+    ...viewport,
+    storage: makeSeedStorage({
+      extra: {
+        [OCR_STORAGE_KEY]: ocrRecord({
+          order: ["ai", "baidu"],
+          enabled: { ai: false, baidu: false },
+        }),
+      },
+    }),
+  });
+  await app.press("id:nav-settings");
+  await app.press("id:settings-nav-ocr");
+  await app.waitFor("id:settings-ocr-card");
+
+  await app.press("id:settings-ocr-remove-baidu");
+  await app.waitUntil(() => !app.shows("id:settings-ocr-row-baidu"));
+  expect(app.shows("id:settings-ocr-remove-dialog")).toBe(false);
+  expect(JSON.parse(app.storage()[OCR_STORAGE_KEY]!).order).toEqual(["ai"]);
+  expect(app.shows("id:settings-ocr-add")).toBe(true);
+  expect(app.shows("id:settings-ocr-grip-ai")).toBe(false);
+});
+
+test("ocr settings: a failed add write stays on the list and reports the error", async () => {
+  const failing = await open(APP_ENTRY, {
+    ...viewport,
+    storage: makeSeedStorage({}),
+    modules: {
+      nsh: {
+        "Storage.setItem": async (key: string) => {
+          if (key === OCR_STORAGE_KEY) throw new Error("Simulated write failure");
+        },
+      },
+    },
+  });
+  await failing.press("id:nav-settings");
+  await failing.press("id:settings-nav-ocr");
+  await failing.waitFor("id:settings-ocr-add");
+  await failing.press("id:settings-ocr-add");
+  await failing.waitFor("id:settings-ocr-add-dialog");
+  await failing.press("id:settings-ocr-option-ai");
+  await failing.waitUntil(() => !failing.shows("id:settings-ocr-add-dialog"));
+  await failing.waitFor("id:settings-ocr-list-error");
+  expect(failing.shows("id:settings-ocr-detail-card")).toBe(false);
+  expect(failing.shows("id:settings-ocr-card")).toBe(false);
+  expect(failing.storage()[OCR_STORAGE_KEY]).toBeUndefined();
 });
 
 test("ocr settings: reorders channels and toggles enable state while preserving config", async () => {
@@ -1497,7 +1642,18 @@ test("ocr settings: reorders channels and toggles enable state while preserving 
 
 test("ocr settings: the grip reorders channels with the arrow keys and keeps the focus", async () => {
   // A Linux host delivers raw keys to the focused view, as a desktop does.
-  const app = await open(APP_ENTRY, { ...viewport, platform: "linux" });
+  const app = await open(APP_ENTRY, {
+    ...viewport,
+    platform: "linux",
+    storage: makeSeedStorage({
+      extra: {
+        [OCR_STORAGE_KEY]: ocrRecord({
+          order: ["ai", "baidu"],
+          enabled: { ai: false, baidu: false },
+        }),
+      },
+    }),
+  });
   await app.press("id:nav-settings");
   await app.press("id:settings-nav-ocr");
   await app.waitFor("id:settings-ocr-card");

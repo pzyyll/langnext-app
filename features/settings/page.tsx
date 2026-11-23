@@ -11,7 +11,7 @@ import { Switch } from "../../components/ui/switch";
 import { buildTooltip } from "../../components/ui/tooltip";
 import { canOpenLogsFolder, openLogsFolder } from "../../platform/logs";
 import { languageDetectionStore, type LanguageDetectorKind } from "../language-detection/settings";
-import type { OcrServiceKind } from "../ocr/settings";
+import { ocrSettingsStore, type OcrServiceKind } from "../ocr/settings";
 import { appearance, appearanceError, selectAppearance, type Appearance } from "./appearance";
 import { language, languageError, selectLanguage, type LanguagePreference } from "./language";
 import { LanguageDetectionSection } from "./language-detection-section";
@@ -221,7 +221,9 @@ function AppearanceSection(props: { compact: boolean }) {
   );
 }
 
-function DetectionAddHeaderButton(props: {
+function AddChannelHeaderButton(props: {
+  testID: string;
+  label: string;
   disabled: boolean;
   onRef: (node: ViewRef | null) => void;
   onPress: () => void;
@@ -230,19 +232,17 @@ function DetectionAddHeaderButton(props: {
 
   return (
     <Button
-      testID="settings-detection-add"
+      testID={props.testID}
       ref={(node) => props.onRef(node)}
       variant="outline"
       size="sm"
       disabled={props.disabled}
-      accessibilityLabel={t("settings.languageDetection.addChannel")}
+      accessibilityLabel={props.label}
       onPress={() => props.onPress()}
       class="shrink-0"
     >
       <Icon name="plus" tone="foreground" class="size-3.5" />
-      <Text class="text-sm font-medium text-foreground">
-        {t("settings.languageDetection.addChannel")}
-      </Text>
+      <Text class="text-sm font-medium text-foreground">{props.label}</Text>
     </Button>
   );
 }
@@ -260,8 +260,11 @@ export function SettingsPage(props: {
   const selectedDetectionChannel = signal<LanguageDetectorKind | null>(null);
   const selectedTtsChannel = signal<TtsChannelId | null>(null);
   const detectionAddBusy = signal(false);
+  const ocrAddBusy = signal(false);
   let detectionAddButtonNode: ViewRef | null = null;
+  let ocrAddButtonNode: ViewRef | null = null;
   let openDetectionAddDialog: (() => void) | null = null;
+  let openOcrAddDialog: (() => void) | null = null;
 
   const headerBreadcrumb = (): HeaderBreadcrumb | null => {
     const ocrChannel = selectedOcrChannel();
@@ -331,6 +334,10 @@ export function SettingsPage(props: {
     selectedSection() === "language-detection" &&
     !showingBreadcrumb() &&
     languageDetectionStore.availableDetectors().length > 0;
+  const showOcrAddButton = () =>
+    selectedSection() === "ocr" &&
+    !showingBreadcrumb() &&
+    ocrSettingsStore.availableChannels().length > 0;
   const headerPaddingClass = () =>
     compact()
       ? showingBreadcrumb()
@@ -459,12 +466,25 @@ export function SettingsPage(props: {
                 />
               </If>
               <If when={showDetectionAddButton()}>
-                <DetectionAddHeaderButton
+                <AddChannelHeaderButton
+                  testID="settings-detection-add"
+                  label={t("settings.languageDetection.addChannel")}
                   disabled={detectionAddBusy()}
                   onRef={(node) => {
                     detectionAddButtonNode = node;
                   }}
                   onPress={() => openDetectionAddDialog?.()}
+                />
+              </If>
+              <If when={showOcrAddButton()}>
+                <AddChannelHeaderButton
+                  testID="settings-ocr-add"
+                  label={t("settings.ocr.addChannel")}
+                  disabled={ocrAddBusy()}
+                  onRef={(node) => {
+                    ocrAddButtonNode = node;
+                  }}
+                  onPress={() => openOcrAddDialog?.()}
                 />
               </If>
             </View>
@@ -509,6 +529,14 @@ export function SettingsPage(props: {
                   selectedChannel={selectedOcrChannel()}
                   onSelectChannel={(channel) => selectedOcrChannel.set(channel)}
                   onManageModels={props.onNavigateToModels}
+                  getAddButtonRef={() => ocrAddButtonNode}
+                  onRegisterAddTrigger={(open) => {
+                    openOcrAddDialog = open;
+                    return () => {
+                      if (openOcrAddDialog === open) openOcrAddDialog = null;
+                    };
+                  }}
+                  onAddBusyChange={(busy) => ocrAddBusy.set(busy)}
                 />
               </If>
               <If when={selectedSection() === "tts"}>

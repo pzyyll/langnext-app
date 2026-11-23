@@ -1300,7 +1300,7 @@ test("double copy: shell seam delivers copied text to a newly mounted popup, tra
 });
 
 const HARNESS_OCR_CAPTURE_KEY = "__test.qt.ocrCapture";
-const OCR_STORAGE_KEY = "settings.ocr.v3";
+const OCR_STORAGE_KEY = "settings.ocr.v4";
 const OCR_TEXT = "Screen line one\n第二行";
 const OCR_CAPTION = "Drag to select · Tab switches display · Space and Enter confirm · Esc cancels";
 const OCR_BUTTON = "id:quick-translate-header >> id:quick-translate-ocr";
@@ -1339,7 +1339,7 @@ function ocrSeed(extra: Record<string, string> = {}) {
       cards: [{ id: "card-1", presetId: "preset-1", templateId: null, collapsed: false }],
     }),
     [OCR_STORAGE_KEY]: JSON.stringify({
-      version: 3,
+      version: 4,
       order: ["ai", "baidu"],
       enabled: { ai: true, baidu: false },
       ai: { modelId: "m-vision" },
@@ -1823,7 +1823,7 @@ const BAIDU_OCR_URL =
 function baiduOcrSeed(extra: Record<string, string> = {}) {
   return ocrSeed({
     [OCR_STORAGE_KEY]: JSON.stringify({
-      version: 3,
+      version: 4,
       order: ["baidu", "ai"],
       enabled: { ai: false, baidu: true },
       ai: null,
@@ -1948,7 +1948,7 @@ test("quick ocr: falls back from primary Baidu quota failure to backup AI and tr
     ...viewport,
     storage: baiduOcrSeed({
       [OCR_STORAGE_KEY]: JSON.stringify({
-        version: 3,
+        version: 4,
         order: ["baidu", "ai"],
         enabled: { ai: true, baidu: true },
         ai: { modelId: "m-vision" },
