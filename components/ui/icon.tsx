@@ -23,8 +23,8 @@ import gripVerticalIcon from "../../assets/icons/grip-vertical.svg";
 import infoIcon from "../../assets/icons/icon-park-outline--info.svg";
 import lightningSolidIcon from "../../assets/icons/lightning-solid.svg";
 import lightningIcon from "../../assets/icons/lightning.svg";
-import markdownConvertOutlineIcon from "../../assets/icons/material-symbols--markdown-convert-outline-rounded.svg";
-import markdownConvertIcon from "../../assets/icons/material-symbols--markdown-convert-rounded.svg";
+import markdownOutlineIcon from "../../assets/icons/markdown-outline.svg";
+import markdownSolidIcon from "../../assets/icons/markdown-solid.svg";
 import minusIcon from "../../assets/icons/minus.svg";
 import pauseIcon from "../../assets/icons/icon-park-outline--pause.svg";
 import picIcon from "../../assets/icons/pic.svg";
@@ -63,8 +63,8 @@ const ICONS = {
   info: infoIcon,
   lightning: lightningIcon,
   "lightning-solid": lightningSolidIcon,
-  "markdown-convert": markdownConvertIcon,
-  "markdown-convert-outline": markdownConvertOutlineIcon,
+  "markdown-outline": markdownOutlineIcon,
+  "markdown-solid": markdownSolidIcon,
   minus: minusIcon,
   pause: pauseIcon,
   pic: picIcon,

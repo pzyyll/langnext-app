@@ -284,8 +284,9 @@ function QuickTranslateWindowBody(props: { controller: QuickTranslateController 
             }
           >
             <Icon
-              name={markdownEnabledPreference() ? "markdown-convert" : "markdown-convert-outline"}
+              name={markdownEnabledPreference() ? "markdown-solid" : "markdown-outline"}
               tone={markdownEnabledPreference() ? "brand" : "muted-foreground"}
+              class="size-3.5"
             />
           </Button>
           <If when={canCaptureScreen(platform.os)}>
