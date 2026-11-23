@@ -209,6 +209,7 @@ export function ShortcutsSection(props: {
               </Text>
             </If>
           </View>
+          <View class="mx-3 h-px bg-border" />
           <View class="gap-2">
             <Switch
               testID="settings-selection-copy-switch"
