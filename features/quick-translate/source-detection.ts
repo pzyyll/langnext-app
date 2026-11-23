@@ -48,7 +48,11 @@ export interface SourceLanguageDetection {
 
 function detectorSignature(detectors: LanguageDetectionSnapshot["detectors"]): string {
   return detectors
-    .map((detector) => (detector.kind === "ai" ? `ai:${detector.modelId}` : "google"))
+    .map((detector) => {
+      if (detector.kind === "ai") return `ai:${detector.modelId}`;
+      if (detector.kind === "google") return "google";
+      return `google-cloud:${detector.credentialRef}`;
+    })
     .join("\u0000");
 }
 

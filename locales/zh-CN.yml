@@ -257,6 +257,11 @@ settings:
     ai: AI
     google: Google
     googleSummary: 免费的 Google 翻译接口
+    "google-cloud": Google Cloud
+    googleCloudSummary: 已保存 API Key
+    googleCloudKeyUnreadable: 无法读取已保存的 API Key，请重新填写。
+    apiKey: API Key
+    savedApiKey: "•••••••••"
     notConfigured: 未配置
     saved: 检测器已保存
     breadcrumbLabel: 语言检测导航
@@ -276,7 +281,7 @@ settings:
     preferences: 自动检测语言偏好
     nativeLanguage: 母语
     nativeLanguageHelp: 目标语言设为自动时，非母语内容译为母语。
-    preferredTranslation: 母语译为
+    preferredTranslation: 目标语言
     preferredTranslationHelp: 目标语言设为自动时，母语内容译为所选的语言。
     preferenceUnset: 未设置
     error:
@@ -285,9 +290,10 @@ settings:
       storageUnsupportedVersion: 已保存的语言检测设置版本不受支持。
       storageWriteFailed: 无法保存语言检测设置，请检查存储后重试。
       modelIdBlank: 请为 AI 检测器选择模型。
+      googleCloudKeyRequired: 请填写 Google Cloud API Key。
       detectorUnconfigured: 请先配置此检测器再启用。
       preferenceInvalid: 请选择受支持的语言。
-      preferencesIdentical: 母语与母语译为的语言必须不同。
+      preferencesIdentical: 母语与目标语言必须不同。
 ocr:
   capture:
     instruction: 拖动选择区域 · Tab 切换显示器 · 空格与回车确认 · Esc 取消
@@ -312,7 +318,7 @@ languageDetection:
     unsupportedLanguage: 检测到的语言不受支持，请手动选择源语言。
     failed: 语言检测失败，请手动选择源语言。
     missingNativeLanguage: 请设置母语，或选择具体的目标语言。
-    missingPreferredLanguage: 请设置母语译为的语言，或选择具体的目标语言。
+    missingPreferredLanguage: 请设置母语对应的目标语言，或选择具体的目标语言。
 models:
   title: 模型
   channel:

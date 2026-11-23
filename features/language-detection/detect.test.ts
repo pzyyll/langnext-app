@@ -18,6 +18,10 @@ const CONNECTION: AiClientInput = {
 };
 
 const GOOGLE_DETECTOR: LanguageDetectorBinding = { kind: "google" };
+const GOOGLE_CLOUD_DETECTOR: LanguageDetectorBinding = {
+  kind: "google-cloud",
+  credentialRef: "ref-1",
+};
 
 function aiDetector(modelId: string): LanguageDetectorBinding {
   return { kind: "ai", modelId };
@@ -445,6 +449,122 @@ test("Google detection: sends nothing for blank input or an empty chain", async 
     code: "unconfigured",
   });
   expect(empty.calls).toHaveLength(0);
+});
+
+interface GoogleCloudHarness {
+  calls: { apiKey: string; text: string }[];
+  reads: string[];
+  options: DetectLanguageOptions;
+}
+
+function googleCloudHarness(
+  options: {
+    code?: string;
+    credential?: string | null;
+    detectError?: Error;
+    readError?: Error;
+  } = {},
+): GoogleCloudHarness {
+  const calls: { apiKey: string; text: string }[] = [];
+  const reads: string[] = [];
+  return {
+    calls,
+    reads,
+    options: {
+      readGoogleCloudCredential: async (credentialRef) => {
+        reads.push(credentialRef);
+        if (options.readError) throw options.readError;
+        return options.credential === undefined ? "cloud-key" : options.credential;
+      },
+      googleCloudDetect: async (input) => {
+        calls.push({ apiKey: input.apiKey, text: input.text });
+        if (options.detectError) throw options.detectError;
+        return options.code ?? "fr";
+      },
+    },
+  };
+}
+
+test("Google Cloud detection: reads the stored key and sends the trimmed sample", async () => {
+  const h = googleCloudHarness({ code: "zh-CN" });
+
+  const result = await detectLanguage("  你好，世界  ", [GOOGLE_CLOUD_DETECTOR], h.options);
+
+  expect(result).toEqual({ ok: true, language: "zh" });
+  expect(h.reads).toEqual(["ref-1"]);
+  expect(h.calls).toEqual([{ apiKey: "cloud-key", text: "你好，世界" }]);
+});
+
+test("Google Cloud detection: falls through when the stored key is missing or unreadable", async () => {
+  for (const h of [
+    googleCloudHarness({ credential: null }),
+    googleCloudHarness({ credential: "   " }),
+    googleCloudHarness({ readError: new Error("ERR_NSH_IO") }),
+  ]) {
+    expect(await detectLanguage("Texte", [GOOGLE_CLOUD_DETECTOR], h.options)).toEqual({
+      ok: false,
+      code: "failed",
+    });
+    expect(h.calls).toHaveLength(0);
+  }
+});
+
+test("Google Cloud detection: reports unsupported_language for a language outside the supported set", async () => {
+  const h = googleCloudHarness({ code: "cy" });
+
+  expect(await detectLanguage("Bore da", [GOOGLE_CLOUD_DETECTOR], h.options)).toEqual({
+    ok: false,
+    code: "unsupported_language",
+  });
+});
+
+test("Google Cloud detection: maps a transport failure and cancellation", async () => {
+  const failing = googleCloudHarness({
+    detectError: new ProviderProtocolError("auth", "API key not valid", 403),
+  });
+  expect(await detectLanguage("Texte", [GOOGLE_CLOUD_DETECTOR], failing.options)).toEqual({
+    ok: false,
+    code: "failed",
+  });
+
+  const aborted = googleCloudHarness({
+    detectError: new ProviderProtocolError("cancelled", "Cancelled"),
+  });
+  expect(await detectLanguage("Texte", [GOOGLE_CLOUD_DETECTOR], aborted.options)).toEqual({
+    ok: false,
+    code: "cancelled",
+  });
+
+  const controller = new AbortController();
+  controller.abort();
+  const preAborted = googleCloudHarness();
+  expect(
+    await detectLanguage("Texte", [GOOGLE_CLOUD_DETECTOR], {
+      ...preAborted.options,
+      signal: controller.signal,
+    }),
+  ).toEqual({ ok: false, code: "cancelled" });
+  expect(preAborted.reads).toHaveLength(0);
+});
+
+test("detector chain: the free endpoint and Google Cloud back each other up", async () => {
+  const cloud = googleCloudHarness({ code: "ja" });
+  const brokenFree = googleHarness({ unreadable: true });
+  const freeByCloud = await detectLanguage("Texte", [GOOGLE_DETECTOR, GOOGLE_CLOUD_DETECTOR], {
+    ...brokenFree.options,
+    ...cloud.options,
+  });
+  expect(freeByCloud).toEqual({ ok: true, language: "ja" });
+  expect(brokenFree.calls).toHaveLength(1);
+  expect(cloud.calls).toHaveLength(1);
+
+  const free = googleHarness({ payload: [["Hello", "de"]] });
+  const cloudByFree = await detectLanguage("Texte", [GOOGLE_CLOUD_DETECTOR, GOOGLE_DETECTOR], {
+    ...googleCloudHarness({ detectError: new Error("socket hang up") }).options,
+    ...free.options,
+  });
+  expect(cloudByFree).toEqual({ ok: true, language: "de" });
+  expect(free.calls).toHaveLength(1);
 });
 
 test("detector chain: an AI failure falls through to an enabled Google detector", async () => {

@@ -1,7 +1,10 @@
 import { expect, open, test } from "nsh/test";
 import { t } from "nsh/i18n";
 import { SPLIT_RAIL_STORAGE_KEYS } from "../../components/layout/split-rail";
-import { LANGUAGE_DETECTION_STORAGE_KEY } from "../language-detection/settings";
+import {
+  googleCloudDetectionCredentialStorageKey,
+  LANGUAGE_DETECTION_STORAGE_KEY,
+} from "../language-detection/settings";
 import { makeChannel, makeModel, makeSeedStorage } from "../models/__tests__/fixtures";
 import { baiduCredentialStorageKey, OCR_STORAGE_KEY } from "../ocr/settings";
 import { GOOGLE_CLOUD_TTS_URL, TTS_SAMPLE_TEXT } from "../tts/google-cloud";
@@ -70,24 +73,31 @@ const LANGUAGE_DETECTION_HELP = {
   },
 };
 
-/** One saved v2 language detection record; each detector keeps its own enabled state and priority. */
+/** One saved v3 language detection record; each detector keeps its own enabled state and priority. */
 function detectionRecord(options: {
-  order?: readonly ("ai" | "google")[];
-  enabled?: Partial<Record<"ai" | "google", boolean>>;
+  order?: readonly ("ai" | "google" | "google-cloud")[];
+  enabled?: Partial<Record<"ai" | "google" | "google-cloud", boolean>>;
   modelId?: string | null;
+  credentialRef?: string | null;
   nativeLanguage?: string | null;
   preferredTranslationLanguage?: string | null;
 }): string {
   const ai =
     options.modelId === undefined || options.modelId === null ? null : { modelId: options.modelId };
+  const googleCloud =
+    options.credentialRef === undefined || options.credentialRef === null
+      ? null
+      : { credentialRef: options.credentialRef };
   return JSON.stringify({
-    version: 2,
-    order: options.order ?? ["ai", "google"],
+    version: 3,
+    order: options.order ?? ["ai", "google", "google-cloud"],
     enabled: {
       ai: options.enabled?.ai ?? ai !== null,
       google: options.enabled?.google ?? false,
+      "google-cloud": options.enabled?.["google-cloud"] ?? googleCloud !== null,
     },
     ai,
+    googleCloud,
     nativeLanguage: options.nativeLanguage ?? null,
     preferredTranslationLanguage: options.preferredTranslationLanguage ?? null,
   });
@@ -497,14 +507,17 @@ test("language detection: lists detectors, configures AI on its detail page, and
 
   expect(app.shows("id:settings-detection-channel-ai")).toBe(true);
   expect(app.shows("id:settings-detection-row-google")).toBe(true);
+  expect(app.shows("id:settings-detection-row-google-cloud")).toBe(true);
   expect(app.shows("id:settings-detection-priority-info")).toBe(true);
   expect(app.texts()).not.toContain(DETECTION_PRIORITY_HINT.en);
   await app.hover("id:settings-detection-priority-info");
   await app.waitUntil(() => app.texts().includes(DETECTION_PRIORITY_HINT.en));
   expect(app.enabled("id:settings-detection-toggle-ai")).toBe(false);
   expect(app.enabled("id:settings-detection-toggle-google")).toBe(true);
+  expect(app.enabled("id:settings-detection-toggle-google-cloud")).toBe(false);
   expect(app.texts()).toContain("AI");
   expect(app.texts()).toContain("Google");
+  expect(app.texts()).toContain("Google Cloud");
   expect(app.texts()).toContain("Not configured");
   expect(app.texts()).toContain("Free Google Translate endpoint");
   expect(app.storage()[LANGUAGE_DETECTION_STORAGE_KEY]).toBeUndefined();
@@ -529,10 +542,11 @@ test("language detection: lists detectors, configures AI on its detail page, and
   await app.press("id:settings-detection-save");
   await app.waitUntil(() => Boolean(app.storage()[LANGUAGE_DETECTION_STORAGE_KEY]));
   expect(JSON.parse(app.storage()[LANGUAGE_DETECTION_STORAGE_KEY]!)).toEqual({
-    version: 2,
-    order: ["ai", "google"],
-    enabled: { ai: true, google: false },
+    version: 3,
+    order: ["ai", "google", "google-cloud"],
+    enabled: { ai: true, google: false, "google-cloud": false },
     ai: { modelId: "m-1" },
+    googleCloud: null,
     nativeLanguage: null,
     preferredTranslationLanguage: null,
   });
@@ -583,6 +597,77 @@ test("language detection: lists detectors, configures AI on its detail page, and
   expect(reopened.texts()).toContain("模型");
 });
 
+test("language detection: configures a Google Cloud API key on its own page", async () => {
+  const app = await open(APP_ENTRY, { ...viewport, storage: { "settings.language": "en" } });
+  await app.press("id:nav-settings");
+  await app.press("id:settings-nav-language-detection");
+  await app.waitFor("id:settings-detection-card");
+
+  expect(app.shows("id:settings-detection-channel-google")).toBe(false);
+  expect(app.shows("id:settings-detection-toggle-google-cloud")).toBe(true);
+  expect(app.texts()).toContain("Google Cloud");
+  expect(app.texts()).toContain("Free Google Translate endpoint");
+  expect(app.storage()[LANGUAGE_DETECTION_STORAGE_KEY]).toBeUndefined();
+
+  await app.press("id:settings-detection-channel-google-cloud");
+  await app.waitFor("id:settings-detection-detail-card");
+  expect(app.shows("id:settings-detection-breadcrumb")).toBe(true);
+  expect(app.texts()).toContain("API Key");
+  expect(app.value("id:settings-detection-google-cloud-api-key")).toBe("");
+  expect(app.enabled("id:settings-detection-save")).toBe(false);
+
+  await app.type("id:settings-detection-google-cloud-api-key", "synthetic-cloud-key");
+  expect(app.enabled("id:settings-detection-save")).toBe(true);
+  await app.press("id:settings-detection-save");
+  await app.waitUntil(() => Boolean(app.storage()[LANGUAGE_DETECTION_STORAGE_KEY]));
+
+  const saved = JSON.parse(app.storage()[LANGUAGE_DETECTION_STORAGE_KEY]!) as {
+    version: number;
+    order: string[];
+    enabled: Record<string, boolean>;
+    googleCloud: { credentialRef: string } | null;
+  };
+  expect(saved.version).toBe(3);
+  expect(saved.order).toEqual(["ai", "google", "google-cloud"]);
+  expect(saved.enabled).toEqual({ ai: false, google: false, "google-cloud": true });
+  expect(saved.googleCloud).not.toBeNull();
+  expect(JSON.stringify(saved).includes("synthetic-cloud-key")).toBe(false);
+  const credentialRef = saved.googleCloud!.credentialRef;
+  expect(app.storage()[googleCloudDetectionCredentialStorageKey(credentialRef)]).toBe(
+    "synthetic-cloud-key",
+  );
+  expect(app.value("id:settings-detection-google-cloud-api-key")).toBe("");
+  expect(app.enabled("id:settings-detection-save")).toBe(true);
+  expect(app.requests()).toHaveLength(0);
+
+  await app.press("id:settings-detection-breadcrumb-root");
+  await app.waitFor("id:settings-detection-card");
+  expect(app.shows("id:settings-detection-detail-card")).toBe(false);
+  expect(app.shows("id:settings-detection-role-google-cloud")).toBe(true);
+  expect(app.texts()).toContain("API key saved");
+  expect(app.texts()).toContain("Primary");
+  expect(app.enabled("id:settings-detection-toggle-google-cloud")).toBe(true);
+
+  const reopened = await open(APP_ENTRY, { ...viewport, storage: app.storage() });
+  await reopened.press("id:nav-settings");
+  await reopened.press("id:settings-nav-language-detection");
+  await reopened.waitFor("id:settings-detection-card");
+  expect(reopened.texts()).toContain("API key saved");
+  expect(reopened.shows("id:settings-detection-role-google-cloud")).toBe(true);
+  await reopened.press("id:settings-detection-channel-google-cloud");
+  await reopened.waitFor("id:settings-detection-detail-card");
+  expect(reopened.value("id:settings-detection-google-cloud-api-key")).toBe("");
+  expect(reopened.shows("id:settings-detection-google-cloud-key-missing")).toBe(false);
+  expect(reopened.requests()).toHaveLength(0);
+
+  // Saving again without a new key keeps the stored one.
+  await reopened.press("id:settings-detection-save");
+  const resaved = JSON.parse(reopened.storage()[LANGUAGE_DETECTION_STORAGE_KEY]!) as {
+    googleCloud: { credentialRef: string };
+  };
+  expect(resaved.googleCloud.credentialRef).toBe(credentialRef);
+});
+
 test("language detection: applies preference changes immediately and rejects identical languages", async () => {
   const seed = makeSeedStorage({
     channels: [makeChannel({ id: "ch-openai", displayName: "OpenAI Main", enabled: true })],
@@ -614,7 +699,7 @@ test("language detection: applies preference changes immediately and rejects ide
       "en",
   );
   expect(JSON.parse(app.storage()[LANGUAGE_DETECTION_STORAGE_KEY]!)).toMatchObject({
-    version: 2,
+    version: 3,
     nativeLanguage: "zh",
     preferredTranslationLanguage: "en",
   });
@@ -623,9 +708,7 @@ test("language detection: applies preference changes immediately and rejects ide
   await app.waitFor("role:option[Chinese]");
   await app.press("role:option[Chinese]");
   await app.waitFor("id:settings-detection-error");
-  expect(app.texts()).toContain(
-    "The native language and the preferred translation language must differ.",
-  );
+  expect(app.texts()).toContain("The native language and the target language must differ.");
   expect(app.texts()).toContain("English");
   expect(
     JSON.parse(app.storage()[LANGUAGE_DETECTION_STORAGE_KEY]!).preferredTranslationLanguage,
@@ -751,6 +834,7 @@ test("language detection: reorders detectors and toggles enable state while pres
   expect(JSON.parse(reopened.storage()[LANGUAGE_DETECTION_STORAGE_KEY]!).order).toEqual([
     "google",
     "ai",
+    "google-cloud",
   ]);
   expect(reopened.shows("id:settings-detection-role-google")).toBe(true);
   expect(reopened.shows("id:settings-detection-role-ai")).toBe(false);
@@ -786,7 +870,7 @@ test("language detection: keeps previous order and enabled state on a failed lis
       ],
       extra: {
         [LANGUAGE_DETECTION_STORAGE_KEY]: detectionRecord({
-          order: ["google", "ai"],
+          order: ["google", "ai", "google-cloud"],
           enabled: { ai: false, google: false },
           modelId: "m-1",
         }),
@@ -814,6 +898,7 @@ test("language detection: keeps previous order and enabled state on a failed lis
   expect(JSON.parse(failing.storage()[LANGUAGE_DETECTION_STORAGE_KEY]!).order).toEqual([
     "google",
     "ai",
+    "google-cloud",
   ]);
 });
 
@@ -829,7 +914,7 @@ test("language detection: localizes detector labels and preference help in both 
   expect(app.texts()).toContain("Free Google Translate endpoint");
   expect(app.texts()).toContain("Automatic detection preferences");
   expect(app.texts()).toContain("Native language");
-  expect(app.texts()).toContain("Translate my native language into");
+  expect(app.texts()).toContain("Target language");
 
   expect(app.texts()).not.toContain(LANGUAGE_DETECTION_HELP.en.native);
   await app.hover("id:settings-detection-native-language-label");
@@ -846,7 +931,7 @@ test("language detection: localizes detector labels and preference help in both 
   expect(app.texts()).toContain("免费的 Google 翻译接口");
   expect(app.texts()).toContain("自动检测语言偏好");
   expect(app.texts()).toContain("母语");
-  expect(app.texts()).toContain("母语译为");
+  expect(app.texts()).toContain("目标语言");
   expect(app.texts()).not.toContain(LANGUAGE_DETECTION_HELP.zh.native);
   await app.hover("id:settings-detection-native-language-label");
   await app.waitUntil(() => app.texts().includes(LANGUAGE_DETECTION_HELP.zh.native));

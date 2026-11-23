@@ -257,6 +257,11 @@ settings:
     ai: AI
     google: Google
     googleSummary: Free Google Translate endpoint
+    "google-cloud": Google Cloud
+    googleCloudSummary: API key saved
+    googleCloudKeyUnreadable: The saved API key could not be read. Enter it again.
+    apiKey: API Key
+    savedApiKey: "•••••••••"
     notConfigured: Not configured
     saved: Detector saved
     breadcrumbLabel: Language Detection navigation
@@ -276,7 +281,7 @@ settings:
     preferences: Automatic detection preferences
     nativeLanguage: Native language
     nativeLanguageHelp: With an Automatic target, other languages are translated into your native language.
-    preferredTranslation: Translate my native language into
+    preferredTranslation: Target language
     preferredTranslationHelp: With an Automatic target, your native language is translated into the selected language.
     preferenceUnset: Not set
     error:
@@ -285,9 +290,10 @@ settings:
       storageUnsupportedVersion: The saved language detection settings use an unsupported version.
       storageWriteFailed: Could not save the language detection settings. Check storage and try again.
       modelIdBlank: Choose a model for the AI detector.
+      googleCloudKeyRequired: Enter a Google Cloud API key.
       detectorUnconfigured: Configure this detector before enabling it.
       preferenceInvalid: Choose a supported language.
-      preferencesIdentical: The native language and the preferred translation language must differ.
+      preferencesIdentical: The native language and the target language must differ.
 ocr:
   capture:
     instruction: Drag to select · Tab switches display · Space and Enter confirm · Esc cancels
@@ -312,7 +318,7 @@ languageDetection:
     unsupportedLanguage: The detected language is not supported here. Choose the source language.
     failed: Language detection failed. Choose the source language.
     missingNativeLanguage: Set your native language, or choose a concrete target language.
-    missingPreferredLanguage: Set the translation language for your native language, or choose a concrete target language.
+    missingPreferredLanguage: Set the target language for your native language, or choose a concrete target language.
 models:
   title: Models
   channel:

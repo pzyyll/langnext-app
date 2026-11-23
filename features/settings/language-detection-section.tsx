@@ -1,4 +1,5 @@
 import {
+  cleanup,
   createAnimatedValue,
   createMotion,
   effect,
@@ -8,18 +9,21 @@ import {
   Text,
   View,
   type AnimatedValue,
+  type InputRef,
   type KeyEvent,
   type PanEvent,
   type ViewRef,
 } from "nsh";
 import { t } from "nsh/i18n";
 import googleMark from "../../assets/icons/google.svg";
+import googleCloudMark from "../../assets/icons/google-cloud.svg";
 import { motion } from "../../components/motion";
 import { Avatar } from "../../components/ui/avatar";
 import { Badge } from "../../components/ui/badge";
 import { Button, KeyboardButton } from "../../components/ui/button";
 import { Card, SectionHeading } from "../../components/ui/card";
 import { Icon } from "../../components/ui/icon";
+import { Input } from "../../components/ui/input";
 import { Select, type SelectItem } from "../../components/ui/select";
 import { Switch } from "../../components/ui/switch";
 import { toast } from "../../components/ui/toast";
@@ -42,6 +46,9 @@ const UNSET_LANGUAGE_CHOICE = "__unset__";
 
 type SummaryToneClass = "text-muted-foreground" | "text-warning" | "text-destructive";
 
+/** Whether a saved Google Cloud API key could be read from storage. */
+type CredentialState = "unknown" | "readable" | "missing";
+
 interface ChannelSummary {
   text: string;
   toneClass: SummaryToneClass;
@@ -55,7 +62,14 @@ function languageItems(): SelectItem[] {
 }
 
 function isDetectorConfigured(kind: LanguageDetectorKind): boolean {
-  return kind === "ai" ? languageDetectionStore.savedAiBinding() !== null : true;
+  if (kind === "ai") return languageDetectionStore.savedAiBinding() !== null;
+  if (kind === "google-cloud") return languageDetectionStore.savedGoogleCloudBinding() !== null;
+  return true;
+}
+
+/** Only the free Google endpoint has nothing to configure, so only it stays a static row. */
+function isDetectorOpenable(kind: LanguageDetectorKind): boolean {
+  return kind !== "google";
 }
 
 function detectorRole(kind: LanguageDetectorKind): "primary" | "backup" | null {
@@ -67,10 +81,31 @@ function detectorRole(kind: LanguageDetectorKind): "primary" | "backup" | null {
   return position === 0 ? "primary" : "backup";
 }
 
-function detectorSummary(kind: LanguageDetectorKind): ChannelSummary {
+function detectorSummary(
+  kind: LanguageDetectorKind,
+  credentialState: CredentialState,
+): ChannelSummary {
   if (kind === "google") {
     return {
       text: t("settings.languageDetection.googleSummary"),
+      toneClass: "text-muted-foreground",
+    };
+  }
+  if (kind === "google-cloud") {
+    if (languageDetectionStore.savedGoogleCloudBinding() === null) {
+      return {
+        text: t("settings.languageDetection.notConfigured"),
+        toneClass: "text-muted-foreground",
+      };
+    }
+    if (credentialState === "missing") {
+      return {
+        text: t("settings.languageDetection.googleCloudKeyUnreadable"),
+        toneClass: "text-destructive",
+      };
+    }
+    return {
+      text: t("settings.languageDetection.googleCloudSummary"),
       toneClass: "text-muted-foreground",
     };
   }
@@ -88,32 +123,32 @@ function detectorSummary(kind: LanguageDetectorKind): ChannelSummary {
 }
 
 function DetectionChannelAvatar(props: { kind: LanguageDetectorKind }) {
+  const mark = () =>
+    props.kind === "google" ? googleMark : props.kind === "google-cloud" ? googleCloudMark : null;
+
   return (
     <If
-      when={props.kind === "ai"}
-      else={
-        <Avatar
-          size="md"
-          accessibilityLabel=""
-          fallback={
-            <Image
-              src={googleMark}
-              accessibilityElementsHidden={true}
-              class="size-4 overflow-hidden"
-            />
-          }
-        />
-      }
+      when={mark() !== null}
+      else={<Avatar size="md" icon="cube-outline" accessibilityLabel="" />}
     >
-      <Avatar size="md" icon="cube-outline" accessibilityLabel="" />
+      <Avatar
+        size="md"
+        accessibilityLabel=""
+        fallback={
+          <Image src={mark()!} accessibilityElementsHidden={true} class="size-4 overflow-hidden" />
+        }
+      />
     </If>
   );
 }
 
-/** One row's identity block, shared by the pressable AI row and the static Google row. */
-function DetectionChannelIdentity(props: { kind: LanguageDetectorKind }) {
+/** One row's identity block, shared by the pressable rows and the static Google row. */
+function DetectionChannelIdentity(props: {
+  kind: LanguageDetectorKind;
+  credentialState: CredentialState;
+}) {
   const role = () => detectorRole(props.kind);
-  const summary = () => detectorSummary(props.kind);
+  const summary = () => detectorSummary(props.kind, props.credentialState);
 
   return (
     <>
@@ -146,6 +181,7 @@ function DetectionChannelIdentity(props: { kind: LanguageDetectorKind }) {
 
 interface DetectionChannelListProps {
   compact: boolean;
+  credentialState: CredentialState;
   onOpenChannel: (kind: LanguageDetectorKind) => void;
   onRowRef: (kind: LanguageDetectorKind, node: ViewRef) => void;
   onGripRef: (kind: LanguageDetectorKind, node: ViewRef) => void;
@@ -162,6 +198,7 @@ function DetectionChannelList(props: DetectionChannelListProps) {
   const offsets: Record<LanguageDetectorKind, AnimatedValue> = {
     ai: createAnimatedValue(0),
     google: createAnimatedValue(0),
+    "google-cloud": createAnimatedValue(0),
   };
   const rowSlots: Partial<Record<LanguageDetectorKind, { top: number; height: number }>> = {};
 
@@ -346,26 +383,32 @@ function DetectionChannelList(props: DetectionChannelListProps) {
                   }`}
                 >
                   <If
-                    when={kind() === "ai"}
+                    when={isDetectorOpenable(kind())}
                     else={
                       <View class="min-w-0 flex-1 flex-row items-center gap-2.5 rounded-lg py-2.5 pl-3 pr-2">
-                        <DetectionChannelIdentity kind={kind()} />
+                        <DetectionChannelIdentity
+                          kind={kind()}
+                          credentialState={props.credentialState}
+                        />
                       </View>
                     }
                   >
                     <Button
-                      testID="settings-detection-channel-ai"
+                      testID={`settings-detection-channel-${kind()}`}
                       ref={(node) => props.onRowRef(kind(), node)}
                       variant="ghost"
                       size="row"
                       accessibilityLabel={rowLabel(kind())}
                       onPress={() => {
                         listError.set(null);
-                        props.onOpenChannel("ai");
+                        props.onOpenChannel(kind());
                       }}
                       class="min-w-0 flex-1 py-2.5 pl-3 pr-2 hover:bg-transparent active:bg-transparent"
                     >
-                      <DetectionChannelIdentity kind={kind()} />
+                      <DetectionChannelIdentity
+                        kind={kind()}
+                        credentialState={props.credentialState}
+                      />
                     </Button>
                   </If>
 
@@ -417,9 +460,9 @@ function DetectionChannelList(props: DetectionChannelListProps) {
                     onChange={(checked) => void handleToggle(kind(), checked)}
                   />
 
-                  <If when={kind() === "ai"} else={<View class="size-7 shrink-0" />}>
+                  <If when={isDetectorOpenable(kind())} else={<View class="size-7 shrink-0" />}>
                     <Button
-                      testID="settings-detection-open-ai"
+                      testID={`settings-detection-open-${kind()}`}
                       variant="ghost"
                       size="icon-sm"
                       tooltip={t("settings.languageDetection.configureLabel", {
@@ -430,7 +473,7 @@ function DetectionChannelList(props: DetectionChannelListProps) {
                       })}
                       onPress={() => {
                         listError.set(null);
-                        props.onOpenChannel("ai");
+                        props.onOpenChannel(kind());
                       }}
                     >
                       <Icon name="chevron-right" tone="muted-foreground" class="size-3.5" />
@@ -525,12 +568,12 @@ function LanguagePreferencesCard(props: { compact: boolean }) {
   );
 }
 
-interface DetectionChannelDetailProps {
+interface AiChannelDetailProps {
   compact: boolean;
   onManageModels?: () => void;
 }
 
-function DetectionChannelDetail(props: DetectionChannelDetailProps) {
+function AiChannelDetail(props: AiChannelDetailProps) {
   const entrance = createMotion({ enter: motion.pageEnter });
   const draftModelId = signal<string | null>(
     languageDetectionStore.savedAiBinding()?.modelId ?? null,
@@ -677,6 +720,118 @@ function DetectionChannelDetail(props: DetectionChannelDetailProps) {
   );
 }
 
+interface GoogleCloudChannelDetailProps {
+  compact: boolean;
+  credentialState: CredentialState;
+}
+
+/** Settings page for the Google Cloud detector: one stored API key, reused when left blank. */
+function GoogleCloudChannelDetail(props: GoogleCloudChannelDetailProps) {
+  const entrance = createMotion({ enter: motion.pageEnter });
+  const apiKeyDraft = signal("");
+  const error = signal<string | null>(null);
+  const saving = signal(false);
+  let apiKeyField: InputRef | undefined;
+  let mounted = true;
+
+  cleanup(() => {
+    mounted = false;
+  });
+
+  const canKeepKey = () =>
+    languageDetectionStore.savedGoogleCloudBinding() !== null &&
+    props.credentialState === "readable";
+  const draftKey = () => apiKeyDraft().trim();
+  const canSave = () => draftKey().length > 0 || canKeepKey();
+
+  const handleSave = async () => {
+    if (saving() || !canSave()) return;
+    error.set(null);
+    saving.set(true);
+    try {
+      const result = await languageDetectionStore.saveGoogleCloudKey(
+        draftKey().length > 0 ? draftKey() : null,
+      );
+      if (!result.ok) {
+        error.set(result.message);
+        return;
+      }
+      apiKeyDraft.set("");
+      if (mounted) apiKeyField?.blur();
+      toast.success(t("settings.languageDetection.saved"));
+    } finally {
+      saving.set(false);
+    }
+  };
+
+  return (
+    <View
+      // Runtime native entrance motion fades the detector detail view without fading the opaque background.
+      style={entrance.style}
+      class="gap-4"
+    >
+      <Card
+        testID="settings-detection-detail-card"
+        class={props.compact ? "gap-4 p-4" : "gap-5 p-6"}
+      >
+        <View class="min-w-0 flex-1 flex-row items-center gap-3">
+          <DetectionChannelAvatar kind="google-cloud" />
+          <SectionHeading title={t("settings.languageDetection.google-cloud")} />
+        </View>
+
+        <FormField label={t("settings.languageDetection.apiKey")}>
+          <Input
+            testID="settings-detection-google-cloud-api-key"
+            ref={(node) => {
+              apiKeyField = node;
+            }}
+            value={apiKeyDraft()}
+            placeholder={canKeepKey() ? t("settings.languageDetection.savedApiKey") : undefined}
+            masked={true}
+            disabled={saving()}
+            accessibilityLabel={t("settings.languageDetection.apiKey")}
+            onChange={(value) => {
+              error.set(null);
+              apiKeyDraft.set(value);
+            }}
+          />
+        </FormField>
+
+        <If when={props.credentialState === "missing"}>
+          <Text
+            testID="settings-detection-google-cloud-key-missing"
+            role="alert"
+            class="text-sm text-destructive"
+          >
+            {t("settings.languageDetection.googleCloudKeyUnreadable")}
+          </Text>
+        </If>
+
+        <If when={error() !== null}>
+          <Text
+            testID="settings-detection-detail-error"
+            role="alert"
+            class="text-sm text-destructive"
+          >
+            {error()}
+          </Text>
+        </If>
+
+        <View class="flex-row justify-end">
+          <Button
+            testID="settings-detection-save"
+            variant="primary"
+            size="sm"
+            label={saving() ? t("common.saving") : t("common.save")}
+            disabled={saving() || !canSave()}
+            onPress={() => void handleSave()}
+          />
+        </View>
+      </Card>
+    </View>
+  );
+}
+
 interface LanguageDetectionSectionProps {
   compact: boolean;
   selectedChannel: LanguageDetectorKind | null;
@@ -686,10 +841,26 @@ interface LanguageDetectionSectionProps {
 
 /** Settings section for prioritized detectors, their configuration pages, and language preferences. */
 export function LanguageDetectionSection(props: LanguageDetectionSectionProps) {
+  const credentialState = signal<CredentialState>("unknown");
   const rowRefs: Partial<Record<LanguageDetectorKind, ViewRef>> = {};
   const gripRefs: Partial<Record<LanguageDetectorKind, ViewRef>> = {};
   let lastOpenedChannel: LanguageDetectorKind | null = null;
   let restoreFocus = false;
+
+  effect(() => {
+    const saved = languageDetectionStore.savedGoogleCloudBinding();
+    if (saved === null) {
+      credentialState.set("unknown");
+      return;
+    }
+    const credentialRef = saved.credentialRef;
+    void languageDetectionStore.readGoogleCloudCredential(credentialRef).then((apiKey) => {
+      if (languageDetectionStore.savedGoogleCloudBinding()?.credentialRef !== credentialRef) {
+        return;
+      }
+      credentialState.set(apiKey === null ? "missing" : "readable");
+    });
+  });
 
   effect(() => {
     const current = props.selectedChannel;
@@ -707,17 +878,24 @@ export function LanguageDetectionSection(props: LanguageDetectionSectionProps) {
     }
   });
 
-  const showingDetail = () => props.selectedChannel === "ai";
+  const showingDetail = () =>
+    props.selectedChannel !== null && isDetectorOpenable(props.selectedChannel);
 
   return (
     <If
       when={!showingDetail()}
       else={
-        <DetectionChannelDetail compact={props.compact} onManageModels={props.onManageModels} />
+        <If
+          when={props.selectedChannel === "google-cloud"}
+          else={<AiChannelDetail compact={props.compact} onManageModels={props.onManageModels} />}
+        >
+          <GoogleCloudChannelDetail compact={props.compact} credentialState={credentialState()} />
+        </If>
       }
     >
       <DetectionChannelList
         compact={props.compact}
+        credentialState={credentialState()}
         onOpenChannel={(kind) => props.onSelectChannel(kind)}
         onRowRef={(kind, node) => {
           rowRefs[kind] = node;

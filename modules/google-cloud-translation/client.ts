@@ -6,6 +6,7 @@ import { createJsonHttpClient, type FetchLike } from "../ai/runtime/http";
 import { toGoogleTranslationLanguage } from "./languages";
 
 const GOOGLE_TRANSLATION_URL = "https://translation.googleapis.com/language/translate/v2";
+const GOOGLE_TRANSLATION_DETECT_URL = `${GOOGLE_TRANSLATION_URL}/detect`;
 
 /** Google rejects a request whose serialized body exceeds 100,000 bytes. */
 export const GOOGLE_CLOUD_TRANSLATION_MAX_REQUEST_BYTES = 100_000;
@@ -28,12 +29,24 @@ export interface GoogleCloudTranslateOptions {
   timeoutMs?: number;
 }
 
+export interface GoogleCloudDetectInput {
+  apiKey: string;
+  text: string;
+}
+
+export interface GoogleCloudDetectOptions {
+  signal?: AbortSignal;
+  timeoutMs?: number;
+}
+
 export interface GoogleCloudTranslateClient {
   /** Sends one buffered plain-text translation and returns only the translated text. */
   translate(
     input: GoogleCloudTranslateInput,
     options?: GoogleCloudTranslateOptions,
   ): Promise<string>;
+  /** Sends one buffered sample and returns the language code Google detected. */
+  detect(input: GoogleCloudDetectInput, options?: GoogleCloudDetectOptions): Promise<string>;
 }
 
 function requireApiKey(raw: string): string {
@@ -175,12 +188,48 @@ export function createGoogleCloudTranslateClient(
       classifyErrorResponse: classifyGoogleErrorResponse,
     });
 
+  /** Posts one bounded JSON body. Size, key, and transport failures raise the shared errors. */
+  const post = async (
+    url: string,
+    apiKey: string,
+    body: Record<string, unknown>,
+    callOptions: GoogleCloudTranslateOptions,
+  ): Promise<Record<string, unknown>> => {
+    const serialized = JSON.stringify(body);
+    if (new TextEncoder().encode(serialized).length > GOOGLE_CLOUD_TRANSLATION_MAX_REQUEST_BYTES) {
+      throw new ProviderProtocolError("invalid_request", t("googleCloud.error.tooLarge"));
+    }
+
+    const request: ResolvedRequestTarget = {
+      method: "POST",
+      url,
+      headers: {
+        "x-goog-api-key": apiKey,
+        "Content-Type": "application/json",
+      },
+    };
+
+    try {
+      return await http.postJson(request, body, {
+        signal: callOptions.signal,
+        timeoutMs: callOptions.timeoutMs,
+        redirect: "error",
+      });
+    } catch (error) {
+      mapTransportError(error);
+    }
+  };
+
+  const requireSample = (text: string): void => {
+    if (text.trim().length === 0) {
+      throw new ProviderProtocolError("invalid_request", t("googleCloud.error.blankInput"));
+    }
+  };
+
   return {
     translate: async (input, callOptions = {}) => {
       const apiKey = requireApiKey(input.apiKey);
-      if (input.text.trim().length === 0) {
-        throw new ProviderProtocolError("invalid_request", t("googleCloud.error.blankInput"));
-      }
+      requireSample(input.text);
 
       const source = toGoogleTranslationLanguage(input.sourceLanguage);
       const target = toGoogleTranslationLanguage(input.targetLanguage);
@@ -192,33 +241,12 @@ export function createGoogleCloudTranslateClient(
       }
 
       // Always send both resolved codes; omit model so the default NMT model applies.
-      const body = { q: [input.text], source, target, format: "text" };
-      const serialized = JSON.stringify(body);
-      if (
-        new TextEncoder().encode(serialized).length > GOOGLE_CLOUD_TRANSLATION_MAX_REQUEST_BYTES
-      ) {
-        throw new ProviderProtocolError("invalid_request", t("googleCloud.error.tooLarge"));
-      }
-
-      const request: ResolvedRequestTarget = {
-        method: "POST",
-        url: GOOGLE_TRANSLATION_URL,
-        headers: {
-          "x-goog-api-key": apiKey,
-          "Content-Type": "application/json",
-        },
-      };
-
-      let response: Record<string, unknown>;
-      try {
-        response = await http.postJson(request, body, {
-          signal: callOptions.signal,
-          timeoutMs: callOptions.timeoutMs,
-          redirect: "error",
-        });
-      } catch (error) {
-        mapTransportError(error);
-      }
+      const response = await post(
+        GOOGLE_TRANSLATION_URL,
+        apiKey,
+        { q: [input.text], source, target, format: "text" },
+        callOptions,
+      );
 
       const data = response.data;
       if (!isPlainObject(data)) throw invalidResponse();
@@ -229,6 +257,28 @@ export function createGoogleCloudTranslateClient(
         throw invalidResponse();
       }
       return first.translatedText;
+    },
+    detect: async (input, callOptions = {}) => {
+      const apiKey = requireApiKey(input.apiKey);
+      requireSample(input.text);
+
+      const response = await post(
+        GOOGLE_TRANSLATION_DETECT_URL,
+        apiKey,
+        { q: [input.text] },
+        callOptions,
+      );
+
+      const data = response.data;
+      if (!isPlainObject(data)) throw invalidResponse();
+      const detections = data.detections;
+      if (!Array.isArray(detections) || detections.length === 0) throw invalidResponse();
+      // One input answers one detection list that holds the language and its confidence.
+      const sentence = detections[0];
+      if (!Array.isArray(sentence) || sentence.length === 0) throw invalidResponse();
+      const first = sentence[0];
+      if (!isPlainObject(first) || typeof first.language !== "string") throw invalidResponse();
+      return first.language;
     },
   };
 }

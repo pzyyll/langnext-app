@@ -86,6 +86,70 @@ test("google cloud client: sends one plain-text request with the key in the head
   });
 });
 
+test("google cloud client: sends one detect request with the sample as a single q entry", async () => {
+  const harness = createHarness(() =>
+    jsonResponse({ data: { detections: [[{ language: "zh-CN", confidence: 0.91 }]] } }),
+  );
+
+  const code = await harness.client.detect({ apiKey: "test-key", text: " 你好 " });
+
+  expect(code).toBe("zh-CN");
+  expect(harness.requests).toHaveLength(1);
+  const [request] = harness.requests;
+  expect(request!.url).toBe("https://translation.googleapis.com/language/translate/v2/detect");
+  expect(request!.method).toBe("POST");
+  expect(request!.headers["x-goog-api-key"]).toBe("test-key");
+  expect(request!.headers["Content-Type"]).toBe("application/json");
+  expect(request!.redirect).toBe("error");
+  expect(request!.url).not.toContain("test-key");
+  expect(request!.url).not.toContain("你好");
+  expect(JSON.parse(request!.body!)).toEqual({ q: [" 你好 "] });
+});
+
+test("google cloud client: rejects a blank key, blank sample, and unreadable detect response", async () => {
+  const harness = createHarness();
+
+  const missing = await catchProtocolError(() =>
+    harness.client.detect({ apiKey: "   ", text: "Hello" }),
+  );
+  expect(missing.kind).toBe("auth");
+  expect(missing.message).toBe(t("googleCloud.error.missingKey"));
+
+  const blank = await catchProtocolError(() =>
+    harness.client.detect({ apiKey: "test-key", text: "  \n\t " }),
+  );
+  expect(blank.kind).toBe("invalid_request");
+  expect(blank.message).toBe(t("googleCloud.error.blankInput"));
+  expect(harness.requests).toHaveLength(0);
+
+  const payloads = [
+    {},
+    { data: {} },
+    { data: { detections: [] } },
+    { data: { detections: [[]] } },
+    { data: { detections: [[{ language: 5 }]] } },
+    { data: { detections: ["text"] } },
+  ];
+  for (const payload of payloads) {
+    const unreadable = createHarness(() => jsonResponse(payload));
+    const error = await catchProtocolError(() =>
+      unreadable.client.detect({ apiKey: "test-key", text: "Hello" }),
+    );
+    expect(error.kind).toBe("invalid_response");
+    expect(error.message).toBe(t("googleCloud.error.invalidResponse"));
+    expect(unreadable.requests).toHaveLength(1);
+  }
+
+  const rejected = createHarness(() =>
+    errorResponse({ error: { errors: [{ reason: "keyInvalid" }] } }, 403),
+  );
+  const keyError = await catchProtocolError(() =>
+    rejected.client.detect({ apiKey: "bad-key", text: "Hello" }),
+  );
+  expect(keyError.kind).toBe("auth");
+  expect(keyError.message).toBe(t("googleCloud.error.auth"));
+});
+
 test("google cloud client: rejects a blank key, blank input, or invalid language before HTTP", async () => {
   const harness = createHarness();
 

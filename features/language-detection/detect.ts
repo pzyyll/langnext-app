@@ -6,9 +6,14 @@ import {
   type AiClientInput,
 } from "../../modules/ai/runtime/client";
 import { DEFAULT_HTTP_TIMEOUT_MS } from "../../modules/ai/runtime/http";
+import {
+  createGoogleCloudTranslateClient,
+  type GoogleCloudDetectInput,
+  type GoogleCloudDetectOptions,
+} from "../../modules/google-cloud-translation/client";
 import { resolveSavedModelRequest, type SavedModelRequestResolution } from "../models/store";
 import { isLanguageId, LANGUAGE_IDS, type LanguageId } from "../presets/languages";
-import type { LanguageDetectorBinding } from "./settings";
+import { languageDetectionStore, type LanguageDetectorBinding } from "./settings";
 
 /** Maximum sample length in Unicode code points, so one sample never costs unbounded tokens. */
 const MAX_SAMPLE_CODE_POINTS = 2048;
@@ -50,6 +55,13 @@ export interface DetectLanguageOptions {
     options?: AiClientCallOptions,
   ) => Promise<string>;
   googleFetch?: GoogleDetectionFetch;
+  /** Reads a Google Cloud detector's stored key; defaults to the shared settings store. */
+  readGoogleCloudCredential?: (credentialRef: string) => Promise<string | null>;
+  /** Google Cloud v2 detect seam for isolated tests; the production client is built on demand. */
+  googleCloudDetect?: (
+    input: GoogleCloudDetectInput,
+    options?: GoogleCloudDetectOptions,
+  ) => Promise<string>;
 }
 
 /**
@@ -80,6 +92,17 @@ export type GoogleDetectionFetch = (
     signal: AbortSignal;
   },
 ) => Promise<GoogleDetectionResponseLike>;
+
+let googleCloudClient: ReturnType<typeof createGoogleCloudTranslateClient> | null = null;
+
+/** Production Google Cloud transport, built once on first use. */
+function googleCloudDetectClient(): (
+  input: GoogleCloudDetectInput,
+  options?: GoogleCloudDetectOptions,
+) => Promise<string> {
+  googleCloudClient ??= createGoogleCloudTranslateClient();
+  return googleCloudClient.detect;
+}
 
 function failure(code: LanguageDetectionFailureCode): LanguageDetectionResult {
   return { ok: false, code };
@@ -131,7 +154,7 @@ export function readGoogleLanguageCode(payload: unknown): string | null {
   return null;
 }
 
-/** Sends one bounded sample to Google Translate and maps its answer onto a supported ID. */
+/** Sends one bounded sample to the free Google Translate endpoint and maps its answer. */
 async function detectWithGoogle(
   sample: string,
   options: DetectLanguageOptions,
@@ -186,6 +209,46 @@ export function parseDetectionAnswer(raw: string): Answer {
   return { kind: "invalid" };
 }
 
+/** Asks Google Cloud v2 to detect the sample, using the detector's stored API key. */
+async function detectWithGoogleCloud(
+  credentialRef: string,
+  sample: string,
+  options: DetectLanguageOptions,
+): Promise<LanguageDetectionResult> {
+  const readCredential =
+    options.readGoogleCloudCredential ?? languageDetectionStore.readGoogleCloudCredential;
+  const runDetect = options.googleCloudDetect ?? googleCloudDetectClient();
+
+  let apiKey: string | null;
+  try {
+    apiKey = await readCredential(credentialRef);
+  } catch {
+    return failure("failed");
+  }
+  if (options.signal?.aborted) return failure("cancelled");
+  if (apiKey === null || apiKey.trim().length === 0) return failure("failed");
+
+  let code: string;
+  try {
+    code = await runDetect(
+      { apiKey, text: sample },
+      { signal: options.signal, timeoutMs: options.timeoutMs },
+    );
+  } catch (error) {
+    if (
+      options.signal?.aborted ||
+      (error instanceof ProviderProtocolError && error.kind === "cancelled")
+    ) {
+      return failure("cancelled");
+    }
+    return failure("failed");
+  }
+  if (options.signal?.aborted) return failure("cancelled");
+
+  const language = normalizeGoogleLanguageCode(code);
+  return language === null ? failure("unsupported_language") : { ok: true, language };
+}
+
 /** Asks one saved model for the sample's language; an unavailable model answers without a request. */
 async function detectWithAiModel(
   modelId: string,
@@ -233,9 +296,10 @@ async function detectWithAiModel(
  * Detects the dominant language with the enabled detectors in priority order.
  *
  * Each detector runs one bounded sample: AI resolves its saved model and accepts one supported
- * ID, Google asks the free Translate endpoint once. A failure, an ineligible model, or `und`
- * falls through to the next enabled detector. Cancellation stops the chain, and neither
- * detector runs when none is enabled.
+ * ID, the free Google endpoint asks Google Translate once, and Google Cloud posts the same sample
+ * to Cloud Translation v2 with the detector's stored key. A failure, an ineligible model, an
+ * unreadable key, or `und` falls through to the next enabled detector. Cancellation stops the
+ * chain, and no detector runs when none is enabled.
  */
 export async function detectLanguage(
   text: string,
@@ -255,9 +319,11 @@ export async function detectLanguage(
     if (options.signal?.aborted) return failure("cancelled");
 
     const result =
-      detector.kind === "google"
-        ? await detectWithGoogle(sample, options)
-        : await detectWithAiModel(detector.modelId, sample, options);
+      detector.kind === "ai"
+        ? await detectWithAiModel(detector.modelId, sample, options)
+        : detector.kind === "google"
+          ? await detectWithGoogle(sample, options)
+          : await detectWithGoogleCloud(detector.credentialRef, sample, options);
 
     if (result.ok || result.code === "cancelled") return result;
     if (result.code === "no_eligible_model") {

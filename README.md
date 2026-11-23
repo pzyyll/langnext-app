@@ -94,25 +94,28 @@ See [system architecture](docs/specs/system-architecture.md) for the selected sc
 ## Language detection
 
 Language detection resolves an **Automatic** source or target into a concrete
-language before a prompt is rendered. Two detectors are available; enabled
+language before a prompt is rendered. Three detectors are available; enabled
 detectors run in priority order, and later ones act as backups. There is no
 local detector.
 
 - **Setup**: Open **Settings → Language Detection**, configure **AI** with a
-  model, enable the detectors to use, and set the **Native language** and the
-  language for **Translate my native language into**. Detection stays off until
-  a detector is enabled.
+  model, configure **Google Cloud** with an API key, enable the detectors to use,
+  and set the **Native language** and the **Target language**. Detection stays
+  off until a detector is enabled.
 - **AI**: One text model per AI detector. A sample goes to that model; an
   unusable answer falls through to the next enabled detector.
 - **Google**: Enable **Google** to use the free Google Translate endpoint. It
   needs no key and no model configuration; a sample goes to Google Translate.
+- **Google Cloud**: Open **Google Cloud**, paste an API key, and save it. The
+  key is stored in its own storage entry, never in the detector record, and the
+  same key is reused when the field is left blank. Detection calls the Cloud
+  Translation v2 `detect` endpoint with that key, which bills the project.
 - **Priority**: Drag a detector's grip, or focus the grip and press the up and
   down arrow keys, to order them. The first enabled detector is the primary; later
   enabled detectors act as backups.
 - **Automatic target**: Text in another language is translated into your native
-  language. Text in your native language is translated into the preferred
-  translation language. A concrete source and target pair never starts a
-  detection request.
+  language. Text in your native language is translated into the **Target
+  language**. A concrete source and target pair never starts a detection request.
 - **Upstream choices**: Presets store engine configuration only; the Quick
   Translate language menu offers **Automatic** for both selections. With no
   detector enabled, an **Automatic** source needs a manual source selection, and
@@ -127,8 +130,9 @@ local detector.
   manually. Cancellation stays silent.
 - **Request shape**: AI detection uses one buffered request per enabled AI
   detector, never a stream, and asks the model to skip reasoning because the
-  answer is a single language ID. Google detection uses one form-encoded request,
-  so the sample never appears in a URL.
+  answer is a single language ID. The free Google detector uses one form-encoded
+  request, so the sample never appears in a URL. Google Cloud detection sends one
+  buffered JSON request with the key in the `x-goog-api-key` header.
 - **Language mapping**: A regional Google code keeps its base language
   (`zh-CN` → `zh`, `pt-BR` → `pt`), legacy `iw` and `in` map to Hebrew and
   Indonesian, and any other language is reported as unsupported instead of
@@ -137,8 +141,8 @@ local detector.
   needs an automatic source, once per input. Every enabled detector tried receives
   the first 2,048 characters of the trimmed text, and may use a different provider
   than the translation model. The full source text still goes to the selected
-  translation model. Only settings and model IDs are stored; samples, detected
-  values, and model replies are never stored or logged.
+  translation model. Only settings, model IDs, and the stored API key are kept;
+  samples, detected values, and model replies are never stored or logged.
 
 The bundle identifier is a development placeholder. Set it before distribution.
 Headless tests do not verify native dragging, caption buttons, tooltips, or
