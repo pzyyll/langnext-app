@@ -8,7 +8,6 @@ import {
   setAccessibilityFocus,
   signal,
   Text,
-  token,
   View,
   type AnimatedValue,
   type InputRef,
@@ -17,7 +16,7 @@ import {
   type ViewRef,
 } from "nsh";
 import { t } from "nsh/i18n";
-import baiduIcon from "../../assets/icons/baidu.svg";
+import baiduCloudIcon from "../../assets/icons/baidu-cloud.svg";
 import { motion } from "../../components/motion";
 import { Avatar, type AvatarSize } from "../../components/ui/avatar";
 import { Badge } from "../../components/ui/badge";
@@ -78,11 +77,9 @@ function OcrChannelAvatar(props: { kind: OcrServiceKind; size?: AvatarSize }) {
         accessibilityLabel=""
         fallback={
           <Image
-            src={baiduIcon}
+            src={baiduCloudIcon}
             accessibilityElementsHidden={true}
             class="size-4 overflow-hidden"
-            // Runtime theme token tint keeps the monochrome Baidu mark legible in light and dark modes.
-            style={{ tintColor: token("foreground") }}
           />
         }
       />
