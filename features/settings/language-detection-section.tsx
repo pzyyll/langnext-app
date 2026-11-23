@@ -508,7 +508,7 @@ function DetectionChannelList(props: DetectionChannelListProps) {
         else={
           <ChannelEmptyState
             testID="settings-detection-empty"
-            icon="mdi:translate"
+            icon="mdi:text-recognition"
             title={t("settings.languageDetection.emptyTitle")}
             choicesLabel={t("settings.languageDetection.emptyChannels")}
             busy={props.busy}

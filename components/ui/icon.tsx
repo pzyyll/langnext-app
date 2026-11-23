@@ -47,7 +47,7 @@ import mdiRefreshIcon from "../../assets/icons/mdi--refresh.svg";
 import mdiStopCircleOutlineIcon from "../../assets/icons/mdi--stop-circle-outline.svg";
 import mdiStopIcon from "../../assets/icons/mdi--stop.svg";
 import mdiSwapHorizontalIcon from "../../assets/icons/mdi--swap-horizontal.svg";
-import mdiTranslateIcon from "../../assets/icons/mdi--translate.svg";
+import mdiTextRecognitionIcon from "../../assets/icons/mdi--text-recognition.svg";
 import mdiTtsIcon from "../../assets/icons/mdi--tts.svg";
 import mdiVolumeHighIcon from "../../assets/icons/mdi--volume-high.svg";
 import minusIcon from "../../assets/icons/minus.svg";
@@ -112,7 +112,7 @@ const ICONS = {
   "mdi:stop": mdiStopIcon,
   "mdi:stop-circle-outline": mdiStopCircleOutlineIcon,
   "mdi:swap-horizontal": mdiSwapHorizontalIcon,
-  "mdi:translate": mdiTranslateIcon,
+  "mdi:text-recognition": mdiTextRecognitionIcon,
   "mdi:tts": mdiTtsIcon,
   "mdi:volume-high": mdiVolumeHighIcon,
   minus: minusIcon,
