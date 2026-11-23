@@ -72,7 +72,7 @@ export function ConnectionFields(props: ProviderSettingsProps) {
           >
             <View
               testID="connection-fixed-api-type"
-              class="h-9 flex-row items-center rounded-lg border border-border bg-muted px-3"
+              class="h-9 flex-row items-center rounded-xl border border-border bg-muted px-3"
             >
               <Text class="truncate text-sm text-foreground">
                 {getProtocolLabel(props.protocolId)}
@@ -90,6 +90,7 @@ export function ConnectionFields(props: ProviderSettingsProps) {
             testID="connection-url-input"
             accessibilityLabel={t("models.connection.baseUrl")}
             placeholder={urlPlaceholder()}
+            inputClass="font-mono"
             value={props.baseUrl}
             onChange={(value) => props.onBaseUrlChange(value)}
           />

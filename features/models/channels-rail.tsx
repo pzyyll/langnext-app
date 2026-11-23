@@ -175,21 +175,26 @@ export function ChannelsRail(props: ChannelsRailProps) {
   };
 
   return (
-    <View testID="channels-rail" class="min-w-0 flex-1 bg-background">
+    <View testID="channels-rail" class="min-w-0 flex-1 bg-surface-rail">
       <View class="h-14 shrink-0 flex-row items-center justify-between gap-2 px-4">
-        <Text role="header" class="min-w-0 truncate text-sm font-semibold text-foreground">
-          {t("models.channels.title")}
-        </Text>
+        <View class="min-w-0 flex-1 flex-row items-center gap-2">
+          <Text role="header" class="min-w-0 truncate text-sm font-semibold text-foreground">
+            {t("models.channels.title")}
+          </Text>
+          <If when={props.channels.length > 0}>
+            <Badge label={String(props.channels.length)} tone="neutral" pill />
+          </If>
+        </View>
         <Button
           testID="add-channel-button"
           ref={(node) => props.addButtonRef?.(node)}
-          variant="ghost"
+          variant="primary"
           size="icon-sm"
           tooltip={t("models.channel.add")}
           accessibilityLabel={t("models.channel.add")}
           onPress={() => props.onAdd()}
         >
-          <Icon name="plus" tone="foreground" class="size-4" />
+          <Icon name="plus" tone="primary-foreground" class="size-4" />
         </Button>
       </View>
 
@@ -210,7 +215,7 @@ export function ChannelsRail(props: ChannelsRailProps) {
                     </View>
                   }
                 >
-                  <View class="gap-1 px-2 pb-2">
+                  <View class="gap-1.5 px-2.5 py-2.5">
                     <Each of={props.channels} key={(channel) => channel.id}>
                       {(channel) => {
                         const id = () => channel().id;
@@ -228,12 +233,12 @@ export function ChannelsRail(props: ChannelsRailProps) {
                               });
                             }}
                             style={{ translate: [0, offsetOf(id())] }}
-                            class={`flex-row items-center gap-1 rounded-lg border pr-1 ${motion.navigationFeedback} ${
+                            class={`flex-row items-center gap-1 rounded-xl border pr-1.5 ${motion.navigationFeedback} ${
                               dragging() === id()
-                                ? "z-10 cursor-grabbing border-border bg-accent shadow-md"
+                                ? "z-10 cursor-grabbing border-border bg-card shadow-md"
                                 : isSelected()
-                                  ? "border-border bg-accent"
-                                  : "border-transparent hover:bg-accent/50 active:bg-accent"
+                                  ? "border-border bg-card shadow-card dark:shadow-card-dark"
+                                  : "border-transparent hover:bg-accent/70 active:bg-accent"
                             }`}
                           >
                             <Button
@@ -252,7 +257,7 @@ export function ChannelsRail(props: ChannelsRailProps) {
                                   : t("models.filter.disabled"),
                               })}
                               onPress={() => props.onSelect(id())}
-                              class="min-w-0 flex-1 hover:bg-transparent active:bg-transparent"
+                              class="min-w-0 flex-1 hover:bg-transparent active:bg-transparent selected:bg-transparent"
                             >
                               <View class="w-4 shrink-0 items-center justify-center">
                                 <If
@@ -265,7 +270,7 @@ export function ChannelsRail(props: ChannelsRailProps) {
                                     />
                                   }
                                 >
-                                  <Icon name="check-circle" tone="success" class="size-3.5" />
+                                  <Icon name="check-circle" tone="success" class="size-4" />
                                 </If>
                               </View>
 
@@ -274,7 +279,7 @@ export function ChannelsRail(props: ChannelsRailProps) {
                                   <Text
                                     class={
                                       isSelected()
-                                        ? "min-w-0 shrink truncate text-sm font-medium text-accent-foreground"
+                                        ? "min-w-0 shrink truncate text-sm font-semibold text-foreground"
                                         : channel().enabled
                                           ? "min-w-0 shrink truncate text-sm font-medium text-foreground"
                                           : "min-w-0 shrink truncate text-sm text-muted-foreground"

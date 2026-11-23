@@ -494,7 +494,7 @@ function OcrChannelList(props: OcrChannelListProps) {
                       };
                     }}
                     style={{ translate: [0, offsets[kind()]] }}
-                    class={`flex-row items-center gap-1.5 rounded-lg pr-2 ${motion.navigationFeedback} ${
+                    class={`flex-row items-center gap-1.5 rounded-xl pr-2 ${motion.navigationFeedback} ${
                       dragging() === kind()
                         ? "z-10 cursor-grabbing bg-card shadow-md"
                         : "hover:bg-accent/60 active:bg-accent"
@@ -803,7 +803,7 @@ function OcrChannelDetail(props: OcrChannelDetailProps) {
         <If when={showAiRecovery()}>
           <View
             testID="settings-ocr-models-recovery"
-            class="gap-2 rounded-lg border border-border bg-muted/50 p-3"
+            class="gap-2 rounded-xl border border-border bg-surface-subtle p-3"
           >
             <Text
               role="alert"

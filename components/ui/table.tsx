@@ -14,9 +14,7 @@ export function Table(props: {
   children?: JSX.Element;
 }) {
   return (
-    <View
-      class={`overflow-hidden rounded-lg border border-border bg-background ${props.class ?? ""}`}
-    >
+    <View class={`overflow-hidden rounded-xl border border-border bg-card ${props.class ?? ""}`}>
       <BaseTable accessibilityLabel={props.accessibilityLabel}>{props.children}</BaseTable>
     </View>
   );
@@ -24,7 +22,7 @@ export function Table(props: {
 
 export function TableHeader(props: { class?: string; children?: JSX.Element }) {
   return (
-    <BaseTableHeader class={`border-b border-border bg-muted/60 ${props.class ?? ""}`}>
+    <BaseTableHeader class={`border-b border-border bg-surface-subtle ${props.class ?? ""}`}>
       {props.children}
     </BaseTableHeader>
   );
@@ -38,7 +36,7 @@ export function TableRow(props: { class?: string; testID?: string; children?: JS
   return (
     <BaseTableRow
       testID={props.testID}
-      class={`flex-row items-center gap-2 border-b border-border px-3 py-2 last:border-b-0 ${props.class ?? ""}`}
+      class={`flex-row items-center gap-2 border-b border-border/60 px-4 py-3 last:border-b-0 ${props.class ?? ""}`}
     >
       {props.children}
     </BaseTableRow>

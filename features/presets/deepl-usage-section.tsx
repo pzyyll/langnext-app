@@ -33,7 +33,7 @@ function usedShare(usage: DeepLUsage): number {
 /** Editor section that reads and shows the preset key's character usage. */
 export function DeepLUsageSection(props: DeepLUsageSectionProps) {
   const compact = () => windowSize().width < 860;
-  const cardClass = () => (compact() ? "gap-4 p-4" : "gap-5 p-5");
+  const cardClass = () => (compact() ? "gap-4 p-4" : "gap-5 p-6");
 
   if (deepLUsageStore.state(props.presetId) === null) {
     void deepLUsageStore.load(props.presetId);

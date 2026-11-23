@@ -10,7 +10,7 @@ interface CardProps {
 }
 
 const CARD_VARIANT_CLASSES: Record<CardVariant, string> = {
-  default: "gap-5 rounded-xl border border-border bg-card p-6",
+  default: "gap-5 rounded-2xl border border-border bg-card p-6 shadow-card dark:shadow-card-dark",
   subtle: "gap-0 rounded-xl border border-border bg-surface-subtle p-0",
 };
 

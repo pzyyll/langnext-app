@@ -87,13 +87,15 @@ export function ChannelEditor(props: ChannelEditorProps) {
         <View
           class={`mx-auto h-14 w-full max-w-4xl flex-row items-center justify-between gap-3 ${compactLayout() ? "px-4" : "px-6"}`}
         >
-          <View class="min-w-0 flex-1 flex-row items-center gap-2">
-            <If
-              when={providerPresentation() !== null}
-              else={<Icon name="cube-outline" tone="muted-foreground" class="size-5 shrink-0" />}
-            >
-              <ProviderMark icon={providerPresentation()!.icon} class="size-5 shrink-0" />
-            </If>
+          <View class="min-w-0 flex-1 flex-row items-center gap-2.5">
+            <View class="size-7 shrink-0 items-center justify-center rounded-lg bg-muted">
+              <If
+                when={providerPresentation() !== null}
+                else={<Icon name="cube-outline" tone="muted-foreground" class="size-4 shrink-0" />}
+              >
+                <ProviderMark icon={providerPresentation()!.icon} class="size-4 shrink-0" />
+              </If>
+            </View>
             <If
               when={!isDraftMode() && renaming()}
               else={
@@ -204,8 +206,8 @@ export function ChannelEditor(props: ChannelEditorProps) {
       </View>
 
       <If when={!isDraftMode() && conflictDetected()}>
-        <View class={`mx-auto w-full max-w-4xl pb-2 ${compactLayout() ? "px-4" : "px-6"}`}>
-          <View class="flex-row items-center justify-between gap-3 rounded-lg border border-warning/40 bg-warning/15 px-4 py-2.5">
+        <View class={`mx-auto w-full max-w-4xl pt-3 ${compactLayout() ? "px-4" : "px-6"}`}>
+          <View class="flex-row items-center justify-between gap-3 rounded-xl border border-warning/40 bg-warning/15 px-4 py-2.5">
             <Text class="text-xs font-medium text-warning">{t("models.channel.conflict")}</Text>
             <Button
               size="sm"
@@ -220,10 +222,10 @@ export function ChannelEditor(props: ChannelEditorProps) {
       </If>
 
       <If when={hasUnsupportedConfiguration()}>
-        <View class={`mx-auto w-full max-w-4xl pb-2 ${compactLayout() ? "px-4" : "px-6"}`}>
+        <View class={`mx-auto w-full max-w-4xl pt-3 ${compactLayout() ? "px-4" : "px-6"}`}>
           <View
             testID="unsupported-configuration-alert"
-            class="rounded-lg border border-destructive/40 bg-destructive/10 px-4 py-2.5"
+            class="rounded-xl border border-destructive/40 bg-destructive/10 px-4 py-2.5"
           >
             <Text role="alert" class="text-xs font-medium text-destructive">
               {t("ai.error.unsupportedConfiguration")}
@@ -237,17 +239,17 @@ export function ChannelEditor(props: ChannelEditorProps) {
           class={
             compactLayout()
               ? "mx-auto w-full max-w-4xl gap-4 px-4 pb-4 pt-1"
-              : "mx-auto w-full max-w-4xl gap-5 px-6 pb-6 pt-2"
+              : "mx-auto w-full max-w-4xl gap-6 px-6 pb-6 pt-2"
           }
         >
           <If when={isDraftMode()}>
-            <Card testID="draft-channel-card" class={compactLayout() ? "gap-3.5 p-4" : "gap-4 p-5"}>
+            <Card testID="draft-channel-card" class={compactLayout() ? "gap-3.5 p-4" : "gap-4 p-6"}>
               <View class={compactLayout() ? "gap-3.5" : "flex-row items-start gap-4"}>
                 <FormField
                   label={t("models.channel.provider")}
                   class={compactLayout() ? undefined : "w-56 shrink-0"}
                 >
-                  <View class="h-9 flex-row items-center gap-2 rounded-lg border border-border bg-muted px-3">
+                  <View class="h-9 flex-row items-center gap-2 rounded-xl border border-border bg-muted px-3">
                     <If when={providerPresentation() !== null}>
                       <ProviderMark icon={providerPresentation()!.icon} class="size-4 shrink-0" />
                     </If>
@@ -284,7 +286,7 @@ export function ChannelEditor(props: ChannelEditorProps) {
             </Card>
           </If>
 
-          <Card testID="connection-card" class={compactLayout() ? "gap-3.5 p-4" : "gap-4 p-5"}>
+          <Card testID="connection-card" class={compactLayout() ? "gap-4 p-4" : "gap-5 p-6"}>
             <View class="min-h-8 flex-row flex-wrap items-center justify-between gap-2">
               <View class="min-w-0 flex-1 flex-row items-center gap-2">
                 <SectionHeading title={t("models.connection.heading")} class="shrink-0" />
@@ -295,6 +297,8 @@ export function ChannelEditor(props: ChannelEditorProps) {
                         testID="connection-status"
                         label={msg().text}
                         tone={msg().ok ? "success" : "destructive"}
+                        dot
+                        pill
                         truncate
                         tooltip={msg().text}
                       />
@@ -377,7 +381,7 @@ export function ChannelEditor(props: ChannelEditorProps) {
             </If>
           </Card>
 
-          <Card testID="models-card" class={compactLayout() ? "gap-3.5 p-4" : "gap-4 p-5"}>
+          <Card testID="models-card" class={compactLayout() ? "gap-4 p-4" : "gap-5 p-6"}>
             <ModelsTable
               channel={tableChannelView()}
               models={props.mode === "draft" ? props.draft.models() : props.models}

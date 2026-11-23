@@ -47,7 +47,7 @@ interface ModelsSectionProps {
 /** Editor section for ordered primary + fallback AI models and optional sampling parameters. */
 export function ModelsSection(props: ModelsSectionProps) {
   const compact = () => windowSize().width < 860;
-  const cardClass = () => (compact() ? "gap-4 p-4" : "gap-5 p-5");
+  const cardClass = () => (compact() ? "gap-4 p-4" : "gap-5 p-6");
 
   const fieldError = (field: PresetValidationField): string | null =>
     props.errorField === field ? props.errorMessage : null;
@@ -172,7 +172,7 @@ export function ModelsSection(props: ModelsSectionProps) {
       <If when={showCatalogBanner()}>
         <View
           testID="preset-models-recovery"
-          class="gap-2 rounded-lg border border-border bg-muted/50 p-3"
+          class="gap-2 rounded-xl border border-border bg-surface-subtle p-3"
         >
           <Text
             role="alert"

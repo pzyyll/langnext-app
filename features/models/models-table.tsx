@@ -59,9 +59,9 @@ function CapabilityIcons(props: { capabilities: CapabilityFlags }) {
           <View
             accessibilityLabel={t(item().labelKey)}
             tooltip={buildTooltip(t(item().labelKey), "top")}
-            class="size-5 items-center justify-center rounded bg-muted"
+            class="size-6 items-center justify-center rounded-md bg-muted"
           >
-            <Icon name={item().icon} tone="foreground" class="size-3" />
+            <Icon name={item().icon} tone="muted-foreground" class="size-3.5" />
           </View>
         )}
       </Each>
@@ -192,13 +192,13 @@ export function ModelsTable(props: ModelsTableProps) {
 
   return (
     <>
-      <View class="gap-3.5">
+      <View class="gap-4">
         <View class="flex-row flex-wrap items-start justify-between gap-3">
           <View class="min-w-0 gap-0.5">
             <View class="flex-row items-center gap-2">
               <SectionHeading title={t("models.title")} />
               <If when={props.models.length > 0}>
-                <Badge label={String(props.models.length)} tone="neutral" />
+                <Badge label={String(props.models.length)} tone="neutral" pill />
               </If>
             </View>
             <Text
@@ -217,12 +217,17 @@ export function ModelsTable(props: ModelsTableProps) {
               testID="get-models-button"
               variant="outline"
               size="sm"
-              label={
+              accessibilityLabel={
                 props.syncing ? t("models.connection.fetching") : t("models.connection.getModels")
               }
               disabled={props.syncing || props.testing || props.connectionBlocked || props.disabled}
               onPress={() => props.onGetModels()}
-            />
+            >
+              <Icon name="mdi:refresh" tone="foreground" class="size-3.5" />
+              <Text class="text-sm font-medium text-foreground">
+                {props.syncing ? t("models.connection.fetching") : t("models.connection.getModels")}
+              </Text>
+            </Button>
           </View>
         </View>
 
@@ -250,17 +255,6 @@ export function ModelsTable(props: ModelsTableProps) {
             }}
             triggerClass="w-28"
           />
-          <Button
-            testID="add-model-button"
-            variant="outline"
-            size="sm"
-            accessibilityLabel={t("models.model.add")}
-            disabled={props.disabled}
-            onPress={() => props.onAddModel()}
-          >
-            <Icon name="plus" tone="foreground" class="size-3.5" />
-            <Text class="text-sm font-medium text-foreground">{t("models.model.add")}</Text>
-          </Button>
           <If when={props.models.length > 0}>
             <If
               when={selectionMode()}
@@ -295,6 +289,17 @@ export function ModelsTable(props: ModelsTableProps) {
               </View>
             </If>
           </If>
+          <Button
+            testID="add-model-button"
+            variant="primary"
+            size="sm"
+            accessibilityLabel={t("models.model.add")}
+            disabled={props.disabled}
+            onPress={() => props.onAddModel()}
+          >
+            <Icon name="plus" tone="primary-foreground" class="size-3.5" />
+            <Text class="text-sm font-medium text-primary-foreground">{t("models.model.add")}</Text>
+          </Button>
         </View>
 
         <If
@@ -375,7 +380,7 @@ export function ModelsTable(props: ModelsTableProps) {
                   return (
                     <TableRow
                       testID={`model-row-${model().modelKey}`}
-                      class={`hover:bg-muted/40 ${motion.navigationFeedback}`}
+                      class={`hover:bg-surface-rail/70 ${motion.navigationFeedback}`}
                     >
                       <If when={selectionMode()}>
                         <TableCell class="w-7 shrink-0">
@@ -449,6 +454,7 @@ export function ModelsTable(props: ModelsTableProps) {
                         <Switch
                           testID={`toggle-model-${model().modelKey}`}
                           variant="inline"
+                          size="sm"
                           accessibilityLabel={t("models.model.enableLabel", {
                             name: displayName(),
                           })}

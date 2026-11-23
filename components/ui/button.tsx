@@ -43,20 +43,20 @@ interface ButtonProps {
 
 const VARIANT_CLASSES: Record<ButtonVariant, string> = {
   primary:
-    "border border-primary bg-primary hover:bg-primary/90 active:bg-primary/80 focus-visible:ring-2 focus-visible:ring-ring",
+    "border border-primary bg-primary shadow-control hover:bg-primary/90 active:bg-primary/80 focus-visible:ring-2 focus-visible:ring-ring",
   secondary:
-    "border border-border bg-secondary hover:bg-accent active:bg-border focus-visible:ring-2 focus-visible:ring-ring",
+    "border border-border bg-secondary shadow-control hover:bg-accent active:bg-border focus-visible:ring-2 focus-visible:ring-ring",
   outline:
-    "border border-input bg-background hover:bg-accent active:bg-border selected:bg-accent focus-visible:ring-2 focus-visible:ring-ring",
+    "border border-input bg-card shadow-control hover:bg-accent active:bg-border selected:bg-accent focus-visible:ring-2 focus-visible:ring-ring",
   ghost:
     "hover:bg-accent active:bg-border selected:bg-accent focus-visible:ring-2 focus-visible:ring-ring",
   "brand-ghost":
     "hover:bg-accent active:bg-border selected:bg-brand-soft selected:hover:bg-brand-soft selected:active:bg-brand/20 focus-visible:ring-2 focus-visible:ring-ring",
-  nav: "group hover:bg-accent/60 active:bg-accent selected:bg-accent selected:hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring",
+  nav: "group border border-transparent hover:bg-accent/70 active:bg-accent selected:border-border selected:bg-card selected:shadow-card dark:selected:shadow-card-dark selected:hover:bg-card focus-visible:ring-2 focus-visible:ring-ring",
   destructive:
-    "border border-destructive bg-destructive hover:bg-destructive/90 active:bg-destructive/80 focus-visible:ring-2 focus-visible:ring-ring",
+    "border border-destructive bg-destructive shadow-control hover:bg-destructive/90 active:bg-destructive/80 focus-visible:ring-2 focus-visible:ring-ring",
   "destructive-outline":
-    "border border-destructive/40 bg-background hover:bg-destructive/10 active:bg-destructive/20 focus-visible:ring-2 focus-visible:ring-ring",
+    "border border-destructive/40 bg-card shadow-control hover:bg-destructive/10 active:bg-destructive/20 focus-visible:ring-2 focus-visible:ring-ring",
   "destructive-ghost":
     "hover:bg-destructive/10 active:bg-destructive/20 focus-visible:ring-2 focus-visible:ring-ring",
 };
@@ -67,22 +67,22 @@ const TEXT_COLOR_CLASSES: Record<ButtonVariant, string> = {
   outline: "font-medium text-foreground",
   ghost: "font-medium text-foreground",
   "brand-ghost": "font-medium text-brand",
-  nav: "min-w-0 flex-1 truncate font-normal text-foreground/80 group-hover:text-foreground group-selected:font-medium group-selected:text-accent-foreground",
+  nav: "min-w-0 flex-1 truncate font-normal text-foreground/80 group-hover:text-foreground group-selected:font-semibold group-selected:text-foreground",
   destructive: "font-medium text-destructive-foreground",
   "destructive-outline": "font-medium text-destructive",
   "destructive-ghost": "font-medium text-destructive",
 };
 
 const SIZE_CLASSES: Record<ButtonSize, string> = {
-  md: "h-9 flex-row items-center justify-center gap-2 rounded-lg px-4",
-  sm: "h-8 flex-row items-center justify-center gap-1.5 rounded-lg px-3",
-  xs: "h-6 flex-row items-center justify-center gap-1 rounded-md px-2",
-  icon: "size-8 items-center justify-center rounded-lg",
-  "icon-sm": "size-7 items-center justify-center rounded-md",
-  "icon-xs": "size-6 items-center justify-center rounded-md",
+  md: "h-9 flex-row items-center justify-center gap-2 rounded-xl px-4",
+  sm: "h-8 flex-row items-center justify-center gap-1.5 rounded-xl px-3",
+  xs: "h-6 flex-row items-center justify-center gap-1 rounded-lg px-2",
+  icon: "size-8 items-center justify-center rounded-xl",
+  "icon-sm": "size-7 items-center justify-center rounded-lg",
+  "icon-xs": "size-6 items-center justify-center rounded-lg",
   step: "h-4 w-7 items-center justify-center rounded-sm",
-  nav: "min-h-8 flex-row items-center justify-start gap-2 rounded-lg px-2 py-1.5",
-  row: "min-h-11 flex-row items-center justify-start gap-2.5 rounded-lg px-2 py-1.5",
+  nav: "min-h-8 flex-row items-center justify-start gap-2 rounded-xl px-2.5 py-1.5",
+  row: "min-h-11 flex-row items-center justify-start gap-2.5 rounded-xl px-2.5 py-1.5",
   card: "min-h-14 flex-row items-center justify-start gap-3 rounded-xl px-4 py-3",
 };
 

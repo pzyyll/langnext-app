@@ -51,7 +51,7 @@ interface PresetEditorProps {
 export function PresetEditor(props: PresetEditorProps) {
   const compact = () => windowSize().width < 860;
   const bodyPaddingClass = () => (compact() ? "px-4 pb-4 pt-1" : "px-6 pb-6 pt-2");
-  const cardClass = () => (compact() ? "gap-4 p-4" : "gap-5 p-5");
+  const cardClass = () => (compact() ? "gap-4 p-4" : "gap-5 p-6");
 
   const fieldError = (field: PresetValidationField): string | null =>
     props.errorField === field ? props.errorMessage : null;
@@ -145,7 +145,7 @@ export function PresetEditor(props: PresetEditorProps) {
   };
 
   return (
-    <View testID="preset-editor" class="min-w-0 flex-1">
+    <View testID="preset-editor" class="min-w-0 flex-1 bg-background">
       <View class="shrink-0">
         <View
           class={`mx-auto h-14 w-full max-w-4xl flex-row items-center justify-between gap-3 ${compact() ? "px-4" : "px-6"}`}
@@ -194,7 +194,7 @@ export function PresetEditor(props: PresetEditorProps) {
           <If when={Boolean(props.errorMessage) && props.errorField === null}>
             <View
               testID="preset-error-banner"
-              class="rounded-lg border border-destructive/40 bg-destructive/10 px-4 py-3"
+              class="rounded-xl border border-destructive/40 bg-destructive/10 px-4 py-3"
             >
               <Text role="alert" class="text-sm text-destructive">
                 {props.errorMessage}

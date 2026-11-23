@@ -558,7 +558,7 @@ function DetectionChannelList(props: DetectionChannelListProps) {
                       };
                     }}
                     style={{ translate: [0, offsets[kind()]] }}
-                    class={`flex-row items-center gap-1.5 rounded-lg pr-2 ${motion.navigationFeedback} ${
+                    class={`flex-row items-center gap-1.5 rounded-xl pr-2 ${motion.navigationFeedback} ${
                       dragging() === kind()
                         ? "z-10 cursor-grabbing bg-card shadow-md"
                         : "hover:bg-accent/60 active:bg-accent"
@@ -567,7 +567,7 @@ function DetectionChannelList(props: DetectionChannelListProps) {
                     <If
                       when={isDetectorOpenable(kind())}
                       else={
-                        <View class="min-w-0 flex-1 flex-row items-center gap-2.5 rounded-lg py-2.5 pl-3 pr-2">
+                        <View class="min-w-0 flex-1 flex-row items-center gap-2.5 rounded-xl py-2.5 pl-3 pr-2">
                           <DetectionChannelIdentity
                             kind={kind()}
                             credentialState={props.credentialState}
@@ -890,7 +890,7 @@ function AiChannelDetail(props: AiChannelDetailProps) {
         <If when={catalogUnusable()}>
           <View
             testID="settings-detection-models-recovery"
-            class="gap-2 rounded-lg border border-border bg-muted/50 p-3"
+            class="gap-2 rounded-xl border border-border bg-surface-subtle p-3"
           >
             <Text
               role="alert"

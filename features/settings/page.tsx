@@ -94,7 +94,7 @@ function ChoiceOption(props: ChoiceOptionProps) {
       testID={props.testID}
       checked={props.checked}
       onChange={() => props.onSelect()}
-      class={`flex-1 rounded-lg border border-border p-4 checked:border-primary checked:bg-accent hover:bg-muted focus-visible:ring-2 focus-visible:ring-ring ${motion.navigationFeedback}`}
+      class={`flex-1 rounded-xl border border-border bg-surface-control p-4 checked:border-primary checked:bg-card checked:shadow-card dark:checked:shadow-card-dark hover:bg-accent/50 focus-visible:ring-2 focus-visible:ring-ring ${motion.navigationFeedback}`}
     >
       <Text class="text-sm font-medium text-card-foreground">{props.label}</Text>
     </Radio>
@@ -361,7 +361,7 @@ export function SettingsPage(props: {
       page="settings"
       handleAccessibilityLabel={t("settings.resizeLabel")}
       rail={
-        <View testID="settings-rail" class="min-w-0 flex-1 bg-background">
+        <View testID="settings-rail" class="min-w-0 flex-1 bg-surface-rail">
           <View class="h-14 shrink-0 flex-row items-center justify-between gap-2 px-4">
             <Text role="header" class="min-w-0 truncate text-sm font-semibold text-foreground">
               {t("settings.title")}
@@ -371,7 +371,7 @@ export function SettingsPage(props: {
             <View
               role="navigation"
               accessibilityLabel={t("settings.navLabel")}
-              class="gap-5 px-2 pb-4 pt-1"
+              class="gap-5 px-2.5 py-3"
             >
               <Each of={SETTINGS_GROUPS} key={(group) => group.id}>
                 {(group) => (

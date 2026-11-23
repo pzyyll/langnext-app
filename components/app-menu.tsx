@@ -23,7 +23,7 @@ function AboutDialog(props: AboutDialogProps) {
       closeOnEscape
       closeOnBackdropPress
       backdropClass="bg-overlay"
-      class="m-auto w-96 max-w-full overflow-hidden rounded-2xl border border-border bg-background"
+      class="m-auto w-96 max-w-full overflow-hidden rounded-2xl border border-border bg-background shadow-xl"
     >
       <View class="border-b border-border px-5 py-3">
         <Text class="text-sm font-medium text-foreground">{t("app.about.title")}</Text>
@@ -47,7 +47,7 @@ function AboutDialog(props: AboutDialogProps) {
         <Button
           accessibilityLabel={t("common.ok")}
           onPress={() => props.onOpenChange(false)}
-          class={`h-8 min-w-20 items-center justify-center rounded-lg border border-input bg-background px-4 hover:bg-accent active:bg-border focus-visible:ring-2 focus-visible:ring-ring ${motion.navigationFeedback}`}
+          class={`h-8 min-w-20 items-center justify-center rounded-xl border border-input bg-card px-4 shadow-control hover:bg-accent active:bg-border focus-visible:ring-2 focus-visible:ring-ring ${motion.navigationFeedback}`}
         >
           <Text class="text-sm text-foreground">{t("common.ok")}</Text>
         </Button>
@@ -81,7 +81,7 @@ export function AppMenu() {
             testID="app-menu-trigger"
             accessibilityLabel={t("app.menu.label")}
             selected={menuOpen()}
-            class={`size-8 items-center justify-center rounded-lg hover:bg-sidebar-accent-foreground/10 active:bg-sidebar-accent-foreground/20 selected:bg-sidebar-accent-foreground/10 focus-visible:ring-2 focus-visible:ring-sidebar-ring ${motion.navigationFeedback}`}
+            class={`size-8 items-center justify-center rounded-sidebar hover:bg-sidebar-accent-foreground/10 active:bg-sidebar-accent-foreground/20 selected:bg-sidebar-accent-foreground/10 focus-visible:ring-2 focus-visible:ring-sidebar-ring ${motion.navigationFeedback}`}
           >
             <Image
               src={appIcon}

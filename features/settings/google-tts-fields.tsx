@@ -174,7 +174,7 @@ function GoogleOverrideRow(props: GoogleOverrideRowProps) {
   return (
     <View
       testID={`settings-tts-google-override-${props.language}`}
-      class="flex-row items-center gap-2 rounded-lg border border-border px-2 py-1.5"
+      class="flex-row items-center gap-2 rounded-xl border border-border px-2 py-1.5"
     >
       <Button
         variant="ghost"
@@ -282,7 +282,7 @@ export function GoogleTtsFields(props: GoogleTtsFieldsProps) {
         </FormField>
 
         <If when={currentFamily() !== null}>
-          <View testID="settings-tts-google-pricing" class="gap-1 rounded-lg bg-muted/40 p-3">
+          <View testID="settings-tts-google-pricing" class="gap-1 rounded-xl bg-surface-subtle p-3">
             <Each of={googleFamilyPricingLines(currentFamily()!)} key={(line) => line}>
               {(line) => <Text class="text-xs text-muted-foreground">{line()}</Text>}
             </Each>

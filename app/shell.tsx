@@ -120,7 +120,7 @@ export function AppShell(props: AppShellProps = {}) {
           paddingRight: titleBar().right + 16,
         }}
       >
-        <View class="w-13 shrink-0 items-center">
+        <View class="w-14 shrink-0 items-center">
           <AppMenu />
         </View>
       </View>

@@ -3,6 +3,8 @@ import { Switch as BaseSwitch } from "nsh/base";
 import { motion } from "../motion";
 import { buildTooltip } from "./tooltip";
 
+export type SwitchSize = "sm" | "md";
+
 interface SwitchProps {
   label?: string;
   labelTestID?: string;
@@ -11,6 +13,7 @@ interface SwitchProps {
   checked: boolean;
   disabled?: boolean;
   variant?: "row" | "inline";
+  size?: SwitchSize;
   testID?: string;
   onChange: (checked: boolean) => void;
 }
@@ -18,6 +21,7 @@ interface SwitchProps {
 /** Theme-styled native switch supporting full setting rows (`row`) and compact inline controls (`inline`). */
 export function Switch(props: SwitchProps) {
   const mode = () => props.variant ?? (props.label ? "row" : "inline");
+  const isSmall = () => props.size === "sm";
 
   return (
     <BaseSwitch
@@ -31,11 +35,11 @@ export function Switch(props: SwitchProps) {
       onChange={({ checked }) => props.onChange(checked)}
       class={
         mode() === "row"
-          ? `flex-row-reverse items-center justify-between gap-4 rounded-lg px-3 py-2 hover:bg-muted active:bg-accent focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-50 ${motion.navigationFeedback}`
-          : `flex-row items-center gap-2 rounded-lg focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-50`
+          ? `flex-row-reverse items-center justify-between gap-4 rounded-xl px-3 py-2 hover:bg-muted active:bg-accent focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-50 ${motion.navigationFeedback}`
+          : `flex-row-reverse items-center gap-2 rounded-xl focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-50`
       }
-      trackClass={`w-11 shrink-0 rounded-full bg-input p-0.5 checked:bg-primary ${motion.navigationFeedback}`}
-      thumbClass={`size-5 rounded-full bg-background shadow-sm checked:translate-x-5 ${motion.switchThumb}`}
+      trackClass={`${isSmall() ? "w-8" : "w-10"} shrink-0 rounded-full bg-input p-0.5 checked:bg-primary ${motion.navigationFeedback}`}
+      thumbClass={`${isSmall() ? "size-3.5 checked:translate-x-3.5" : "size-4 checked:translate-x-5"} rounded-full bg-background shadow-sm ${motion.switchThumb}`}
     >
       <If when={props.label !== undefined}>
         <Text

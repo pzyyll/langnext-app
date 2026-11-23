@@ -59,8 +59,8 @@ interface TextareaProps {
 
 const SURFACE_CLASSES: Record<TextareaVariant, string> = {
   default:
-    "rounded-lg border border-input bg-background focus-within:border-ring focus-within:ring-2 focus-within:ring-ring",
-  card: "rounded-xl border border-border bg-card focus-within:border-ring focus-within:ring-2 focus-within:ring-ring",
+    "rounded-xl border border-input bg-surface-control focus-within:border-ring focus-within:bg-card focus-within:ring-2 focus-within:ring-ring",
+  card: "rounded-2xl border border-border bg-card shadow-card dark:shadow-card-dark focus-within:border-ring focus-within:ring-2 focus-within:ring-ring",
   frameless: "bg-transparent",
 };
 

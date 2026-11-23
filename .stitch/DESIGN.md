@@ -2,50 +2,52 @@
 
 ## 1. Visual Theme & Atmosphere
 
-A quiet desktop utility for translating text. The window has two surfaces: a **chrome band** that shares the native window material (Windows 11 Acrylic behind the title bar and sidebar) and an **opaque work panel** that floats over it with one rounded start-start corner. The panel stays flat white in light and near-black in dark, so the glass band reads as the frame, not as decoration.
+A quiet desktop utility for translating text. The window has a **warm stone chrome frame** behind the title bar and narrow navigation rail, an **off-white master column (`#F8F7F4`)** for split-pane lists, and a **pure white detail surface (`#FFFFFF`)** holding elevated cards with crisp `1pt` warm borders and soft layered shadows. In dark mode, surfaces step cleanly through warm charcoal layers.
 
-Atmosphere: native, restrained, dense. Small text, tight 4-point rhythm, hairline borders. Color carries meaning, not decoration: neutral near-black primary buttons, one signal blue accent, and status tones only on state. One soft shadow exists in the whole interface, on toasts. No gradients, no glass inside the work panel, no card shadows.
+Atmosphere: tactile, refined, calm. Clean spacing, warm stone boundaries (`#E3DFD7`), and crisp depth hierarchy between the frame, master rail, work surface, and elevated cards. Color carries meaning, not decoration: deep carbon primary buttons (`#18181B`), one signal blue accent, and emerald/amber/red status tones only on state.
 
-Both themes are first class. Light chrome is warm cream; dark chrome is neutral charcoal. Every color comes from one theme token set and resolves in both modes.
+Both themes are first class. Light chrome is warm stone beige (`#EBE8E1` / `#F0EDE6`) with warm off-white rails (`#F8F7F4`) and pure white elevated cards (`#FFFFFF`); dark surfaces step across warm charcoal shades with crisp hairline borders and dark-adapted card shadows. Every color comes from one theme token set and resolves in both modes.
 
 ## 2. Color Palette & Roles
 
-Tokens live in `theme.json` as OKLCH custom properties. Hex values below are the sRGB equivalents for generation.
+Tokens live in `theme.json` as OKLCH custom properties. Hex values below are the sRGB equivalents for reference.
 
 ### Foundation surfaces
 
-- **Paper White (`#ffffff` / `#0a0a0a`)**: work panel and page background.
-- **Card White (`#ffffff` / `#171717`)**: card, dialog, popover and menu surface.
-- **Subtle Wash (`#f9fafb` / `#171717`)**: inset result cards and secondary panels.
-- **Control Field (`#ffffff` / `#262626`)**: control well inside a card.
-- **Muted Fill (`#f5f5f5` / `#262626`)**: dialog footers, table header, hover wash.
-- **Overlay Scrim (`#000000` at 40%, both modes)**: dialog backdrop.
-- **Warm Chrome Cream (`#faf0e3` / `#171717`)**: the glass band behind the title bar and sidebar. Light is warm on purpose; dark stays neutral.
+- **Paper White (`#FFFFFF` / `#10100F`)**: detail pane and page background (`background`).
+- **Card White (`#FFFFFF` / `#1B1A18`)**: elevated cards, selected rail cards, dialogs, popovers, and menus (`card`).
+- **Warm Column (`#F8F7F4` / `#141412`)**: master list columns for Channels, Presets, and Settings (`surface-rail`).
+- **Stone Subtle (`#FBFBFA` / `#1F1E1C`)**: table headers, subtle inset cards, and Quick Translate footer (`surface-subtle`).
+- **Stone Control Well (`#FBFBFA` / `#22211F`)**: resting input, select, choice card, and keycap surfaces (`surface-control`).
+- **Warm Muted Fill (`#F3F1EC` / `#252422`)**: dialog footers, badges, icon tiles, and quiet hover washes (`muted`, `secondary`).
+- **Warm Hover Wash (`#EFECE5` / `#292826`)**: pointer hover and list focus wash (`accent`).
+- **Overlay Scrim (`#000000` at 40%, both modes)**: dialog backdrop (`overlay`).
+- **Warm Stone Chrome (`#F0EDE6` / `#0D0D0C`)**: title bar and left navigation rail frame (`sidebar`), paired with crisp elevated active navigation tiles (`sidebar-accent`).
 
 ### Structure
 
-- **Hairline Border (`#e5e5e5` / `#ffffff` at 10%)**: every card, table, dialog and divider. It is the only depth device on flat surfaces.
-- **Input Border (`#e5e5e5` / `#ffffff` at 15%)**: resting field outline, one step stronger than a hairline.
-- **Focus Ring (`#a1a1a1` / `#737373`)**: 2-point focus ring and focused field outline.
+- **Warm Hairline Border (`#E3DFD7` / `#FFFFFF` at 11%)**: cards, tables, dialogs, split headers, and dividers (`border`).
+- **Input Border (`#E3DFD7` / `#FFFFFF` at 16%)**: resting field and outline-button border (`input`).
+- **Focus Ring (`#9B9890` / `#787670`)**: 2-point keyboard focus ring and focused input outline (`ring`).
 
 ### Typography hierarchy
 
-- **Ink (`#0a0a0a` / `#fafafa`)**: primary text and icon tint.
-- **Slate Muted (`#737373` / `#a1a1a1`)**: metadata, placeholders, timestamps, secondary subtitles.
+- **Ink (`#1E1E1E` / `#F5F4F0`)**: primary text and icon tint (`foreground`).
+- **Warm Stone Muted (`#6B6862` / `#A8A59E`)**: metadata, placeholders, timestamps, subtitles, and field labels (`muted-foreground`).
 
 ### Interactive
 
-- **Carbon Primary (`#171717` / `#e5e5e5`)**: solid primary buttons on `#fafafa` / `#171717` text. In dark mode the pair inverts.
-- **Neutral Secondary (`#f5f5f5` / `#262626`)**: secondary fills and the shared hover/pressed wash (`accent`).
-- **Signal Blue (`#155dfc` / `#348bff`)**: the single brand accent. Brand-ghost buttons, selected brand marks, inline brand links.
-- **Signal Blue Soft (`#e8f3ff` / `#102441`)**: brand hover and selected wash.
+- **Carbon Primary (`#18181B` / `#E9E7E2`)**: solid primary action buttons (`+ Add Model`, `+ Add Channel`, `Save`) and active switch tracks (`primary`).
+- **Neutral Secondary (`#F3F1EC` / `#252422`)**: secondary fills (`secondary`).
+- **Signal Blue (`#155DFC` / `#348BFF`)**: single brand accent for Quick Translate active toggles (`brand`).
+- **Signal Blue Soft (`#E8F3FF` / `#102441`)**: brand selected wash (`brand-soft`).
 
 ### Functional states
 
-- **Success Green (`#008236` / `#00bc7d`)**: enabled channel, saved state.
-- **Warning Amber (`#d08700` / `#fe9a00`)**: unsaved draft, insecure `http://` warning.
-- **Destructive Red (`#e7000b` / `#ff6467`)**: delete, failure, validation error.
-- **Badge fills**: the state color at 15% opacity over a 40% border, with the state color as text.
+- **Emerald Success (`#059669` / `#10B981`)**: enabled status checkmarks, connection OK badges (`success`).
+- **Warning Amber (`#D08700` / `#FE9A00`)**: unsaved draft, insecure `http://` warning (`warning`).
+- **Destructive Red (`#E7000B` / `#FF6467`)**: delete, failure, validation error (`destructive`).
+- **Badge fills**: state color at 15% opacity over a 40% border, with state color as text.
 
 ## 3. Typography Rules
 
@@ -73,16 +75,16 @@ Rules:
 
 ## 4. Component Stylings
 
-- **Button**: `36pt` tall (`sm` `32pt`, `xs` `24pt`), horizontal padding `16pt` (`sm` `12pt`, `xs` `8pt`), `8pt` radius, `1pt` border, `14pt` medium label, `8pt` gap for a leading icon. Variants: primary (Carbon fill), secondary (neutral fill), outline (surface with input border), ghost (no border), brand-ghost (Signal Blue text, soft blue hover), destructive (red fill or red border). Hover raises the fill one step; press deepens it again; press also scales to `0.95`. Cards and rows use a larger variant: `min-h-14` (`56pt`), `12pt` radius, `16pt` padding.
-- **Card**: `24pt` padding, `20pt` gap between children, `12pt` radius, `1pt` hairline border, card surface. The subtle variant drops padding to `0` and takes the subtle wash.
-- **Input and Select**: `36pt` tall (`32pt` compact), `8pt` radius, `1pt` input border, `12pt` leading padding, transparent inner field. Focus adds a `2pt` ring plus the ring border. Bad values keep the border; errors show as text, not as red outlines.
-- **Switch**: full-row control, `44pt` track, `20pt` thumb with a small shadow, fully rounded, `2pt` track padding. Off is the input border tone, on is the primary tone. The label sits at the leading edge and the track at the trailing edge; the whole row is the hit target and the row washes on hover.
-- **Badge**: `6pt` radius, `6pt` / `2pt` padding, `12pt` medium text, transparent state fill at 15% over a 40% border. Never a dot without a label.
-- **Dialog**: `16pt` radius, `1pt` border, dialogs come in `384 / 448 / 512pt` widths. Borderless header at `20pt` / `12pt` padding with a `14pt` medium title and a bottom hairline; body scrolls at `20pt` padding with a `16pt` gap; footer is the muted fill with a top hairline and right-aligned actions. Backdrop is the 40% scrim.
-- **Table**: `8pt` radius container with a `1pt` border. Header row is the muted fill at 60% with `12pt` medium labels and a bottom hairline. Body rows are `12pt` / `8pt` padded with hairline dividers and no divider on the last row.
-- **Toast**: `320pt` wide, `12pt` radius, `14pt` padding, popover surface, hairline border, the one soft shadow. Stacked bottom-center `16pt` above the edge, three visible, with a dismiss icon at the trailing edge.
-- **Navigation item**: `32pt` minimum height, `8pt` radius, `8pt` / `6pt` padding, `14pt` label at 80% ink that reaches full ink on hover. The selected item holds the neutral wash with a medium label. Hover is a 60% wash, press the full wash.
-- **Split rail**: master-detail pages use a `240pt` rail (`192pt` below `860pt` wide), resizable between `180pt` and `360pt`, with the detail pane always keeping at least `400pt`. The divider is a `1pt` hairline, not a bar.
+- **Button**: `36pt` tall (`sm` `32pt`, `xs` `24pt`), horizontal padding `16pt` (`sm` `12pt`, `xs` `8pt`), `12pt` radius (`8pt` on `xs`, `icon-sm`, `icon-xs`), `1pt` border, `14pt` medium label, `8pt` gap for a leading icon. Variants: primary (Carbon fill with subtle `shadow-control`), secondary (neutral fill with `shadow-control`), outline (card surface with input border and `shadow-control`), ghost (no border), brand-ghost (Signal Blue text, soft blue hover), destructive (red fill or red border with `shadow-control`). Hover raises the fill one step; press deepens it again; press also scales to `0.95`. Cards and rows use a larger variant: `min-h-14` (`56pt`), `12pt` radius, `16pt` padding.
+- **Card**: `24pt` padding, `20pt` gap between children, `16pt` radius (`rounded-2xl`), `1pt` hairline border, card surface with layered `shadow-card` (`dark:shadow-card-dark`). The subtle variant drops padding to `0`, uses `12pt` radius (`rounded-xl`), and takes the `surface-subtle` fill.
+- **Input and Select**: `36pt` tall (`32pt` compact), `12pt` radius (`rounded-xl`), `1pt` input border, `surface-control` fill that lifts to `card` on focus, `12pt` leading padding, transparent inner field. Focus adds a `2pt` ring plus the ring border. Bad values keep the border; errors show as text, not as red outlines.
+- **Switch**: full-row or inline control; default track `40pt` wide with `16pt` thumb (`20pt` total height); compact (`sm`) track `32pt` wide with `14pt` thumb (`18pt` total height) for dense table rows. Off is the input border tone, on is the primary tone. When labeled, the label sits at the leading edge and the track at the trailing edge.
+- **Badge**: `6pt` radius (`rounded-full` when `pill` is set), `6pt` / `2pt` padding, `12pt` medium text, transparent state fill at 15% over a 40% border, with optional leading status dot. Never a dot without a label.
+- **Dialog**: `16pt` radius, `1pt` border, elevated `shadow-xl`, widths `384 / 448 / 512pt`. Header at `20pt` / `12pt` padding with a `14pt` medium title and a bottom hairline; body scrolls at `20pt` padding with a `16pt` gap; footer is the muted fill with a top hairline and right-aligned actions. Backdrop is the 40% scrim.
+- **Table**: `12pt` radius container (`rounded-xl`) on `card` surface with a `1pt` border. Header row uses `surface-subtle` with `12pt` medium labels and a bottom hairline. Body rows are `16pt` / `12pt` padded with hairline dividers and no divider on the last row.
+- **Toast**: `320pt` wide, `12pt` radius, `14pt` padding, popover surface, hairline border, soft `shadow-lg`. Stacked bottom-center `16pt` above the edge, three visible, with a dismiss icon at the trailing edge.
+- **Navigation item**: `32pt` minimum height, `12pt` radius, `10pt` / `6pt` padding, `14pt` label at 80% ink that reaches full ink on hover. Selected rail items (channels, presets, settings sections) lift onto `bg-card` with `border-border` and `shadow-card` over the `surface-rail` rail column.
+- **Split rail**: master-detail pages use a `240pt` rail (`192pt` below `860pt` wide), resizable between `180pt` and `360pt`, with the detail pane always keeping at least `400pt`. The rail surface uses `surface-rail` (`#F8F7F4`), the headers stay borderless aligned with the detail header, and the split divider is a `1pt` hairline.
 
 ## 5. Layout Principles
 
@@ -96,11 +98,11 @@ Rules:
 
 ## 6. Design System Notes for Stitch Generation
 
-- **Atmosphere keywords**: native desktop utility, quiet neutrality, dense 4-point rhythm, hairline structure, one signal blue accent, warm cream glass chrome in light and neutral charcoal in dark, flat opaque work panel with a single rounded corner, no decorative shadows.
-- **Canonical colors**: Paper White `#ffffff`, Card White `#171717` (dark), Ink `#0a0a0a`, Slate Muted `#737373`, Hairline `#e5e5e5`, Carbon Primary `#171717`, Signal Blue `#155dfc`, Signal Blue Soft `#e8f3ff`, Success `#008236`, Warning `#d08700`, Destructive `#e7000b`, Warm Chrome Cream `#faf0e3`.
-- **Prompt: settings page**: a centered `1024pt` column with `32pt` padding, a `24pt` bold page title, then cards with `12pt` radius, hairline borders and `24pt` padding. Each card holds a `16pt` semibold section heading, then full-row switches at `32pt` height with the label left and a `44pt` track right, separated by hairline dividers. Neutral surfaces only; no accent except the enabled track.
-- **Prompt: master-detail list**: a resizable `240pt` left rail with a `56pt` header holding a title and one icon button, and a scrollable list of `48pt` rows, each with a leading status icon lane, a `14pt` medium name, a `12pt` muted provider subtitle, and a neutral wash on selection. The right pane is a `56pt` header with the record name and a switch, then bordered cards for connection fields and a table with a muted header.
-- **Prompt: translate panel**: an empty state with a `30pt` bold headline and a muted hint, an input row of `36pt` height with `8pt` radius, and a muted footer row of `12pt` metadata with icon buttons of `32pt`. Neutral palette, one blue brand-ghost action.
+- **Atmosphere keywords**: warm stone desktop utility, tactile elevated paper cards, crisp 4-point rhythm, warm hairline structure (`#E3DFD7`), soft card shadows, warm off-white master column (`#F8F7F4`), carbon primary buttons (`#18181B`), one signal blue accent.
+- **Canonical colors**: Paper White `#ffffff`, Warm Column `#F8F7F4`, Stone Control `#FBFBFA`, Ink `#1E1E1E`, Warm Stone Muted `#6B6862`, Warm Hairline `#E3DFD7`, Carbon Primary `#18181B`, Signal Blue `#155DFC`, Signal Blue Soft `#E8F3FF`, Emerald Success `#059669`, Warning `#D08700`, Destructive `#E7000B`, Warm Stone Chrome `#F0EDE6`.
+- **Prompt: settings page**: a centered `1024pt` column with `32pt` padding, a `24pt` bold page title, then elevated `16pt`-radius cards with warm hairline borders, soft card shadows, and `24pt` padding. Each card holds a `16pt` semibold section heading, then full-row switches with the label left and a `40pt` track right, separated by hairline dividers.
+- **Prompt: master-detail list**: a resizable `240pt` warm off-white (`#F8F7F4`) left rail with a `56pt` borderless header holding a title, count pill, and primary `+` icon button, and a scrollable list of `12pt`-radius rows where the selected item lifts onto a pure white bordered card with a soft shadow. The right pane is a `56pt` borderless header with a badged provider icon, record name, and `启用 [Switch]`, then `16pt`-radius shadowed cards for connection fields (`12pt`-radius inputs/selects) and a `12pt`-radius table with a light stone header.
+- **Prompt: translate panel**: an empty state with a `30pt` bold headline and a muted hint, an input row of `36pt` height with `12pt` radius, and a muted footer row of `12pt` metadata with icon buttons of `32pt`. Warm neutral palette, one blue brand-ghost action.
 
 ## 7. Motion Inventory
 
@@ -180,3 +182,14 @@ Recorded before editing the channel editor header. Every entry reuses an existin
 | Connection result appears or clears beside the Connection heading | Instant swap. The existing success or error toast still carries `motion.toastTransition` and `motion.toastStack`. Reduced motion does not change the swap. |
 | A truncated status badge is hovered                               | The shared `buildTooltip` bubble and its `motion.tooltip` transition. Instant with reduced motion.                                                         |
 | Test button label switches between Test connection and Testing…   | Instant label and disabled-state swap; the button keeps `motion.pressScale`. Reduced motion removes the press scale.                                       |
+
+### Warm Stone Theme & Elevated Card Styling
+
+Recorded before editing `theme.json`, `nsh.json`, `components/ui/*`, and the workspace screens. Every entry reuses existing motion tokens in `components/motion.ts`.
+
+| State change                                                              | Tool and reduced motion                                                                                                                                               |
+| ------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Sidebar destination, rail row, button, select, or input hover/focus/press | Existing `motion.navigationFeedback` (150ms easeOut color/wash) and `motion.pressScale` (0.95 active scale, 150ms easeOut). Reduced motion removes transitions/scale. |
+| Rail selection changes (channels, presets, settings sections)             | Instant surface swap onto `bg-card` with `shadow-card` (`dark:shadow-card-dark`) and `border-border` over `bg-surface-rail`. Reduced motion keeps the swap.           |
+| Inline and row switches toggle                                            | Existing `motion.switchThumb` (150ms easeOut thumb translation) and `motion.navigationFeedback` track color transition. Reduced motion makes the change instant.      |
+| Card, table row, or dialog reveal                                         | Elevated cards rest statically with `shadow-card`; dialogs keep `motion.dialogAnimation` (`"fade"`); popups keep `motion.popup`. Reduced motion removes fade/slide.   |

@@ -23,7 +23,7 @@ export function FormField(props: FormFieldProps) {
           tooltip={
             props.tooltip ? buildTooltip(props.tooltip, "top", { align: "start" }) : undefined
           }
-          class="text-xs font-medium text-foreground"
+          class="text-xs font-semibold text-muted-foreground"
         >
           {props.label}
         </Text>

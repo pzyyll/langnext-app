@@ -24,6 +24,7 @@ interface InputProps {
   clearLabel?: string;
   trailing?: JSX.Element;
   class?: string;
+  inputClass?: string;
   onChange?: (value: string) => void;
   onSubmit?: (text: string) => void;
   onKeyPress?: (key: string) => void;
@@ -39,7 +40,7 @@ export function Input(props: InputProps) {
 
   return (
     <View
-      class={`flex-row items-center rounded-lg border border-input bg-background pl-3 focus-within:border-ring focus-within:ring-2 focus-within:ring-ring ${heightClass()} ${motion.navigationFeedback} ${props.class ?? ""}`}
+      class={`flex-row items-center rounded-xl border border-input bg-surface-control pl-3 focus-within:border-ring focus-within:bg-card focus-within:ring-2 focus-within:ring-ring ${heightClass()} ${motion.navigationFeedback} ${props.class ?? ""}`}
       classList={{
         "opacity-60": Boolean(props.disabled || props.readonly),
         "pr-1": props.trailing !== undefined,
@@ -68,7 +69,7 @@ export function Input(props: InputProps) {
         onKeyPress={({ key }) => props.onKeyPress?.(key)}
         onFocus={() => props.onFocus?.()}
         onBlur={() => props.onBlur?.()}
-        class={`min-w-0 flex-1 bg-transparent text-foreground placeholder:text-muted-foreground ${textClass()}`}
+        class={`min-w-0 flex-1 bg-transparent text-foreground placeholder:text-muted-foreground ${textClass()} ${props.inputClass ?? ""}`}
       />
       <If when={props.onClear !== undefined && (props.value ?? "").length > 0}>
         <Button

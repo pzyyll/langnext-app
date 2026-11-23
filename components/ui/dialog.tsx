@@ -44,7 +44,7 @@ export function AppDialog(props: AppDialogProps) {
       closeOnEscape={props.closeOnEscape ?? true}
       closeOnBackdropPress={props.closeOnBackdropPress ?? true}
       backdropClass="bg-overlay"
-      class={`m-auto max-w-full overflow-hidden rounded-2xl border border-border bg-background ${SIZE_CLASSES[props.size ?? "sm"]}`}
+      class={`m-auto max-w-full overflow-hidden rounded-2xl border border-border bg-background shadow-xl ${SIZE_CLASSES[props.size ?? "sm"]}`}
     >
       <View class="border-b border-border px-5 py-3">
         <Text role="header" class="text-sm font-medium text-foreground">

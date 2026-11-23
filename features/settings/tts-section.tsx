@@ -478,7 +478,7 @@ function TtsChannelList(props: TtsChannelListProps) {
                       };
                     }}
                     style={{ translate: [0, offsets[channel()]] }}
-                    class={`flex-row items-center gap-1.5 rounded-lg pr-2 ${motion.navigationFeedback} ${
+                    class={`flex-row items-center gap-1.5 rounded-xl pr-2 ${motion.navigationFeedback} ${
                       dragging() === channel()
                         ? "z-10 cursor-grabbing bg-card shadow-md"
                         : "hover:bg-accent/60 active:bg-accent"

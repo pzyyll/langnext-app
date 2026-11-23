@@ -164,8 +164,10 @@ export function EditModelDialog(props: EditModelDialogProps) {
       <If when={props.model}>
         {(model) => (
           <>
-            <View class="rounded-lg border border-border bg-muted px-3 py-2">
-              <Text class="text-xs font-medium text-muted-foreground">{model().modelKey}</Text>
+            <View class="rounded-xl border border-border bg-surface-subtle px-3 py-2">
+              <Text class="font-mono text-xs font-medium text-muted-foreground">
+                {model().modelKey}
+              </Text>
             </View>
 
             <FormField label={t("common.displayName")}>

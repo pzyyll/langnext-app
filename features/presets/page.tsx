@@ -495,24 +495,29 @@ export function PresetsPage(props: PresetsPageProps) {
         page="presets"
         handleAccessibilityLabel={t("presets.list.resizeLabel")}
         rail={
-          <View testID="presets-rail" class="min-w-0 flex-1 bg-background">
+          <View testID="presets-rail" class="min-w-0 flex-1 bg-surface-rail">
             <View class="h-14 shrink-0 flex-row items-center justify-between gap-2 px-4">
-              <Text role="header" class="min-w-0 truncate text-sm font-semibold text-foreground">
-                {t("presets.list.title")}
-              </Text>
+              <View class="min-w-0 flex-1 flex-row items-center gap-2">
+                <Text role="header" class="min-w-0 truncate text-sm font-semibold text-foreground">
+                  {t("presets.list.title")}
+                </Text>
+                <If when={presetsStore.records().length > 0}>
+                  <Badge label={String(presetsStore.records().length)} tone="neutral" pill />
+                </If>
+              </View>
               <Button
                 testID="add-preset-button"
                 ref={(node) => {
                   railAddButtonRef = node;
                 }}
-                variant="ghost"
+                variant="primary"
                 size="icon-sm"
                 disabled={!isReady() || presetsStore.mutating()}
                 tooltip={t("presets.action.add")}
                 accessibilityLabel={t("presets.action.add")}
                 onPress={() => openAddDialog(railAddButtonRef)}
               >
-                <Icon name="plus" tone="foreground" class="size-4" />
+                <Icon name="plus" tone="primary-foreground" class="size-4" />
               </Button>
             </View>
 
@@ -555,15 +560,15 @@ export function PresetsPage(props: PresetsPageProps) {
                     >
                       <View class="min-h-0 flex-1">
                         <If when={isNewDraft()}>
-                          <View class="px-2 pb-1">
+                          <View class="px-2.5 pt-2.5">
                             <View
                               testID="preset-draft-item"
-                              class={`min-h-11 flex-row items-center gap-2.5 rounded-lg border border-border bg-accent px-2 py-1.5 ${motion.navigationFeedback}`}
+                              class={`min-h-11 flex-row items-center gap-2.5 rounded-xl border border-border bg-card px-2.5 py-1.5 shadow-card dark:shadow-card-dark ${motion.navigationFeedback}`}
                             >
                               <View class="w-4 shrink-0" />
                               <View class="min-w-0 flex-1 gap-0.5">
                                 <View class="flex-row items-center gap-1.5">
-                                  <Text class="min-w-0 shrink truncate text-sm font-medium text-foreground">
+                                  <Text class="min-w-0 shrink truncate text-sm font-semibold text-foreground">
                                     {draftSignal()?.name.trim() || t("presets.editor.untitled")}
                                   </Text>
                                   <Badge tone="warning" label={t("presets.editor.unsaved")} />
@@ -581,7 +586,7 @@ export function PresetsPage(props: PresetsPageProps) {
                             each={presetsStore.records()}
                             keyExtractor={(item) => item.id}
                             estimatedItemSize={56}
-                            contentClass="gap-1 px-2 pb-2"
+                            contentClass="gap-1.5 px-2.5 py-2.5"
                             class="min-h-0 flex-1"
                           >
                             {(preset) => {
@@ -601,10 +606,11 @@ export function PresetsPage(props: PresetsPageProps) {
                                 !isNewDraft() && selectedIdSignal() === preset().id;
                               return (
                                 <View
-                                  class={`rounded-lg border ${motion.navigationFeedback}`}
+                                  class={`rounded-xl border ${motion.navigationFeedback}`}
                                   classList={{
-                                    "border-border bg-accent": isSelected(),
-                                    "border-transparent hover:bg-accent/50 active:bg-accent":
+                                    "border-border bg-card shadow-card dark:shadow-card-dark":
+                                      isSelected(),
+                                    "border-transparent hover:bg-accent/70 active:bg-accent":
                                       !isSelected(),
                                   }}
                                 >
@@ -624,7 +630,7 @@ export function PresetsPage(props: PresetsPageProps) {
                                         : t("presets.list.disabled"),
                                     })}
                                     onPress={() => selectSavedPreset(preset().id)}
-                                    class="w-full min-w-0 flex-1 hover:bg-transparent active:bg-transparent"
+                                    class="w-full min-w-0 flex-1 hover:bg-transparent active:bg-transparent selected:bg-transparent"
                                   >
                                     <View class="w-4 shrink-0 items-center justify-center">
                                       <If
@@ -637,7 +643,7 @@ export function PresetsPage(props: PresetsPageProps) {
                                           />
                                         }
                                       >
-                                        <Icon name="check-circle" tone="success" class="size-3.5" />
+                                        <Icon name="check-circle" tone="success" class="size-4" />
                                       </If>
                                     </View>
                                     <View class="min-w-0 flex-1 gap-0.5">
@@ -645,7 +651,7 @@ export function PresetsPage(props: PresetsPageProps) {
                                         <Text
                                           class={
                                             isSelected()
-                                              ? "min-w-0 shrink truncate text-sm font-medium text-accent-foreground"
+                                              ? "min-w-0 shrink truncate text-sm font-semibold text-foreground"
                                               : preset().enabled
                                                 ? "min-w-0 shrink truncate text-sm font-medium text-foreground"
                                                 : "min-w-0 shrink truncate text-sm text-muted-foreground"

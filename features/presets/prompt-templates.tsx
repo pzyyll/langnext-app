@@ -34,7 +34,7 @@ const TEMPLATE_VARIABLES = "{{source_language}}, {{target_language}}, {{text}}";
 /** Editor card for managing multiple named prompt templates and the preset's default template. */
 export function PromptTemplates(props: PromptTemplatesProps) {
   const compact = () => windowSize().width < 860;
-  const cardClass = () => (compact() ? "gap-4 p-4" : "gap-5 p-5");
+  const cardClass = () => (compact() ? "gap-4 p-4" : "gap-5 p-6");
 
   const activeTemplate = (): PromptTemplate | null =>
     props.templates.find((tpl) => tpl.id === props.selectedTemplateId) ??
@@ -87,10 +87,10 @@ export function PromptTemplates(props: PromptTemplatesProps) {
                 tpl().name.trim() || t("presets.prompt.numberedName", { index: index() + 1 });
               return (
                 <View
-                  class={`rounded-lg border ${motion.navigationFeedback}`}
+                  class={`rounded-xl border ${motion.navigationFeedback}`}
                   classList={{
-                    "border-border bg-accent": isSelected(),
-                    "border-transparent hover:bg-accent/50 active:bg-accent": !isSelected(),
+                    "border-border bg-surface-subtle": isSelected(),
+                    "border-transparent hover:bg-accent/70 active:bg-accent": !isSelected(),
                   }}
                 >
                   <Button
@@ -100,7 +100,7 @@ export function PromptTemplates(props: PromptTemplatesProps) {
                     selected={isSelected()}
                     accessibilityLabel={label()}
                     onPress={() => props.onSelectTemplate(tpl().id)}
-                    class="w-full min-w-0 flex-1 hover:bg-transparent active:bg-transparent"
+                    class="w-full min-w-0 flex-1 hover:bg-transparent active:bg-transparent selected:bg-transparent"
                   >
                     <View class="min-w-0 flex-1 flex-row items-center justify-between gap-2">
                       <Text class="min-w-0 flex-1 truncate text-sm font-medium text-foreground">
@@ -129,7 +129,7 @@ export function PromptTemplates(props: PromptTemplatesProps) {
               const isDefault = () => tpl().id === props.defaultTemplateId;
               const canRemove = () => !props.saving && props.templates.length > 1 && !isDefault();
               return (
-                <View class="gap-4 rounded-xl border border-border bg-background/60 p-4">
+                <View class="gap-4 rounded-xl border border-border bg-surface-subtle/60 p-4">
                   <View class="flex-row flex-wrap items-center justify-end gap-2">
                     <Button
                       testID="preset-template-set-default"
