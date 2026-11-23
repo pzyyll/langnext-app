@@ -689,7 +689,7 @@ test("language detection: localizes the empty state and the first-channel action
 
   expect(app.texts()).toContain("暂未添加任何语言检测渠道");
   expect(app.texts()).toContain("可添加的渠道");
-  expect(app.shows("role:button[添加 AI]")).toBe(true);
+  expect(app.shows("role:button[添加 多模态模型]")).toBe(true);
   expect(app.shows("role:button[添加 Google]")).toBe(true);
   expect(app.shows("role:button[添加 Google Cloud]")).toBe(true);
 
@@ -1097,7 +1097,7 @@ test("language detection: localizes detector labels and preference help in both 
 
   await app.press("id:settings-detection-add");
   await app.waitFor("id:settings-detection-add-dialog");
-  expect(app.texts()).toContain("AI");
+  expect(app.texts()).toContain("LLM");
   expect(app.texts()).toContain("Google");
   expect(app.texts()).toContain("Google Cloud");
   await app.press("id:settings-detection-option-google");
@@ -1118,6 +1118,11 @@ test("language detection: localizes detector labels and preference help in both 
   expect(app.texts()).toContain("语言检测");
   expect(app.texts()).toContain("添加渠道");
   expect(app.texts()).toContain("免费的 Google 翻译接口");
+  await app.press("id:settings-detection-add");
+  await app.waitFor("id:settings-detection-add-dialog");
+  expect(app.texts()).toContain("多模态模型");
+  await app.press("id:settings-detection-add-cancel");
+  await app.waitUntil(() => !app.shows("id:settings-detection-add-dialog"));
   expect(app.texts()).toContain("自动检测语言偏好");
   expect(app.texts()).toContain("母语");
   expect(app.texts()).toContain("目标语言");

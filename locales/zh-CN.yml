@@ -271,7 +271,7 @@ settings:
   languageDetection:
     title: 语言检测
     addChannel: 添加渠道
-    ai: AI
+    ai: 多模态模型
     google: Google
     googleSummary: 免费的 Google 翻译接口
     "google-cloud": Google Cloud
@@ -313,7 +313,7 @@ settings:
       storageMalformed: 已保存的语言检测设置无法解析。
       storageUnsupportedVersion: 已保存的语言检测设置版本不受支持。
       storageWriteFailed: 无法保存语言检测设置，请检查存储后重试。
-      modelIdBlank: 请为 AI 检测器选择模型。
+      modelIdBlank: 请为多模态模型检测器选择模型。
       googleCloudKeyRequired: 请填写 Google Cloud API Key。
       detectorUnconfigured: 请先配置此检测器再启用。
       preferenceInvalid: 请选择受支持的语言。

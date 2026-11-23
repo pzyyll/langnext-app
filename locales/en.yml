@@ -271,7 +271,7 @@ settings:
   languageDetection:
     title: Language Detection
     addChannel: Add Channel
-    ai: AI
+    ai: LLM
     google: Google
     googleSummary: Free Google Translate endpoint
     "google-cloud": Google Cloud
@@ -313,7 +313,7 @@ settings:
       storageMalformed: The saved language detection settings are unreadable.
       storageUnsupportedVersion: The saved language detection settings use an unsupported version.
       storageWriteFailed: Could not save the language detection settings. Check storage and try again.
-      modelIdBlank: Choose a model for the AI detector.
+      modelIdBlank: Choose a model for the LLM detector.
       googleCloudKeyRequired: Enter a Google Cloud API key.
       detectorUnconfigured: Configure this detector before enabling it.
       preferenceInvalid: Choose a supported language.
