@@ -543,11 +543,12 @@ export function PresetsPage(props: PresetsPageProps) {
                           <View class="px-2 pb-1">
                             <View
                               testID="preset-draft-item"
-                              class={`flex-row items-center gap-2 rounded-lg border border-border bg-accent px-2.5 py-2 ${motion.navigationFeedback}`}
+                              class={`min-h-11 flex-row items-center gap-2.5 rounded-lg border border-border bg-accent px-2 py-1.5 ${motion.navigationFeedback}`}
                             >
+                              <View class="w-4 shrink-0" />
                               <View class="min-w-0 flex-1 gap-0.5">
                                 <View class="flex-row items-center gap-1.5">
-                                  <Text class="min-w-0 flex-1 truncate text-sm font-medium text-foreground">
+                                  <Text class="min-w-0 shrink truncate text-sm font-medium text-foreground">
                                     {draftSignal()?.name.trim() || t("presets.editor.untitled")}
                                   </Text>
                                   <Badge tone="warning" label={t("presets.editor.unsaved")} />
@@ -616,19 +617,39 @@ export function PresetsPage(props: PresetsPageProps) {
                                     onPress={() => selectSavedPreset(preset().id)}
                                     class="w-full min-w-0 flex-1 hover:bg-transparent active:bg-transparent"
                                   >
+                                    <View class="w-4 shrink-0 items-center justify-center">
+                                      <If
+                                        when={preset().enabled}
+                                        else={
+                                          <Icon
+                                            name="minus"
+                                            tone="muted-foreground"
+                                            class="size-3.5 opacity-60"
+                                          />
+                                        }
+                                      >
+                                        <Icon name="check-circle" tone="success" class="size-3.5" />
+                                      </If>
+                                    </View>
                                     <View class="min-w-0 flex-1 gap-0.5">
                                       <View class="flex-row items-center gap-1.5">
-                                        <Text class="min-w-0 flex-1 truncate text-sm font-medium text-foreground">
+                                        <Text
+                                          class={
+                                            isSelected()
+                                              ? "min-w-0 shrink truncate text-sm font-medium text-accent-foreground"
+                                              : preset().enabled
+                                                ? "min-w-0 shrink truncate text-sm font-medium text-foreground"
+                                                : "min-w-0 shrink truncate text-sm text-muted-foreground"
+                                          }
+                                        >
                                           {preset().name}
                                         </Text>
-                                        <Badge
-                                          tone={preset().enabled ? "success" : "neutral"}
-                                          label={
-                                            preset().enabled
-                                              ? t("presets.list.enabled")
-                                              : t("presets.list.disabled")
-                                          }
-                                        />
+                                        <If when={!preset().enabled}>
+                                          <Badge
+                                            tone="neutral"
+                                            label={t("presets.list.disabled")}
+                                          />
+                                        </If>
                                       </View>
                                       <Text class="truncate text-xs text-muted-foreground">
                                         {summarizePreset(preset())}
