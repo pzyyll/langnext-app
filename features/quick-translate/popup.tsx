@@ -75,7 +75,7 @@ function RetryIconButton(props: { testID: string; onPress: () => void }) {
 function SpeakerButton(props: {
   testID: string;
   disabled: boolean;
-  tooltip: string;
+  tooltip?: string;
   label: string;
   icon: "speaker-one" | "close-circle" | "pause";
   onPress: () => void;
@@ -226,7 +226,7 @@ interface PresetCardRowProps {
   onCopy: (cardId: string) => void;
   speakState: Accessor<{
     disabled: boolean;
-    tooltip: string;
+    tooltip?: string;
     label: string;
     icon: "speaker-one" | "close-circle" | "pause";
   }>;
@@ -545,14 +545,6 @@ export function QuickTranslatePopup(props: QuickTranslatePopupProps) {
   let activeCredential = "";
   const activeSpeech = () => ttsSettingsStore.activeBinding();
   const speakEnabled = () => activeSpeech() !== null;
-  const speakTooltip = () => {
-    const active = activeSpeech();
-    if (active === null) return t("quickTranslate.speakOff");
-    const name = t(
-      active.channel === "azure" ? "settings.tts.azure.channel" : "settings.tts.channel",
-    );
-    return t("quickTranslate.speakSending", { name });
-  };
   const credentialSignature = () => {
     const active = activeSpeech();
     if (active === null) return "";
@@ -762,8 +754,8 @@ export function QuickTranslatePopup(props: QuickTranslatePopupProps) {
     }
     return {
       disabled: !speakEnabled(),
-      tooltip: speakTooltip(),
-      label: speakEnabled() ? t("quickTranslate.speak") : speakTooltip(),
+      tooltip: speakEnabled() ? undefined : t("quickTranslate.speakOff"),
+      label: speakEnabled() ? t("quickTranslate.speak") : t("quickTranslate.speakOff"),
       icon: "speaker-one" as const,
       busy: false,
     };

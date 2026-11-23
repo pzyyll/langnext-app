@@ -1992,8 +1992,6 @@ test("quick tts: speaks through Azure and shows a rate limit without fallback", 
   await source.keyboard.press("shift+enter");
   await source.type("id:quick-translate-source", "world");
   await source.waitUntil(() => source.enabled("id:quick-translate-speak-source"));
-  await source.hover("id:quick-translate-speak-source");
-  await source.waitUntil(() => source.texts().includes("Sends this text to Azure Speech."));
   await source.press("id:quick-translate-speak-source");
   await source.waitUntil(() => source.requests().length === 1);
   const spoken = source.requests()[0]!;

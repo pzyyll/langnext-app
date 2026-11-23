@@ -699,7 +699,6 @@ quickTranslate:
   speakUnsupportedAzure: 此语言没有 Azure 语音。
   speakTooLongAzure: 请缩短文字。本应用发给 Azure 的文本最多 5000 字节。
   speakInvalidText: 这段文字含有 Azure 语音无法朗读的字符。
-  speakSending: 将这段文字发送到 %{name}。
   speakChooseSource: 请先选择源语言。
   speakUnsupported: 此语言没有 Google Cloud 语音合成的语音。
   speakVoiceUnavailable: 该语言已保存的语音已不可用。请在设置中重新选择。

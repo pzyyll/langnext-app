@@ -699,7 +699,6 @@ quickTranslate:
   speakUnsupportedAzure: This language has no Azure Speech voice.
   speakTooLongAzure: Shorten the text. This app sends at most 5,000 bytes to Azure.
   speakInvalidText: This text contains characters Azure Speech cannot read.
-  speakSending: Sends this text to %{name}.
   speakChooseSource: Choose a source language.
   speakUnsupported: This language has no Google Cloud Text-to-Speech voice.
   speakVoiceUnavailable: The saved voice for this language is no longer available. Choose another voice in Settings.
