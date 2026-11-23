@@ -1,6 +1,7 @@
 import {
   cleanup,
   effect,
+  Image,
   platform,
   signal,
   Text,
@@ -20,6 +21,7 @@ import { Menu, MenuItem } from "../../components/ui/menu";
 import { Select, type SelectItem } from "../../components/ui/select";
 import { Textarea } from "../../components/ui/textarea";
 import { TranslationOutput } from "../../components/ui/translation-output";
+import googleCloudIcon from "../../assets/icons/google-cloud.svg";
 import { ProviderMark } from "../../modules/ai/ui/provider-mark";
 import { providerSettingsRegistry } from "../../modules/ai/ui/registry";
 import { languageResolutionErrorMessage } from "../language-detection/messages";
@@ -205,8 +207,23 @@ function PresetLeadingMark(props: { preset: TranslationPreset | null }) {
     <If
       when={props.preset?.engine.kind === "deepl"}
       else={
-        <If when={providerIcon()} else={<View class="size-1.5 shrink-0 rounded-full bg-brand" />}>
-          {(asset) => <ProviderMark icon={asset()} class="size-3 shrink-0" />}
+        <If
+          when={props.preset?.engine.kind === "google-cloud"}
+          else={
+            <If
+              when={providerIcon()}
+              else={<View class="size-1.5 shrink-0 rounded-full bg-brand" />}
+            >
+              {(asset) => <ProviderMark icon={asset()} class="size-3 shrink-0" />}
+            </If>
+          }
+        >
+          <Image
+            testID="quick-translate-preset-mark-google"
+            src={googleCloudIcon}
+            accessibilityElementsHidden={true}
+            class="size-3 shrink-0 overflow-hidden"
+          />
         </If>
       }
     >

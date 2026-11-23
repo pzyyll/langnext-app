@@ -120,3 +120,14 @@ Recorded for the Google voice settings before editing its TSX. Every entry reuse
 - Hover, press, and focus: Use the shared brand-ghost button and `motion.pressScale`. Reduced motion removes the transition and press scale.
 - Markdown on or off: Swap the outline and filled icons in place and change the selected background and tint. Keep focus on the button. Reflow the result in the existing scroll region, with no enter or exit animation.
 - Streaming and completion: Update the result in place and keep the current scroll region. Do not add a caret, progress animation, or new overlay. Reduced motion does not change the text updates.
+
+### Google Cloud Translation presets and card
+
+Recorded before editing the Presets and Quick Translate TSX. Every entry reuses an existing token from `components/motion.ts`; the change adds no decorative motion.
+
+| State change                                                         | Tool and reduced motion                                                                                                                                                                             |
+| -------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Picker or discard dialog opens and closes                            | `AppDialog` with `motion.dialogAnimation`; instant with reduced motion. Focus returns to the trigger or moves to the new draft name.                                                                |
+| Option and action hover or press; rail selection; enabled switch     | `motion.pressScale`, `motion.navigationFeedback`, and `motion.switchThumb` from the existing controls. Reduced motion removes transitions and scale; focus stays visible.                           |
+| Draft and saved editor, key placeholder, validation, save and delete | Existing editor swap, field feedback, and save toast (`motion.toastTransition`, `motion.toastStack`). Form layout and errors do not animate. Reduced motion removes toast movement.                 |
+| Card picker and translation result                                   | Existing Select popup transition and loading/result states. Loading is replaced by the complete result or inline error. No streaming, progress animation, gesture, sound, or new layout transition. |

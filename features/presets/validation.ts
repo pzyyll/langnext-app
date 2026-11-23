@@ -107,7 +107,8 @@ function validatePromptBody(
 /** A validated engine plus the plaintext key the store persists outside the preset record. */
 export type ValidatedPresetEngine =
   | { kind: "ai"; engine: AiPresetEngine }
-  | { kind: "deepl"; apiKey: string | null };
+  | { kind: "deepl"; apiKey: string | null }
+  | { kind: "google-cloud"; apiKey: string | null };
 
 export interface ValidatedPresetPayload {
   name: string;
@@ -115,20 +116,21 @@ export interface ValidatedPresetPayload {
   engine: ValidatedPresetEngine;
 }
 
-/** Reads an optional DeepL key for save: blank keeps the stored key, embedded whitespace is invalid. */
-function parseDeepLApiKey(raw: unknown): string | null {
+/** Reads an optional credential key for save: blank keeps the stored key, embedded whitespace is invalid. */
+function parseCredentialApiKey(raw: unknown, field: "deeplKey" | "googleCloudKey"): string | null {
+  const invalidKey = field === "deeplKey" ? "deepl_key_invalid" : "google_cloud_key_invalid";
+  const invalidMessage =
+    field === "deeplKey"
+      ? t("presets.error.deeplKeyInvalid")
+      : t("presets.error.googleCloudKeyInvalid");
   if (raw === null || raw === undefined) return null;
   if (typeof raw !== "string") {
-    throw new PresetsStoreError("deepl_key_invalid", t("presets.error.deeplKeyInvalid"), {
-      field: "deeplKey",
-    });
+    throw new PresetsStoreError(invalidKey, invalidMessage, { field });
   }
   const trimmed = raw.trim();
   if (trimmed.length === 0) return null;
   if (/\s/.test(trimmed)) {
-    throw new PresetsStoreError("deepl_key_invalid", t("presets.error.deeplKeyInvalid"), {
-      field: "deeplKey",
-    });
+    throw new PresetsStoreError(invalidKey, invalidMessage, { field });
   }
   return trimmed;
 }
@@ -146,7 +148,12 @@ export function validatePresetForSave(
     });
   }
 
-  if (!input.engine || (input.engine.kind !== "ai" && input.engine.kind !== "deepl")) {
+  if (
+    !input.engine ||
+    (input.engine.kind !== "ai" &&
+      input.engine.kind !== "deepl" &&
+      input.engine.kind !== "google-cloud")
+  ) {
     throw new PresetsStoreError("engine_unsupported", t("presets.error.engineUnsupported"));
   }
 
@@ -155,7 +162,7 @@ export function validatePresetForSave(
   }
 
   if (input.engine.kind === "deepl") {
-    const apiKey = parseDeepLApiKey(input.engine.apiKey);
+    const apiKey = parseCredentialApiKey(input.engine.apiKey, "deeplKey");
     const hasStoredKey =
       existing !== null &&
       existing.engine.kind === "deepl" &&
@@ -169,6 +176,26 @@ export function validatePresetForSave(
       name,
       enabled: Boolean(input.enabled),
       engine: { kind: "deepl", apiKey },
+    };
+  }
+
+  if (input.engine.kind === "google-cloud") {
+    const apiKey = parseCredentialApiKey(input.engine.apiKey, "googleCloudKey");
+    const hasStoredKey =
+      existing !== null &&
+      existing.engine.kind === "google-cloud" &&
+      existing.engine.credentialRef.length > 0;
+    if (!hasStoredKey && apiKey === null) {
+      throw new PresetsStoreError(
+        "google_cloud_key_required",
+        t("presets.error.googleCloudKeyRequired"),
+        { field: "googleCloudKey" },
+      );
+    }
+    return {
+      name,
+      enabled: Boolean(input.enabled),
+      engine: { kind: "google-cloud", apiKey },
     };
   }
 

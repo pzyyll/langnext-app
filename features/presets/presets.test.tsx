@@ -7,7 +7,11 @@ import {
   makeModel,
   makeSeedStorage,
 } from "../models/__tests__/fixtures";
-import { deepLCredentialStorageKey, PRESETS_STORAGE_KEY } from "./store";
+import {
+  deepLCredentialStorageKey,
+  googleCloudCredentialStorageKey,
+  PRESETS_STORAGE_KEY,
+} from "./store";
 import type { AiPresetEngine, TranslationPreset } from "./types";
 
 const DEEPL_USAGE_ROUTE = "GET https://api-free.deepl.com/v2/usage";
@@ -24,7 +28,7 @@ function makeDeepLPresetRecord(id: string, name: string, credentialRef: string):
 }
 
 /** Picks a preset type in the Add Preset picker and waits for the editor. */
-async function choosePresetType(app: App, kind: "ai" | "deepl") {
+async function choosePresetType(app: App, kind: "ai" | "deepl" | "google-cloud") {
   await app.waitFor("id:add-preset-dialog");
   await app.press(`id:preset-type-${kind}`);
   await app.waitUntil(() => !app.shows("id:add-preset-dialog"));
@@ -249,6 +253,7 @@ test("presets ui: preset type", async () => {
   await emptyApp.waitFor("id:add-preset-dialog");
   expect(emptyApp.shows("id:preset-type-ai")).toBe(true);
   expect(emptyApp.shows("id:preset-type-deepl")).toBe(true);
+  expect(emptyApp.shows("id:preset-type-google-cloud")).toBe(true);
   await emptyApp.press("id:preset-type-cancel");
   await emptyApp.waitUntil(() => !emptyApp.shows("id:add-preset-dialog"));
   expect(emptyApp.shows("id:empty-add-preset-button")).toBe(true);
@@ -436,6 +441,7 @@ test("presets ui: picker and DeepL editor fit compact dark zh-CN with reduced mo
   await app.waitFor("id:add-preset-dialog");
   expect(app.shows("id:preset-type-ai >> text:AI 翻译")).toBe(true);
   expect(app.shows("id:preset-type-deepl >> text:DeepL API")).toBe(true);
+  expect(app.shows("id:preset-type-google-cloud >> text:Google Cloud 翻译")).toBe(true);
 
   await app.press("id:preset-type-deepl");
   await app.waitUntil(() => !app.shows("id:add-preset-dialog"));
@@ -1251,4 +1257,65 @@ test("presets ui: resizes the presets split divider and persists width independe
   await reopened.waitFor("id:presets-rail");
   expect(reopened.storage()[SPLIT_RAIL_STORAGE_KEYS.presets]).toBe(String(resized));
   expect(reopened.storage()[SPLIT_RAIL_STORAGE_KEYS.models]).toBe("210");
+});
+
+test("presets ui: Google Cloud", async () => {
+  const app = await open(APP_ENTRY, {
+    ...viewport,
+    locale: "en-US",
+    storage: makeSeedStorage({}),
+  });
+  await app.press("id:nav-presets");
+  await app.waitFor("id:empty-add-preset-button");
+  await app.press("id:empty-add-preset-button");
+  await app.waitFor("id:add-preset-dialog");
+  expect(app.shows("id:preset-type-google-cloud")).toBe(true);
+  await app.press("id:preset-type-google-cloud");
+  await app.waitUntil(() => !app.shows("id:add-preset-dialog"));
+  await app.waitFor("id:preset-google-cloud-api-key");
+
+  // A Google Cloud preset needs no model, language, or prompt input.
+  expect(app.shows("id:preset-primary-model")).toBe(false);
+  expect(app.shows("id:preset-temperature")).toBe(false);
+  expect(app.shows("id:preset-template-name")).toBe(false);
+  expect(app.shows("id:preset-source-language")).toBe(false);
+  expect(app.value("id:preset-google-cloud-api-key")).toBe("");
+  expect(app.texts()).toContain(t("presets.googleCloud.storageNotice"));
+  expect(app.requests()).toHaveLength(0);
+
+  await app.type("id:preset-name", "Google Cloud");
+
+  // Saving without a key focuses the key field and writes no preset.
+  await app.press("id:preset-save");
+  await app.waitUntil(() => app.texts().includes(t("presets.error.googleCloudKeyRequired")));
+  expect(app.storage()[PRESETS_STORAGE_KEY]).toBeUndefined();
+  await app.keyboard.press("g");
+  expect(app.value("id:preset-google-cloud-api-key")).toBe("g");
+  await app.clear("id:preset-google-cloud-api-key");
+  await app.type("id:preset-google-cloud-api-key", "google-test-key");
+
+  await app.press("id:preset-save");
+  await app.waitUntil(() => Boolean(app.storage()[PRESETS_STORAGE_KEY]));
+  expect(app.requests()).toHaveLength(0);
+  expect(app.texts()).toContain("Google Cloud Translation");
+  const raw = app.storage()[PRESETS_STORAGE_KEY]!;
+  expect(raw).not.toContain("google-test-key");
+  const items = JSON.parse(raw).items as TranslationPreset[];
+  expect(items[0]!.engine.kind).toBe("google-cloud");
+  const ref = items[0]!.engine.kind === "google-cloud" ? items[0]!.engine.credentialRef : "";
+  expect(ref.length).toBeGreaterThan(0);
+  expect(app.storage()[googleCloudCredentialStorageKey(ref)]).toBe("google-test-key");
+
+  // Reopening shows the stored-key state, not the key, and stays clean.
+  const reopened = await open(APP_ENTRY, {
+    ...viewport,
+    locale: "en-US",
+    storage: app.storage(),
+  });
+  await reopened.press("id:nav-presets");
+  await reopened.waitFor("id:preset-google-cloud-api-key");
+  expect(reopened.value("id:preset-google-cloud-api-key")).toBe("");
+  expect(reopened.enabled("id:preset-save")).toBe(false);
+  expect(reopened.texts()).toContain("Google Cloud Translation");
+  expect(reopened.requests()).toHaveLength(0);
 });

@@ -13,7 +13,7 @@ import { PromptTemplates, type TemplateEditableField } from "./prompt-templates"
 import type { ModelChoice, PresetValidationField, PromptTemplate } from "./types";
 
 export type FocusableEditorField =
-  | { kind: "name" | "temperature" | "maxOutputTokens" | "deeplKey" }
+  | { kind: "name" | "temperature" | "maxOutputTokens" | "deeplKey" | "googleCloudKey" }
   | { kind: "template"; templateId: string; field: TemplateEditableField };
 
 interface PresetEditorProps {
@@ -36,6 +36,7 @@ interface PresetEditorProps {
   onManageModels: () => void;
   onNameRef: (node: InputRef) => void;
   onDeepLKeyRef: (node: InputRef) => void;
+  onGoogleCloudKeyRef: (node: InputRef) => void;
   onPrimaryModelRef: (node: ViewRef) => void;
   onFallbackRef: (index: number, node: ViewRef | null) => void;
   onTemperatureRef: (node: InputRef) => void;
@@ -58,13 +59,17 @@ export function PresetEditor(props: PresetEditorProps) {
   const canSave = () => {
     if (props.saving) return false;
     if (props.draft.sourceId === null) {
-      if (props.draft.engineKind === "deepl") return true;
+      if (props.draft.engineKind === "deepl" || props.draft.engineKind === "google-cloud") {
+        return true;
+      }
       return props.modelChoices.length > 0 && props.modelsError === null;
     }
     return props.dirty;
   };
 
   const isDeepL = () => props.draft.engineKind === "deepl";
+  const isGoogleCloud = () => props.draft.engineKind === "google-cloud";
+  const isCredentialEngine = () => isDeepL() || isGoogleCloud();
 
   const canCancel = () => {
     if (props.saving) return false;
@@ -213,7 +218,7 @@ export function PresetEditor(props: PresetEditorProps) {
             </FormField>
           </Card>
 
-          <If when={!isDeepL()}>
+          <If when={!isCredentialEngine()}>
             <ModelsSection
               primaryModelId={props.draft.primaryModelId}
               fallbackModelIds={props.draft.fallbackModelIds}
@@ -265,6 +270,34 @@ export function PresetEditor(props: PresetEditorProps) {
               }
               onClearTemplateRefs={(tplId) => props.onClearTemplateRefs(tplId)}
             />
+          </If>
+
+          <If when={isGoogleCloud()}>
+            <Card class={cardClass()}>
+              <FormField
+                label={t("presets.googleCloud.keyLabel")}
+                error={fieldError("googleCloudKey")}
+              >
+                <Input
+                  testID="preset-google-cloud-api-key"
+                  ref={(node) => props.onGoogleCloudKeyRef(node)}
+                  masked
+                  value={props.draft.googleCloudApiKey}
+                  placeholder={
+                    props.draft.googleCloudApiKeyStored
+                      ? t("presets.googleCloud.keyStored")
+                      : t("presets.googleCloud.keyPlaceholder")
+                  }
+                  accessibilityLabel={t("presets.googleCloud.keyLabel")}
+                  disabled={props.saving}
+                  onFocus={() => props.onFieldFocus({ kind: "googleCloudKey" })}
+                  onChange={(googleCloudApiKey) => props.onChange({ googleCloudApiKey })}
+                />
+              </FormField>
+              <Text class="text-xs text-muted-foreground">
+                {t("presets.googleCloud.storageNotice")}
+              </Text>
+            </Card>
           </If>
 
           <If when={isDeepL()}>

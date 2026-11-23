@@ -508,6 +508,9 @@ presets:
     engineTypeLocked: 已保存的预设不能更换引擎类型。
     deeplKeyRequired: 请输入 DeepL API 密钥。
     deeplKeyInvalid: 请输入不含空格的 DeepL API 密钥。
+    googleCloudKeyRequired: 请输入 Google Cloud API 密钥。
+    googleCloudKeyInvalid: 请输入不含空格的 Google Cloud API 密钥。
+    googleCloudKeyUnreadable: 无法读取 Google Cloud API 密钥，请在预设中添加或替换。
     primaryModelRequired: 请选择主模型。
     modelUnavailable: 所选模型当前不可用。
     modelDuplicate: 主模型与回退模型不能重复。
@@ -557,6 +560,7 @@ presets:
   engine:
     ai: AI 翻译
     deepl: DeepL API
+    googleCloud: Google Cloud 翻译
   deepl:
     keyLabel: API 密钥
     keyPlaceholder: 粘贴 DeepL API 密钥
@@ -570,6 +574,11 @@ presets:
       characters: 字符
       resets: "%{date}重置"
       keyUsage: 本密钥 %{count} 字符
+  googleCloud:
+    keyLabel: API 密钥
+    keyPlaceholder: 粘贴 Google Cloud API 密钥
+    keyStored: 已保存密钥。输入新密钥可替换。
+    storageNotice: 密钥以未加密形式保存在本机。使用 Google Cloud 可能产生费用。
   language:
     autoTarget: 自动
   languages:
@@ -742,3 +751,15 @@ deepl:
     server: DeepL 当前不可用。
     invalidResponse: DeepL 返回了无法解析的响应。
     unsupportedLanguage: DeepL 不支持该语言。
+googleCloud:
+  error:
+    missingKey: 请在预设中添加 Google Cloud 翻译 API 密钥。
+    blankInput: 请输入要翻译的文本。
+    unsupportedLanguage: Google Cloud 翻译不支持该语言。
+    tooLarge: 文本超出了 Google Cloud 翻译的长度限制。
+    auth: Google Cloud 翻译拒绝了访问。请检查 API 密钥、已启用的 API、结算和配额。
+    rejected: Google Cloud 翻译拒绝了该请求。
+    rateLimited: Google Cloud 翻译正在限流，请稍后重试。
+    quota: 该 Google Cloud 翻译配额已用完。
+    server: Google Cloud 翻译当前不可用。
+    invalidResponse: Google Cloud 翻译返回了无法读取的响应。

@@ -8,6 +8,10 @@ import {
 } from "../../modules/ai/runtime/client";
 import { resolveSavedModelRequest, type SavedModelRequestResolution } from "../models/store";
 import { createDeepLClient, type DeepLTranslateInput } from "../../modules/deepl/client";
+import {
+  createGoogleCloudTranslateClient,
+  type GoogleCloudTranslateInput,
+} from "../../modules/google-cloud-translation/client";
 import { getLanguageLabel, type LanguageId } from "../presets/languages";
 import { presetsStore } from "../presets/store";
 import type { PromptTemplate, TranslationPreset } from "../presets/types";
@@ -40,9 +44,21 @@ export interface TranslateWithPresetOptions {
   readDeepLCredential?: (presetId: string) => Promise<string | null>;
   /** DeepL transport seam for isolated tests; the production adapter is built on demand. */
   deepLTranslate?: (input: DeepLTranslateInput, options?: DeepLTranslateOptions) => Promise<string>;
+  /** Reads a Google Cloud preset's stored key; defaults to the shared Presets Store. */
+  readGoogleCloudCredential?: (presetId: string) => Promise<string | null>;
+  /** Google Cloud v2 transport seam for isolated tests; the production client is built on demand. */
+  googleCloudTranslate?: (
+    input: GoogleCloudTranslateInput,
+    options?: GoogleCloudTranslateOptions,
+  ) => Promise<string>;
 }
 
 export interface DeepLTranslateOptions {
+  signal?: AbortSignal;
+  timeoutMs?: number;
+}
+
+export interface GoogleCloudTranslateOptions {
   signal?: AbortSignal;
   timeoutMs?: number;
 }
@@ -185,6 +201,61 @@ async function translateWithDeepL(
 }
 
 /**
+ * Sends the caller's resolved pair and stored key to Google Cloud Translation v2.
+ * The result arrives whole: no model lookup, prompt rendering, or streaming.
+ */
+async function translateWithGoogleCloud(
+  preset: TranslationPreset,
+  input: TranslateWithPresetInput,
+  options: TranslateWithPresetOptions,
+): Promise<TranslateWithPresetResult> {
+  const readCredential =
+    options.readGoogleCloudCredential ?? presetsStore.readGoogleCloudCredential;
+  let apiKey: string | null;
+  try {
+    apiKey = await readCredential(preset.id);
+  } catch (error) {
+    return failureResult(
+      error instanceof Error ? error.message : t("googleCloud.error.missingKey"),
+    );
+  }
+  if (options.signal?.aborted) {
+    return cancelledResult();
+  }
+  if (!apiKey) {
+    return failureResult(t("googleCloud.error.missingKey"));
+  }
+
+  const runTranslate = options.googleCloudTranslate ?? createGoogleCloudTranslateClient().translate;
+  try {
+    const text = await runTranslate(
+      {
+        apiKey,
+        text: input.sourceText,
+        sourceLanguage: input.sourceLanguage,
+        targetLanguage: input.targetLanguage,
+      },
+      { signal: options.signal, timeoutMs: options.timeoutMs },
+    );
+    if (options.signal?.aborted) {
+      return cancelledResult();
+    }
+    return { ok: true, text, modelId: null, templateId: null };
+  } catch (error) {
+    if (
+      options.signal?.aborted ||
+      (error instanceof ProviderProtocolError && error.kind === "cancelled")
+    ) {
+      return cancelledResult();
+    }
+    if (error instanceof ProviderProtocolError) {
+      return failureResult(error.message);
+    }
+    return failureResult(t("protocol.error.networkDefault"));
+  }
+}
+
+/**
  * Executes a saved preset's model chain in order with single-pass prompt rendering.
  */
 export async function translateWithPreset(
@@ -205,6 +276,10 @@ export async function translateWithPreset(
 
   if (preset.engine.kind === "deepl") {
     return translateWithDeepL(preset, input, options);
+  }
+
+  if (preset.engine.kind === "google-cloud") {
+    return translateWithGoogleCloud(preset, input, options);
   }
 
   const effectiveTemplateId = input.templateId ?? preset.engine.defaultTemplateId;

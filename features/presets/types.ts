@@ -22,8 +22,14 @@ export interface DeepLPresetEngine {
   credentialRef: string;
 }
 
+/** Google Cloud Translation engine: stores only a storage reference; the API key never lives in preset JSON. */
+export interface GoogleCloudPresetEngine {
+  kind: "google-cloud";
+  credentialRef: string;
+}
+
 /** Discriminated preset engine union; presets store engine configuration only. */
-export type PresetEngine = AiPresetEngine | DeepLPresetEngine;
+export type PresetEngine = AiPresetEngine | DeepLPresetEngine | GoogleCloudPresetEngine;
 
 export interface TranslationPreset {
   id: string;
@@ -50,7 +56,16 @@ export interface SaveDeepLPresetEngineInput {
   apiKey?: string | null;
 }
 
-export type SavePresetEngineInput = SaveAiPresetEngineInput | SaveDeepLPresetEngineInput;
+export interface SaveGoogleCloudPresetEngineInput {
+  kind: "google-cloud";
+  /** New or replacement key; a blank value on an edit keeps the stored key. */
+  apiKey?: string | null;
+}
+
+export type SavePresetEngineInput =
+  | SaveAiPresetEngineInput
+  | SaveDeepLPresetEngineInput
+  | SaveGoogleCloudPresetEngineInput;
 
 export interface SavePresetInput {
   id?: string | null;
@@ -84,6 +99,8 @@ export type PresetErrorKey =
   | "engine_type_locked"
   | "deepl_key_required"
   | "deepl_key_invalid"
+  | "google_cloud_key_required"
+  | "google_cloud_key_invalid"
   | "primary_model_required"
   | "model_unavailable"
   | "model_duplicate"
@@ -102,6 +119,7 @@ export type PresetErrorKey =
 export type PresetValidationField =
   | "name"
   | "deeplKey"
+  | "googleCloudKey"
   | "primaryModel"
   | "fallbackModel"
   | "temperature"
@@ -160,4 +178,6 @@ export interface PresetsStore {
   remove(id: string): Promise<void>;
   /** Reads a DeepL preset's stored key; returns null for other engines or a missing key. */
   readDeepLCredential(presetId: string): Promise<string | null>;
+  /** Reads a Google Cloud preset's stored key; returns null for other engines or a missing key. */
+  readGoogleCloudCredential(presetId: string): Promise<string | null>;
 }

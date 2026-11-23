@@ -5,6 +5,8 @@ import { readAvailableModelChoices } from "./model-choices";
 import { isTemperature } from "./temperature";
 import {
   PresetsStoreError,
+  type DeepLPresetEngine,
+  type GoogleCloudPresetEngine,
   type SavePresetInput,
   type ModelChoiceId,
   type PresetsStorage,
@@ -16,12 +18,18 @@ import { validatePresetForSave, type ValidatedPresetPayload } from "./validation
 
 export const PRESETS_STORAGE_KEY = "presets.v1.items";
 export const DEEPL_CREDENTIAL_KEY_PREFIX = "presets.v1.deeplKeys.";
+export const GOOGLE_CLOUD_CREDENTIAL_KEY_PREFIX = "presets.v1.googleCloudKeys.";
 
 const log = createLogger("presets/store");
 
 /** Storage key for one DeepL preset's key, addressed by its non-secret reference. */
 export function deepLCredentialStorageKey(ref: string): string {
   return `${DEEPL_CREDENTIAL_KEY_PREFIX}${ref}`;
+}
+
+/** Storage key for one Google Cloud preset's key, addressed by its non-secret reference. */
+export function googleCloudCredentialStorageKey(ref: string): string {
+  return `${GOOGLE_CLOUD_CREDENTIAL_KEY_PREFIX}${ref}`;
 }
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
@@ -67,9 +75,17 @@ function isValidAiEngine(engine: Record<string, unknown>): boolean {
   return true;
 }
 
-function isValidDeepLEngine(engine: Record<string, unknown>): boolean {
-  if (engine.kind !== "deepl") return false;
-  return typeof engine.credentialRef === "string" && engine.credentialRef.trim().length > 0;
+type CredentialEngineKind = "deepl" | "google-cloud";
+
+function isValidCredentialEngine(
+  engine: Record<string, unknown>,
+  kind: CredentialEngineKind,
+): boolean {
+  return (
+    engine.kind === kind &&
+    typeof engine.credentialRef === "string" &&
+    engine.credentialRef.trim().length > 0
+  );
 }
 
 function isValidStoredPreset(value: unknown): value is TranslationPreset {
@@ -80,7 +96,10 @@ function isValidStoredPreset(value: unknown): value is TranslationPreset {
   if (typeof value.createdAt !== "string" || typeof value.updatedAt !== "string") return false;
   if (!isPlainObject(value.engine)) return false;
   if (value.engine.kind === "ai") return isValidAiEngine(value.engine);
-  if (value.engine.kind === "deepl") return isValidDeepLEngine(value.engine);
+  if (value.engine.kind === "deepl") return isValidCredentialEngine(value.engine, "deepl");
+  if (value.engine.kind === "google-cloud") {
+    return isValidCredentialEngine(value.engine, "google-cloud");
+  }
   return false;
 }
 
@@ -128,12 +147,34 @@ async function writePresets(storage: PresetsStorage, items: unknown[]): Promise<
   }
 }
 
+/** Storage key for one engine's credential, addressed by its non-secret reference. */
+function credentialStorageKey(kind: CredentialEngineKind, ref: string): string {
+  return kind === "deepl" ? deepLCredentialStorageKey(ref) : googleCloudCredentialStorageKey(ref);
+}
+
+function credentialEngine(
+  kind: CredentialEngineKind,
+  credentialRef: string,
+): DeepLPresetEngine | GoogleCloudPresetEngine {
+  return kind === "deepl"
+    ? { kind: "deepl", credentialRef }
+    : { kind: "google-cloud", credentialRef };
+}
+
 /** Removes an orphaned key without undoing a committed record or leaking the secret. */
-async function removeSecretQuietly(storage: PresetsStorage, ref: string): Promise<void> {
+async function removeSecretQuietly(
+  storage: PresetsStorage,
+  kind: CredentialEngineKind,
+  ref: string,
+): Promise<void> {
   try {
-    await storage.removeItem(deepLCredentialStorageKey(ref));
+    await storage.removeItem(credentialStorageKey(kind, ref));
   } catch {
-    log.warn("Could not remove an unused DeepL API key.");
+    log.warn(
+      kind === "deepl"
+        ? "Could not remove an unused DeepL API key."
+        : "Could not remove an unused Google Cloud API key.",
+    );
   }
 }
 
@@ -163,30 +204,38 @@ export function createPresetsStore(
   };
 
   // The new key is written before its record, so an interrupted replacement never breaks a preset.
-  const saveDeepL = async (
+  const saveCredentialPreset = async (
     existing: TranslationPreset | null,
     meta: Pick<ValidatedPresetPayload, "name" | "enabled">,
-    engine: { kind: "deepl"; apiKey: string | null },
+    engine: { kind: CredentialEngineKind; apiKey: string | null },
     now: string,
   ): Promise<TranslationPreset> => {
     const previousRef =
-      existing !== null && existing.engine.kind === "deepl" ? existing.engine.credentialRef : null;
+      existing !== null && existing.engine.kind === engine.kind
+        ? existing.engine.credentialRef
+        : null;
     let nextRef = previousRef;
     let wroteSecret = false;
 
     if (engine.apiKey !== null) {
       nextRef = crypto.randomUUID();
       try {
-        await storage.setItem(deepLCredentialStorageKey(nextRef), engine.apiKey);
+        await storage.setItem(credentialStorageKey(engine.kind, nextRef), engine.apiKey);
       } catch (error) {
         throw writeFailure(error);
       }
       wroteSecret = true;
     }
     if (nextRef === null) {
-      throw new PresetsStoreError("deepl_key_required", t("presets.error.deeplKeyRequired"), {
-        field: "deeplKey",
-      });
+      throw engine.kind === "deepl"
+        ? new PresetsStoreError("deepl_key_required", t("presets.error.deeplKeyRequired"), {
+            field: "deeplKey",
+          })
+        : new PresetsStoreError(
+            "google_cloud_key_required",
+            t("presets.error.googleCloudKeyRequired"),
+            { field: "googleCloudKey" },
+          );
     }
 
     const record: TranslationPreset = {
@@ -195,23 +244,51 @@ export function createPresetsStore(
       enabled: meta.enabled,
       createdAt: existing?.createdAt ?? now,
       updatedAt: now,
-      engine: { kind: "deepl", credentialRef: nextRef },
+      engine: credentialEngine(engine.kind, nextRef),
     };
     const next = replaceItems(existing, record);
 
     try {
       await writePresets(storage, next);
     } catch (error) {
-      if (wroteSecret) await removeSecretQuietly(storage, nextRef);
+      if (wroteSecret) await removeSecretQuietly(storage, engine.kind, nextRef);
       throw error;
     }
     itemsSignal.set(next);
 
     // The record now points at the new key; the replaced one is removable.
     if (wroteSecret && previousRef !== null) {
-      await removeSecretQuietly(storage, previousRef);
+      await removeSecretQuietly(storage, engine.kind, previousRef);
     }
     return record;
+  };
+
+  const readCredential = async (
+    presetId: string,
+    kind: CredentialEngineKind,
+  ): Promise<string | null> => {
+    const record = records().find((item) => item.id === presetId);
+    if (!record || record.engine.kind !== kind) return null;
+    let raw: string | null;
+    try {
+      raw = await storage.getItem(credentialStorageKey(kind, record.engine.credentialRef));
+    } catch (error) {
+      if (kind === "deepl") {
+        const detail = error instanceof Error ? error.message : String(error);
+        throw new PresetsStoreError(
+          "storage_read_failed",
+          t("presets.error.storageReadFailed", { detail }),
+          { cause: error },
+        );
+      }
+      throw new PresetsStoreError(
+        "storage_read_failed",
+        t("presets.error.googleCloudKeyUnreadable"),
+        { cause: error },
+      );
+    }
+    const trimmed = raw?.trim();
+    return trimmed ? trimmed : null;
   };
 
   return {
@@ -269,8 +346,8 @@ export function createPresetsStore(
 
       mutatingSignal.set(true);
       try {
-        if (validated.engine.kind === "deepl") {
-          return await saveDeepL(existing, validated, validated.engine, now);
+        if (validated.engine.kind === "deepl" || validated.engine.kind === "google-cloud") {
+          return await saveCredentialPreset(existing, validated, validated.engine, now);
         }
 
         const record: TranslationPreset = {
@@ -302,30 +379,15 @@ export function createPresetsStore(
       try {
         await writePresets(storage, next);
         itemsSignal.set(next);
-        if (existing.engine.kind === "deepl") {
-          await removeSecretQuietly(storage, existing.engine.credentialRef);
+        if (existing.engine.kind === "deepl" || existing.engine.kind === "google-cloud") {
+          await removeSecretQuietly(storage, existing.engine.kind, existing.engine.credentialRef);
         }
       } finally {
         mutatingSignal.set(false);
       }
     },
-    readDeepLCredential: async (presetId: string) => {
-      const record = records().find((item) => item.id === presetId);
-      if (!record || record.engine.kind !== "deepl") return null;
-      let raw: string | null;
-      try {
-        raw = await storage.getItem(deepLCredentialStorageKey(record.engine.credentialRef));
-      } catch (error) {
-        const detail = error instanceof Error ? error.message : String(error);
-        throw new PresetsStoreError(
-          "storage_read_failed",
-          t("presets.error.storageReadFailed", { detail }),
-          { cause: error },
-        );
-      }
-      const trimmed = raw?.trim();
-      return trimmed ? trimmed : null;
-    },
+    readDeepLCredential: (presetId: string) => readCredential(presetId, "deepl"),
+    readGoogleCloudCredential: (presetId: string) => readCredential(presetId, "google-cloud"),
   };
 }
 
