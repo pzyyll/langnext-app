@@ -7,8 +7,21 @@ import {
   makeModel,
   makeSeedStorage,
 } from "../models/__tests__/fixtures";
-import { PRESETS_STORAGE_KEY } from "./store";
+import { deepLCredentialStorageKey, PRESETS_STORAGE_KEY } from "./store";
 import type { AiPresetEngine, TranslationPreset } from "./types";
+
+const DEEPL_USAGE_ROUTE = "GET https://api-free.deepl.com/v2/usage";
+
+function makeDeepLPresetRecord(id: string, name: string, credentialRef: string): TranslationPreset {
+  return {
+    id,
+    name,
+    enabled: true,
+    createdAt: "2026-01-01T00:00:00.000Z",
+    updatedAt: "2026-01-01T00:00:00.000Z",
+    engine: { kind: "deepl", credentialRef },
+  };
+}
 
 /** Picks a preset type in the Add Preset picker and waits for the editor. */
 async function choosePresetType(app: App, kind: "ai" | "deepl") {
@@ -242,7 +255,13 @@ test("presets ui: preset type", async () => {
 });
 
 test("presets ui: DeepL editor", async () => {
-  const app = await open(APP_ENTRY, { ...viewport, storage: makeSeedStorage({}) });
+  const usageBody = { character_count: 180118, character_limit: 1250000 };
+  const app = await open(APP_ENTRY, {
+    ...viewport,
+    locale: "en-US",
+    storage: makeSeedStorage({}),
+    network: { [DEEPL_USAGE_ROUTE]: { status: 200, body: usageBody } },
+  });
   await app.press("id:nav-presets");
   await app.waitFor("id:empty-add-preset-button");
   await app.press("id:empty-add-preset-button");
@@ -260,6 +279,8 @@ test("presets ui: DeepL editor", async () => {
   expect(app.shows("id:preset-manage-models")).toBe(false);
   expect(app.value("id:preset-deepl-api-key")).toBe("");
   expect(app.texts()).toContain(t("presets.deepl.keyLabel"));
+  // Usage needs a stored key, so a new draft shows no usage section.
+  expect(app.shows("id:preset-deepl-usage")).toBe(false);
 
   await app.type("id:preset-name", "DeepL Free");
 
@@ -274,7 +295,12 @@ test("presets ui: DeepL editor", async () => {
 
   await app.press("id:preset-save");
   await app.waitUntil(() => Boolean(app.storage()[PRESETS_STORAGE_KEY]));
-  expect(app.requests()).toHaveLength(0);
+  await app.waitUntil(() => app.shows("id:preset-deepl-usage-count"));
+  expect(app.requests()).toHaveLength(1);
+  expect(app.requests()[0]!.method).toBe("GET");
+  expect(app.requests()[0]!.url).toBe("https://api-free.deepl.com/v2/usage");
+  expect(app.requests()[0]!.headers.authorization).toBe("DeepL-Auth-Key deepl-test:fx");
+  expect(app.texts()).toContain("180,118");
   expect(app.texts()).toContain("DeepL API");
   const raw = app.storage()[PRESETS_STORAGE_KEY]!;
   expect(raw).not.toContain("deepl-test:fx");
@@ -282,16 +308,116 @@ test("presets ui: DeepL editor", async () => {
   expect(savedItems[0]!.engine.kind).toBe("deepl");
 
   // Reopening shows the stored-key placeholder state, not the key; a replacement is dirty.
-  const reopened = await open(APP_ENTRY, { ...viewport, storage: app.storage() });
+  const reopened = await open(APP_ENTRY, {
+    ...viewport,
+    locale: "en-US",
+    storage: app.storage(),
+    network: { [DEEPL_USAGE_ROUTE]: { status: 200, body: usageBody } },
+  });
   await reopened.press("id:nav-presets");
   await reopened.waitFor("id:preset-deepl-api-key");
   expect(reopened.value("id:preset-deepl-api-key")).toBe("");
   expect(reopened.enabled("id:preset-save")).toBe(false);
   expect(reopened.texts()).toContain("DeepL API");
-  expect(reopened.requests()).toHaveLength(0);
+  await reopened.waitUntil(() => reopened.shows("id:preset-deepl-usage-count"));
+  expect(reopened.requests()).toHaveLength(1);
   await reopened.type("id:preset-deepl-api-key", "deepl-replacement:fx");
   expect(reopened.enabled("id:preset-save")).toBe(true);
   expect(reopened.storage()[PRESETS_STORAGE_KEY]).not.toContain("deepl-replacement:fx");
+
+  // Replacing the key reads usage again with the new key.
+  await reopened.press("id:preset-save");
+  await reopened.waitUntil(() => reopened.requests().length === 2);
+  expect(reopened.requests()[1]!.headers.authorization).toBe("DeepL-Auth-Key deepl-replacement:fx");
+});
+
+test("presets ui: DeepL usage", async () => {
+  const preset = makeDeepLPresetRecord("p-deepl", "DeepL Free", "ref-usage");
+  let reads = 0;
+  const app = await open(APP_ENTRY, {
+    ...viewport,
+    locale: "en-US",
+    storage: makeSeedStorage({
+      extra: {
+        [PRESETS_STORAGE_KEY]: JSON.stringify({ version: 1, items: [preset] }),
+        [deepLCredentialStorageKey("ref-usage")]: "deepl-test:fx",
+      },
+    }),
+    network: {
+      [DEEPL_USAGE_ROUTE]: () => {
+        reads += 1;
+        return {
+          status: 200,
+          body:
+            reads === 1
+              ? { character_count: 180118, character_limit: 1250000 }
+              : {
+                  character_count: 5947223,
+                  character_limit: 1000000000000,
+                  api_key_character_count: 636,
+                  end_time: "2026-02-15T12:00:00Z",
+                },
+        };
+      },
+    },
+  });
+
+  await app.press("id:nav-presets");
+  await app.waitFor("id:preset-deepl-usage-count");
+  expect(app.requests()).toHaveLength(1);
+  expect(app.requests()[0]!.method).toBe("GET");
+  expect(app.requests()[0]!.url).toBe("https://api-free.deepl.com/v2/usage");
+  expect(app.requests()[0]!.headers.authorization).toBe("DeepL-Auth-Key deepl-test:fx");
+  expect(app.texts()).toContain("180,118");
+  expect(app.texts()).toContain("/ 1,250,000 characters");
+  expect(app.shows("id:preset-deepl-usage-bar")).toBe(true);
+  expect(app.shows("id:preset-deepl-usage-reset")).toBe(false);
+  expect(app.shows("id:preset-deepl-usage-key")).toBe(false);
+
+  // Refresh reads again and renders a Pro account with no limit and a key count.
+  await app.press("id:preset-deepl-usage-refresh");
+  await app.waitUntil(() => app.texts().includes("5,947,223"));
+  expect(app.requests()).toHaveLength(2);
+  expect(app.texts()).toContain("characters");
+  expect(app.texts()).toContain("Key: 636 characters");
+  expect(app.shows("id:preset-deepl-usage-bar")).toBe(false);
+  expect(app.shows("id:preset-deepl-usage-reset")).toBe(true);
+});
+
+test("presets ui: DeepL usage reports a rejected key and retries", async () => {
+  const preset = makeDeepLPresetRecord("p-deepl", "DeepL Free", "ref-error");
+  let reads = 0;
+  const app = await open(APP_ENTRY, {
+    ...viewport,
+    locale: "en-US",
+    storage: makeSeedStorage({
+      extra: {
+        [PRESETS_STORAGE_KEY]: JSON.stringify({ version: 1, items: [preset] }),
+        [deepLCredentialStorageKey("ref-error")]: "deepl-test:fx",
+      },
+    }),
+    network: {
+      [DEEPL_USAGE_ROUTE]: () => {
+        reads += 1;
+        return reads === 1
+          ? { status: 403 }
+          : { status: 200, body: { character_count: 42, character_limit: 500000 } };
+      },
+    },
+  });
+
+  await app.press("id:nav-presets");
+  await app.waitFor("id:preset-deepl-usage-error");
+  expect(app.texts()).toContain(t("deepl.error.auth"));
+  expect(app.shows("id:preset-deepl-usage-bar")).toBe(false);
+  expect(app.enabled("id:preset-deepl-usage-refresh")).toBe(true);
+
+  await app.press("id:preset-deepl-usage-refresh");
+  await app.waitUntil(() => app.texts().includes("/ 500,000 characters"));
+  expect(app.requests()).toHaveLength(2);
+  expect(app.shows("id:preset-deepl-usage-error")).toBe(false);
+  expect(app.shows("id:preset-deepl-usage-bar")).toBe(true);
+  expect(app.texts()).toContain("42");
 });
 
 test("presets ui: picker and DeepL editor fit compact dark zh-CN with reduced motion", async () => {
@@ -320,6 +446,7 @@ test("presets ui: picker and DeepL editor fit compact dark zh-CN with reduced mo
   expect(app.shows("id:preset-source-language")).toBe(false);
   expect(app.shows("id:preset-primary-model")).toBe(false);
   expect(app.shows("id:preset-template-name")).toBe(false);
+  expect(app.shows("id:preset-deepl-usage")).toBe(false);
 });
 
 test("presets ui: does not promote a fallback into an empty primary slot", async () => {

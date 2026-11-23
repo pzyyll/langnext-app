@@ -6,6 +6,7 @@ import { Card } from "../../components/ui/card";
 import { Input } from "../../components/ui/input";
 import { Switch } from "../../components/ui/switch";
 import { FormField } from "../../modules/ai/ui/form-field";
+import { DeepLUsageSection } from "./deepl-usage-section";
 import type { PresetDraft } from "./draft";
 import { ModelsSection } from "./models-section";
 import { PromptTemplates, type TemplateEditableField } from "./prompt-templates";
@@ -286,6 +287,10 @@ export function PresetEditor(props: PresetEditorProps) {
                 />
               </FormField>
             </Card>
+
+            <If when={props.draft.sourceId !== null}>
+              <DeepLUsageSection presetId={props.draft.sourceId!} />
+            </If>
           </If>
 
           <If when={props.draft.sourceId !== null}>

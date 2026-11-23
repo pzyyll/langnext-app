@@ -21,6 +21,7 @@ import { Icon } from "../../components/ui/icon";
 import { toast } from "../../components/ui/toast";
 import { modelsStore } from "../models/store";
 import { AddPresetDialog } from "./add-preset-dialog";
+import { deepLUsageStore } from "./deepl-usage";
 import {
   cloneDraft,
   createDraftFromPreset,
@@ -351,6 +352,9 @@ export function PresetsPage(props: PresetsPageProps) {
     clearErrors();
     try {
       const saved = await presetsStore.save(draftToSaveInput(current));
+      if (current.engineKind === "deepl" && current.deepLApiKey.trim().length > 0) {
+        void deepLUsageStore.reload(saved.id);
+      }
       applySavedRecord(saved);
       toast.success(t("presets.editor.saved"));
     } catch (error) {
@@ -438,6 +442,7 @@ export function PresetsPage(props: PresetsPageProps) {
 
     try {
       await presetsStore.remove(target.id);
+      deepLUsageStore.forget(target.id);
       const remaining = presetsStore.records();
       if (remaining.length === 0) {
         pendingPostDeleteFocus = { kind: "empty" };

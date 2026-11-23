@@ -561,6 +561,15 @@ presets:
     keyLabel: API key
     keyPlaceholder: Paste your DeepL API key
     keyStored: A key is stored. Enter a new key to replace it.
+    usage:
+      title: Usage
+      refresh: Refresh usage
+      loading: Reading usage…
+      missingKey: No API key is stored for this preset.
+      limit: / %{limit} characters
+      characters: characters
+      resets: Resets %{date}
+      keyUsage: "Key: %{count} characters"
   language:
     autoTarget: Automatic
   languages:

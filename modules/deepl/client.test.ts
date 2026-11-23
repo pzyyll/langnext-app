@@ -2,7 +2,7 @@ import { t } from "nsh/i18n";
 import { expect, test } from "nsh/test";
 import { ProviderProtocolError } from "../ai/contracts/errors";
 import type { FetchLike, HttpResponseLike } from "../ai/runtime/http";
-import { createDeepLClient, DEEPL_MAX_REQUEST_BYTES } from "./client";
+import { createDeepLClient, DEEPL_MAX_REQUEST_BYTES, DEEPL_NO_CHARACTER_LIMIT } from "./client";
 
 interface RecordedRequest {
   url: string;
@@ -171,6 +171,83 @@ test("deepl client: keeps the key out of network error details", async () => {
   const error = await catchProtocolError(() => harness.client.translate(baseInput));
   expect(error.kind).toBe("network");
   expect(error.message).not.toContain("secret-key:fx");
+  expect(harness.requests).toHaveLength(1);
+});
+
+test("deepl client: reads Free usage from the Free host", async () => {
+  const harness = createHarness(() =>
+    jsonResponse({ character_count: 180118, character_limit: 1250000 }),
+  );
+
+  const usage = await harness.client.getUsage({ apiKey: " test-key:fx " });
+  expect(usage).toEqual({
+    characterCount: 180118,
+    characterLimit: 1250000,
+    apiKeyCharacterCount: null,
+    periodEnd: null,
+  });
+
+  expect(harness.requests).toHaveLength(1);
+  const [request] = harness.requests;
+  expect(request!.url).toBe("https://api-free.deepl.com/v2/usage");
+  expect(request!.method).toBe("GET");
+  expect(request!.headers.Authorization).toBe("DeepL-Auth-Key test-key:fx");
+  expect(request!.redirect).toBe("error");
+  expect(request!.body).toBeUndefined();
+});
+
+test("deepl client: reads Pro usage with the key count and period end", async () => {
+  const harness = createHarness(() =>
+    jsonResponse({
+      character_count: 5947223,
+      character_limit: 1000000000000,
+      api_key_character_count: 636,
+      start_time: "2026-01-01T00:00:00Z",
+      end_time: "2026-02-01T00:00:00Z",
+    }),
+  );
+
+  const usage = await harness.client.getUsage({ apiKey: "pro-key" });
+  expect(usage).toEqual({
+    characterCount: 5947223,
+    characterLimit: DEEPL_NO_CHARACTER_LIMIT,
+    apiKeyCharacterCount: 636,
+    periodEnd: "2026-02-01T00:00:00Z",
+  });
+  expect(harness.requests[0]!.url).toBe("https://api.deepl.com/v2/usage");
+});
+
+test("deepl client: rejects a usage request without a key or with unreadable counts", async () => {
+  const harness = createHarness();
+
+  const missing = await catchProtocolError(() => harness.client.getUsage({ apiKey: "   " }));
+  expect(missing.kind).toBe("auth");
+  expect(missing.message).toBe(t("deepl.error.missingKey"));
+  expect(harness.requests).toHaveLength(0);
+
+  const payloads = [
+    {},
+    { character_count: 1 },
+    { character_limit: 5 },
+    { character_count: -1, character_limit: 5 },
+    { character_count: "1", character_limit: 5 },
+  ];
+  for (const payload of payloads) {
+    const broken = createHarness(() => jsonResponse(payload));
+    const error = await catchProtocolError(() => broken.client.getUsage({ apiKey: "pro-key" }));
+    expect(error.kind).toBe("invalid_response");
+    expect(error.message).toBe(t("deepl.error.invalidResponse"));
+    expect(broken.requests).toHaveLength(1);
+  }
+});
+
+test("deepl client: maps a rejected usage request to localized copy", async () => {
+  const harness = createHarness(() => jsonResponse({ message: "raw provider detail" }, 403));
+
+  const error = await catchProtocolError(() => harness.client.getUsage({ apiKey: "bad-key" }));
+  expect(error.kind).toBe("auth");
+  expect(error.message).toBe(t("deepl.error.auth"));
+  expect(error.message).not.toContain("raw provider detail");
   expect(harness.requests).toHaveLength(1);
 });
 

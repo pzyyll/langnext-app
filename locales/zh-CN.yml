@@ -561,6 +561,15 @@ presets:
     keyLabel: API 密钥
     keyPlaceholder: 粘贴 DeepL API 密钥
     keyStored: 已保存密钥。输入新密钥可替换。
+    usage:
+      title: 使用量
+      refresh: 刷新使用量
+      loading: 正在读取使用量…
+      missingKey: 此预设未保存 API 密钥。
+      limit: / %{limit} 字符
+      characters: 字符
+      resets: "%{date}重置"
+      keyUsage: 本密钥 %{count} 字符
   language:
     autoTarget: 自动
   languages:
