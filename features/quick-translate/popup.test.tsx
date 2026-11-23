@@ -796,6 +796,40 @@ test("preset cards: reveals the reorder grip only while its card header is hover
   expect(gripOpacity("card-2")).toBe(1);
 });
 
+test("preset cards: toggles collapse from the card header and keeps drag separate", async () => {
+  const app = await open(POPUP_HARNESS, {
+    ...viewport,
+    storage: seedWithSavedCards(
+      [makePreset({ name: "PT" }), makePreset({ id: "preset-2", name: "P2" })],
+      [
+        { id: "card-1", presetId: "preset-1", templateId: null, collapsed: false },
+        { id: "card-2", presetId: "preset-2", templateId: null, collapsed: false },
+      ],
+    ),
+  });
+
+  await app.waitFor("id:quick-translate-card-card-2");
+
+  // The empty part of the header toggles the card.
+  await app.press("id:quick-translate-card-header-card-1");
+  await app.waitFor("id:quick-translate-card-card-1 >> label:Expand card");
+  await app.press("id:quick-translate-card-header-card-1");
+  await app.waitFor("id:quick-translate-card-card-1 >> label:Collapse card");
+
+  // A drag on the header reorders without collapsing either card.
+  await app.drag("id:quick-translate-card-header-card-2", { x: 0, y: -80 });
+  await app.waitUntil(() => savedCardIds(app.storage())[0] === "card-2");
+  expect(app.shows("id:quick-translate-card-card-1 >> label:Collapse card")).toBe(true);
+  expect(app.shows("id:quick-translate-card-card-2 >> label:Collapse card")).toBe(true);
+
+  // The preset chip keeps its own action: it opens the menu instead of toggling the card.
+  await app.press("id:quick-translate-card-card-1 >> id:quick-translate-preset");
+  await app.waitFor("role:option[P2]");
+  await app.keyboard.press("escape");
+  await app.waitUntil(() => !app.shows("role:option[P2]"));
+  expect(app.shows("id:quick-translate-card-card-1 >> label:Collapse card")).toBe(true);
+});
+
 test("preset cards: template switches reuse pending and completed queries for the current input", async () => {
   const preset = makePreset();
   const app = await open(POPUP_HARNESS, {

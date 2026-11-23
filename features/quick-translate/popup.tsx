@@ -316,14 +316,15 @@ function PresetCardRow(props: PresetCardRowProps) {
     <Card
       testID={`quick-translate-card-${props.card().id}`}
       variant="subtle"
-      class={props.reorder.dragging() ? "shadow-md" : undefined}
+      class={`overflow-hidden ${props.reorder.dragging() ? "shadow-md" : ""}`}
     >
       <View
         testID={`quick-translate-card-header-${props.card().id}`}
         pan={props.reorder.canDrag() ? { y: props.reorder.offset } : undefined}
         onPanStart={() => props.reorder.onStart()}
         onPanEnd={(event) => props.reorder.onEnd(event)}
-        class={`group flex-row items-center justify-between gap-2 px-3 pt-2.5 ${hasBody() ? "pb-2" : "pb-2.5"}`}
+        onPress={() => props.onToggleCollapse(props.card().id)}
+        class={`group flex-row items-center justify-between gap-2 px-3 pt-2.5 ${hasBody() ? "pb-2" : "pb-2.5"} ${motion.navigationFeedback} hover:bg-accent/50 active:bg-accent/70`}
       >
         <View class="min-w-0 flex-1 flex-row items-center gap-1.5">
           <Select
