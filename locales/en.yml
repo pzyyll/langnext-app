@@ -395,7 +395,7 @@ models:
     keepToken: Keep stored token
     tokenWillClear: Stored token will be cleared on Save
     tokenRetained: Stored token retained (type to replace)
-    test: Test
+    test: Test connection
     testing: Testing…
     getModels: Get models
     fetching: Fetching…

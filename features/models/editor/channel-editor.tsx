@@ -286,8 +286,21 @@ export function ChannelEditor(props: ChannelEditorProps) {
 
           <Card testID="connection-card" class={compactLayout() ? "gap-3.5 p-4" : "gap-4 p-5"}>
             <View class="min-h-8 flex-row flex-wrap items-center justify-between gap-2">
-              <View class="flex-row items-center gap-2">
-                <SectionHeading title={t("models.connection.heading")} />
+              <View class="min-w-0 flex-1 flex-row items-center gap-2">
+                <SectionHeading title={t("models.connection.heading")} class="shrink-0" />
+                <If when={connectionMessage() !== null}>
+                  <If when={connectionMessage()}>
+                    {(msg) => (
+                      <Badge
+                        testID="connection-status"
+                        label={msg().text}
+                        tone={msg().ok ? "success" : "destructive"}
+                        truncate
+                        tooltip={msg().text}
+                      />
+                    )}
+                  </If>
+                </If>
                 <If when={!isDraftMode() && isSavedDirty()}>
                   <Badge label={t("models.channel.unsaved")} tone="warning" />
                 </If>
@@ -321,10 +334,17 @@ export function ChannelEditor(props: ChannelEditorProps) {
                   testID="test-connection-button"
                   variant="outline"
                   size="sm"
-                  label={testing() ? t("models.connection.testing") : t("models.connection.test")}
+                  accessibilityLabel={
+                    testing() ? t("models.connection.testing") : t("models.connection.test")
+                  }
                   disabled={testing() || syncing() || connectionBlocked()}
                   onPress={() => void handleTest()}
-                />
+                >
+                  <Icon name="mdi:lightning-bolt-outline" tone="foreground" class="size-3.5" />
+                  <Text class="text-sm font-medium text-foreground">
+                    {testing() ? t("models.connection.testing") : t("models.connection.test")}
+                  </Text>
+                </Button>
               </View>
             </View>
 
@@ -354,15 +374,6 @@ export function ChannelEditor(props: ChannelEditorProps) {
               <Text role="alert" class="text-xs text-destructive">
                 {saveError()}
               </Text>
-            </If>
-            <If when={connectionMessage() !== null}>
-              <If when={connectionMessage()}>
-                {(msg) => (
-                  <Text class={msg().ok ? "text-xs text-success" : "text-xs text-destructive"}>
-                    {msg().text}
-                  </Text>
-                )}
-              </If>
             </If>
           </Card>
 

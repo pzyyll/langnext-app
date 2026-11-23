@@ -1,4 +1,5 @@
 import { Text, View } from "nsh";
+import { buildTooltip } from "./tooltip";
 
 export type BadgeTone = "neutral" | "primary" | "success" | "warning" | "destructive";
 
@@ -6,6 +7,9 @@ interface BadgeProps {
   testID?: string;
   label: string;
   tone?: BadgeTone;
+  /** Lets a long label shrink and ellipsize inside a bounded flex row; give the full label as `tooltip`. */
+  truncate?: boolean;
+  tooltip?: string;
   class?: string;
 }
 
@@ -30,9 +34,12 @@ export function Badge(props: BadgeProps) {
   return (
     <View
       testID={props.testID}
-      class={`shrink-0 rounded-md px-1.5 py-0.5 ${CONTAINER_CLASSES[props.tone ?? "neutral"]} ${props.class ?? ""}`}
+      tooltip={props.tooltip ? buildTooltip(props.tooltip, "top") : undefined}
+      class={`${props.truncate ? "min-w-0 shrink" : "shrink-0"} rounded-md px-1.5 py-0.5 ${CONTAINER_CLASSES[props.tone ?? "neutral"]} ${props.class ?? ""}`}
     >
-      <Text class={TEXT_CLASSES[props.tone ?? "neutral"]}>{props.label}</Text>
+      <Text class={`${TEXT_CLASSES[props.tone ?? "neutral"]} ${props.truncate ? "truncate" : ""}`}>
+        {props.label}
+      </Text>
     </View>
   );
 }

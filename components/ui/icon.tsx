@@ -37,6 +37,7 @@ import mdiFlashIcon from "../../assets/icons/mdi--flash.svg";
 import mdiFlashOutlineIcon from "../../assets/icons/mdi--flash-outline.svg";
 import mdiLanguageMarkdownIcon from "../../assets/icons/mdi--language-markdown.svg";
 import mdiLanguageMarkdownOutlineIcon from "../../assets/icons/mdi--language-markdown-outline.svg";
+import mdiLightningBoltOutlineIcon from "../../assets/icons/mdi--lightning-bolt-outline.svg";
 import mdiOcrIcon from "../../assets/icons/mdi--ocr.svg";
 import mdiPauseIcon from "../../assets/icons/mdi--pause.svg";
 import mdiPencilIcon from "../../assets/icons/mdi--pencil.svg";
@@ -102,6 +103,7 @@ const ICONS = {
   "mdi:flash-outline": mdiFlashOutlineIcon,
   "mdi:language-markdown": mdiLanguageMarkdownIcon,
   "mdi:language-markdown-outline": mdiLanguageMarkdownOutlineIcon,
+  "mdi:lightning-bolt-outline": mdiLightningBoltOutlineIcon,
   "mdi:ocr": mdiOcrIcon,
   "mdi:pause": mdiPauseIcon,
   "mdi:pencil": mdiPencilIcon,

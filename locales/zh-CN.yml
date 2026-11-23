@@ -395,7 +395,7 @@ models:
     keepToken: 保留已存令牌
     tokenWillClear: 保存后将清除已存令牌
     tokenRetained: 已保留已存令牌（输入可替换）
-    test: 测试
+    test: 测试连接
     testing: 测试中…
     getModels: 获取模型
     fetching: 获取中…

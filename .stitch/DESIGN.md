@@ -170,3 +170,13 @@ Recorded before editing the OCR settings TSX to match the Language Detection cha
 | Channel added or removed in list                                    | Immediate insertion or removal in `OcrChannelList` without extra row entrance animation; focus moves to the added control or next logical target.                               |
 | Enable switch and drag reorder (2+ channels)                        | Existing `motion.switchThumb` (150ms easeOut) and `REORDER_SETTLE_MS` (180ms easeOut) pan settle. Reduced motion sets values immediately.                                       |
 | Detail validation, save confirmation                                | Inline error and save toast (`motion.toastTransition`, `motion.toastStack`). Reduced motion removes toast movement.                                                             |
+
+### Channel connection test
+
+Recorded before editing the channel editor header. Every entry reuses an existing token or the shared tooltip.
+
+| State change                                                      | Tool and reduced motion                                                                                                                                    |
+| ----------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Connection result appears or clears beside the Connection heading | Instant swap. The existing success or error toast still carries `motion.toastTransition` and `motion.toastStack`. Reduced motion does not change the swap. |
+| A truncated status badge is hovered                               | The shared `buildTooltip` bubble and its `motion.tooltip` transition. Instant with reduced motion.                                                         |
+| Test button label switches between Test connection and Testing…   | Instant label and disabled-state swap; the button keeps `motion.pressScale`. Reduced motion removes the press scale.                                       |
