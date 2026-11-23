@@ -1,12 +1,12 @@
 import { Image, Text, token, View, type ImageAsset, type JSX } from "nsh";
 import { Button, Tooltip } from "nsh/base";
 import { t } from "nsh/i18n";
-import cubeOutlineIcon from "../assets/icons/cube-outline.svg";
-import cubeSolidIcon from "../assets/icons/cube-solid.svg";
-import profileOutlineIcon from "../assets/icons/ant-design--profile-outlined.svg";
-import profileSolidIcon from "../assets/icons/ant-design--profile-filled.svg";
-import settingsOutlineIcon from "../assets/icons/setting-outline.svg";
-import settingsSolidIcon from "../assets/icons/setting-solid.svg";
+import cubeOutlineIcon from "../assets/icons/mdi--cube-outline.svg";
+import cubeSolidIcon from "../assets/icons/mdi--cube.svg";
+import profileOutlineIcon from "../assets/icons/mdi--list-box-outline.svg";
+import profileSolidIcon from "../assets/icons/mdi--list-box.svg";
+import settingsOutlineIcon from "../assets/icons/mdi--settings-outline.svg";
+import settingsSolidIcon from "../assets/icons/mdi--settings.svg";
 import { motion } from "./motion";
 
 /** The destinations shown in the sidebar. */

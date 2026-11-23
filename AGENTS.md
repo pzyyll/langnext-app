@@ -11,9 +11,7 @@ My Translator is a desktop application built with:
 
 ## UI/UX
 
-- Icons:
-  - [icon-park-outline](https://icon-sets.iconify.design/icon-park-outline/)
-  - [icon-park-solid](https://icon-sets.iconify.design/icon-park-solid)
+- Icons: [Material Design Icons](https://icon-sets.iconify.design/mdi/)
 
 ### Interface copy
 
