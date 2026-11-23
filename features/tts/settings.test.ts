@@ -83,6 +83,96 @@ function createMemoryStorage(initial: Record<string, string> = {}) {
 const FIRST_KEY = "first-cloud-key";
 const NEXT_KEY = "next-cloud-key";
 
+test("tts store: starts with no added channels and every channel available", async () => {
+  const mem = createMemoryStorage();
+  const store = createTtsSettingsStore(mem.storage);
+
+  expect(store.channelOrder()).toEqual([]);
+  expect(store.availableChannels()).toEqual(["google-cloud", "azure"]);
+  expect(store.activeBinding()).toBeNull();
+
+  await store.load();
+  expect(store.loadError()).toBeNull();
+  expect(store.channelOrder()).toEqual([]);
+  expect(store.availableChannels()).toEqual(["google-cloud", "azure"]);
+  expect(mem.getSetCalls()).toBe(0);
+});
+
+test("tts store: adds channels without enabling them and persists the order", async () => {
+  const mem = createMemoryStorage();
+  const store = createTtsSettingsStore(mem.storage);
+  await store.load();
+
+  expect((await store.addChannel("azure")).ok).toBe(true);
+  expect(store.channelOrder()).toEqual(["azure"]);
+  expect(store.availableChannels()).toEqual(["google-cloud"]);
+  expect(store.isEnabled("azure")).toBe(false);
+  expect(store.activeBinding()).toBeNull();
+
+  expect((await store.addChannel("google-cloud")).ok).toBe(true);
+  expect(store.channelOrder()).toEqual(["azure", "google-cloud"]);
+  expect(store.availableChannels()).toEqual([]);
+  expect(JSON.parse(mem.backing[TTS_STORAGE_KEY]!)).toMatchObject({
+    version: 3,
+    order: ["azure", "google-cloud"],
+    googleCloud: null,
+    azure: null,
+  });
+
+  const writes = mem.getSetCalls();
+  expect((await store.addChannel("azure")).ok).toBe(true);
+  expect(mem.getSetCalls()).toBe(writes);
+});
+
+test("tts store: removing a channel clears its binding and key and offers it again", async () => {
+  const mem = createMemoryStorage();
+  const store = createTtsSettingsStore(mem.storage);
+  const google = await saveKey(store, FIRST_KEY);
+  await store.setEnabled("google-cloud", true);
+  const azure = await store.saveChannel({
+    channel: "azure",
+    apiKey: "azure-key",
+    region: "eastus",
+  });
+  expect(azure.ok).toBe(true);
+  await store.setEnabled("azure", true);
+  expect(store.channelOrder()).toEqual(["google-cloud", "azure"]);
+  expect(store.activeBinding()?.channel).toBe("google-cloud");
+
+  expect((await store.removeChannel("google-cloud")).ok).toBe(true);
+  expect(store.channelOrder()).toEqual(["azure"]);
+  expect(store.availableChannels()).toEqual(["google-cloud"]);
+  expect(store.savedBinding("google-cloud")).toBeNull();
+  expect(store.activeBinding()?.channel).toBe("azure");
+  expect(await store.readKey(google.credentialRef)).toBeNull();
+  expect(mem.backing[ttsCredentialStorageKey(google.credentialRef)]).toBeUndefined();
+
+  const azureBinding = store.savedBinding("azure");
+  expect((await store.removeChannel("azure")).ok).toBe(true);
+  expect(store.channelOrder()).toEqual([]);
+  expect(store.availableChannels()).toEqual(["google-cloud", "azure"]);
+  expect(store.savedBinding("azure")).toBeNull();
+  expect(store.activeBinding()).toBeNull();
+  if (azureBinding?.channel === "azure") {
+    expect(mem.backing[ttsCredentialStorageKey(azureBinding.credentialRef)]).toBeUndefined();
+  }
+
+  const writes = mem.getSetCalls();
+  expect((await store.removeChannel("azure")).ok).toBe(true);
+  expect(mem.getSetCalls()).toBe(writes);
+});
+
+test("tts store: rejects enabling a channel that was not added", async () => {
+  const mem = createMemoryStorage();
+  const store = createTtsSettingsStore(mem.storage);
+
+  const result = await store.setEnabled("azure", true);
+  expect(result.ok).toBe(false);
+  if (result.ok) throw new Error("expected an unadded channel to be rejected");
+  expect(result.key).toBe("channel_unconfigured");
+  expect(mem.getSetCalls()).toBe(0);
+});
+
 test("tts store: starts off, enables only on an explicit switch, and keeps a later key disabled", async () => {
   const mem = createMemoryStorage();
   const store = createTtsSettingsStore(mem.storage);
@@ -119,8 +209,8 @@ test("tts store: starts off, enables only on an explicit switch, and keeps a lat
   expect(await store.setEnabled("google-cloud", true)).toEqual({ ok: true });
   expect(store.activeBinding()?.channel === "google-cloud").toBe(true);
   expect(JSON.parse(mem.backing[TTS_STORAGE_KEY]!)).toEqual({
-    version: 2,
-    order: ["google-cloud", "azure"],
+    version: 3,
+    order: ["google-cloud"],
     googleCloud: googleStored({
       enabled: true,
       credentialRef: saved.binding.credentialRef,
@@ -259,7 +349,8 @@ test("tts store: rejects enabling a missing or unreadable key and still allows d
   expect((await store.setEnabled("google-cloud", true)).ok).toBe(false);
 
   mem.backing[TTS_STORAGE_KEY] = JSON.stringify({
-    version: 2,
+    version: 3,
+    order: ["google-cloud"],
     googleCloud: googleStored({ enabled: true, credentialRef: saved.credentialRef }),
   });
   mem.backing[ttsCredentialStorageKey(saved.credentialRef)] = "{not json";
@@ -301,13 +392,13 @@ test("tts store: a failed toggle keeps the last confirmed enabled state", async 
 test("tts store: reports malformed settings and a read failure without enabling the channel", async () => {
   const records: unknown[] = [
     "{ not json",
-    { version: 2 },
-    { version: 2, googleCloud: { enabled: "yes", credentialRef: "ref-1" } },
-    { version: 2, googleCloud: { enabled: true, credentialRef: "  " } },
-    { version: 2, googleCloud: { enabled: true } },
-    { version: 2, googleCloud: [] },
+    { version: 3 },
+    { version: 3, googleCloud: { enabled: "yes", credentialRef: "ref-1" } },
+    { version: 3, googleCloud: { enabled: true, credentialRef: "  " } },
+    { version: 3, googleCloud: { enabled: true } },
+    { version: 3, googleCloud: [] },
     {
-      version: 2,
+      version: 3,
       googleCloud: googleStored({
         enabled: true,
         credentialRef: "ref-1",
@@ -315,7 +406,7 @@ test("tts store: reports malformed settings and a read failure without enabling 
       }),
     },
     {
-      version: 2,
+      version: 3,
       googleCloud: googleStored({
         enabled: true,
         credentialRef: "ref-1",
@@ -323,7 +414,7 @@ test("tts store: reports malformed settings and a read failure without enabling 
       }),
     },
     {
-      version: 2,
+      version: 3,
       googleCloud: googleStored({
         enabled: true,
         credentialRef: "ref-1",
@@ -345,7 +436,7 @@ test("tts store: reports malformed settings and a read failure without enabling 
     expect(mem.getSetCalls()).toBe(0);
   }
 
-  const versioned = JSON.stringify({ version: 3, googleCloud: null });
+  const versioned = JSON.stringify({ version: 4, googleCloud: null });
   const unsupported = createMemoryStorage({ [TTS_STORAGE_KEY]: versioned });
   const versionStore = createTtsSettingsStore(unsupported.storage);
   await versionStore.load();
@@ -398,7 +489,8 @@ test("tts store: serializes overlapping saves and keeps only the last key", asyn
 test("tts store: saves Azure beside an active Google channel and follows priority order", async () => {
   const mem = createMemoryStorage({
     [TTS_STORAGE_KEY]: JSON.stringify({
-      version: 2,
+      version: 3,
+      order: ["google-cloud", "azure"],
       googleCloud: googleStored({ enabled: true, credentialRef: "google-ref" }),
     }),
     [ttsCredentialStorageKey("google-ref")]: JSON.stringify({ apiKey: "google-key" }),
@@ -560,7 +652,8 @@ test("tts store: a failed Azure switch or replacement keeps the previous channel
 test("tts store: accepts two enabled channels and rejects an invalid stored Azure region", async () => {
   const both = createMemoryStorage({
     [TTS_STORAGE_KEY]: JSON.stringify({
-      version: 2,
+      version: 3,
+      order: ["google-cloud", "azure"],
       googleCloud: googleStored({ enabled: true, credentialRef: "google-ref" }),
       azure: { enabled: true, credentialRef: "azure-ref", region: "eastus" },
     }),
@@ -574,12 +667,14 @@ test("tts store: accepts two enabled channels and rejects an invalid stored Azur
 
   const records = [
     {
-      version: 2,
+      version: 3,
+      order: ["azure"],
       googleCloud: null,
       azure: { enabled: true, credentialRef: "azure-ref", region: "EASTUS" },
     },
     {
-      version: 2,
+      version: 3,
+      order: ["azure"],
       googleCloud: null,
       azure: { enabled: true, credentialRef: "azure-ref", region: "east.us" },
     },
@@ -766,7 +861,8 @@ test("tts store: keeps a saved voice that left the catalog until the user change
   };
   const mem = createMemoryStorage({
     [TTS_STORAGE_KEY]: JSON.stringify({
-      version: 2,
+      version: 3,
+      order: ["google-cloud"],
       googleCloud: googleStored({
         enabled: true,
         credentialRef: "google-ref",

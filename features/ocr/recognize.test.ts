@@ -34,7 +34,7 @@ function ocrSeedRecord(options: {
   const baidu = options.baidu ?? null;
   const extra: Record<string, string> = {
     [OCR_STORAGE_KEY]: JSON.stringify({
-      version: 3,
+      version: 4,
       order: options.order ?? ["ai", "baidu"],
       enabled: {
         ai: options.enabled?.ai ?? ai !== null,
@@ -468,7 +468,7 @@ test("ocr recognize: unreadable Baidu keys and a disabled binding send nothing",
   const broken = makeSeedStorage({
     extra: {
       [OCR_STORAGE_KEY]: JSON.stringify({
-        version: 3,
+        version: 4,
         order: ["baidu", "ai"],
         enabled: { ai: false, baidu: true },
         ai: null,

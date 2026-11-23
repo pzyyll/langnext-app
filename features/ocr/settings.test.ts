@@ -1,5 +1,6 @@
 import { expect, test } from "nsh/test";
 import {
+  baiduCredentialStorageKey,
   createOcrSettingsStore,
   OCR_STORAGE_KEY,
   type BaiduOcrOperation,
@@ -55,11 +56,103 @@ function createMemoryStorage(initial: Record<string, string> = {}) {
 
 const VISION_BINDING: OcrServiceBinding = { kind: "ai", modelId: "vision-model" };
 
+test("ocr store: starts with no added channels and every kind available", async () => {
+  const mem = createMemoryStorage();
+  const store = createOcrSettingsStore(mem.storage);
+
+  expect(store.channelOrder()).toEqual([]);
+  expect(store.availableChannels()).toEqual(["ai", "baidu"]);
+  expect(store.isEnabled("ai")).toBe(false);
+  expect(store.isEnabled("baidu")).toBe(false);
+  expect(store.enabledBindings()).toEqual([]);
+  expect(store.savedAiBinding()).toBeNull();
+  expect(store.savedBaiduBinding()).toBeNull();
+  expect(store.loadError()).toBeNull();
+
+  await store.load();
+  expect(store.loadError()).toBeNull();
+  expect(store.channelOrder()).toEqual([]);
+  expect(store.availableChannels()).toEqual(["ai", "baidu"]);
+  expect(store.enabledBindings()).toEqual([]);
+  expect(mem.getSetCalls()).toBe(0);
+});
+
+test("ocr store: adds channels without enabling them and persists the added order", async () => {
+  const mem = createMemoryStorage();
+  const store = createOcrSettingsStore(mem.storage);
+  await store.load();
+
+  expect((await store.addChannel("baidu")).ok).toBe(true);
+  expect(store.channelOrder()).toEqual(["baidu"]);
+  expect(store.availableChannels()).toEqual(["ai"]);
+  expect(store.isEnabled("baidu")).toBe(false);
+  expect(store.enabledBindings()).toEqual([]);
+
+  expect((await store.addChannel("ai")).ok).toBe(true);
+  expect(store.channelOrder()).toEqual(["baidu", "ai"]);
+  expect(store.availableChannels()).toEqual([]);
+
+  // Re-adding an already added channel is a no-op without writing again.
+  const writes = mem.getSetCalls();
+  expect((await store.addChannel("baidu")).ok).toBe(true);
+  expect(mem.getSetCalls()).toBe(writes);
+
+  expect(JSON.parse(mem.backing[OCR_STORAGE_KEY]!)).toEqual({
+    version: 4,
+    order: ["baidu", "ai"],
+    enabled: { ai: false, baidu: false },
+    ai: null,
+    baidu: null,
+  });
+
+  const reopened = createOcrSettingsStore(mem.storage);
+  await reopened.load();
+  expect(reopened.channelOrder()).toEqual(["baidu", "ai"]);
+  expect(reopened.availableChannels()).toEqual([]);
+});
+
+test("ocr store: removes a channel with its binding and Baidu credential, and offers it again", async () => {
+  const mem = createMemoryStorage();
+  const store = createOcrSettingsStore(mem.storage);
+  await store.load();
+
+  await store.addChannel("ai");
+  await store.addChannel("baidu");
+  const baidu = await saveBaidu(store, FIRST_KEYS);
+  await store.save(VISION_BINDING);
+  expect(store.channelOrder()).toEqual(["ai", "baidu"]);
+  expect(store.availableChannels()).toEqual([]);
+
+  expect((await store.removeChannel("baidu")).ok).toBe(true);
+  expect(store.channelOrder()).toEqual(["ai"]);
+  expect(store.availableChannels()).toEqual(["baidu"]);
+  expect(store.savedBaiduBinding()).toBeNull();
+  expect(store.isEnabled("baidu")).toBe(false);
+  expect(store.enabledBindings()).toEqual([VISION_BINDING]);
+  expect(mem.backing[baiduCredentialStorageKey(baidu.credentialRef)]).toBeUndefined();
+  expect(await store.readBaiduCredentials(baidu.credentialRef)).toBeNull();
+
+  expect((await store.removeChannel("ai")).ok).toBe(true);
+  expect(store.channelOrder()).toEqual([]);
+  expect(store.savedAiBinding()).toBeNull();
+  expect(store.enabledBindings()).toEqual([]);
+
+  // Removing a channel that is not in the list is a no-op without writing again.
+  const writes = mem.getSetCalls();
+  expect((await store.removeChannel("ai")).ok).toBe(true);
+  expect(mem.getSetCalls()).toBe(writes);
+
+  const reopened = createOcrSettingsStore(mem.storage);
+  await reopened.load();
+  expect(reopened.channelOrder()).toEqual([]);
+  expect(reopened.availableChannels()).toEqual(["ai", "baidu"]);
+});
+
 test("ocr store: saves one AI binding, auto-enables it, and restores it from storage", async () => {
   const mem = createMemoryStorage();
   const store1 = createOcrSettingsStore(mem.storage);
 
-  expect(store1.channelOrder()).toEqual(["ai", "baidu"]);
+  expect(store1.channelOrder()).toEqual([]);
   expect(store1.isEnabled("ai")).toBe(false);
   expect(store1.isEnabled("baidu")).toBe(false);
   expect(store1.enabledBindings()).toEqual([]);
@@ -73,6 +166,8 @@ test("ocr store: saves one AI binding, auto-enables it, and restores it from sto
 
   const result = await store1.save(VISION_BINDING);
   expect(result.ok).toBe(true);
+  expect(store1.channelOrder()).toEqual(["ai"]);
+  expect(store1.availableChannels()).toEqual(["baidu"]);
   expect(store1.isEnabled("ai")).toBe(true);
   expect(store1.isEnabled("baidu")).toBe(false);
   expect(store1.enabledBindings()).toEqual([VISION_BINDING]);
@@ -82,15 +177,15 @@ test("ocr store: saves one AI binding, auto-enables it, and restores it from sto
   const store2 = createOcrSettingsStore(mem.storage);
   await store2.load();
   expect(store2.loadError()).toBeNull();
-  expect(store2.channelOrder()).toEqual(["ai", "baidu"]);
+  expect(store2.channelOrder()).toEqual(["ai"]);
   expect(store2.isEnabled("ai")).toBe(true);
   expect(store2.enabledBindings()).toEqual([VISION_BINDING]);
   expect(store2.savedAiBinding()).toEqual(VISION_BINDING);
   expect(store2.savedBaiduBinding()).toBeNull();
 
   expect(JSON.parse(mem.backing[OCR_STORAGE_KEY]!)).toEqual({
-    version: 3,
-    order: ["ai", "baidu"],
+    version: 4,
+    order: ["ai"],
     enabled: { ai: true, baidu: false },
     ai: { modelId: "vision-model" },
     baidu: null,
@@ -160,57 +255,70 @@ test("ocr store: rejects an unknown storage version with a visible load error", 
   expect(mem.backing[OCR_STORAGE_KEY]).toBe(raw);
 });
 
-test("ocr store: rejects malformed v3 records and enabled channels without saved configs", async () => {
+test("ocr store: rejects malformed v4 records and inconsistent channel state", async () => {
   const records = [
     {
-      version: 3,
+      version: 4,
       order: ["ai", "baidu"],
       enabled: { ai: true, baidu: false },
       ai: null,
       baidu: null,
     },
     {
-      version: 3,
+      version: 4,
       order: ["ai", "baidu"],
       enabled: { ai: false, baidu: true },
       ai: { modelId: "vision-model" },
       baidu: null,
     },
-    { version: 3, order: ["ai"], enabled: { ai: false, baidu: false }, ai: null, baidu: null },
     {
-      version: 3,
+      version: 4,
+      order: [],
+      enabled: { ai: true, baidu: false },
+      ai: { modelId: "vision-model" },
+      baidu: null,
+    },
+    {
+      version: 4,
       order: ["ai", "ai"],
       enabled: { ai: false, baidu: false },
       ai: null,
       baidu: null,
     },
     {
-      version: 3,
+      version: 4,
       order: ["ai", "google"],
       enabled: { ai: false, baidu: false },
       ai: null,
       baidu: null,
     },
     {
-      version: 3,
+      version: 4,
       order: ["ai", "baidu"],
       enabled: { ai: "yes", baidu: false },
       ai: null,
       baidu: null,
     },
     {
-      version: 3,
+      version: 4,
       order: ["ai", "baidu"],
       enabled: { ai: true, baidu: false },
       ai: { modelId: "" },
       baidu: null,
     },
     {
-      version: 3,
+      version: 4,
       order: ["ai", "baidu"],
       enabled: { ai: true, baidu: false },
       ai: { modelId: "vision-model" },
       baidu: { operation: "premium", credentialRef: "ref-1" },
+    },
+    {
+      version: 4,
+      order: ["ai"],
+      enabled: { ai: false, baidu: false },
+      ai: null,
+      baidu: { operation: "accurate", credentialRef: "ref-1" },
     },
   ];
 
@@ -239,7 +347,7 @@ test("ocr store: reports a read failure without any enabled binding", async () =
 });
 
 test("ocr store: a valid save replaces invalid stored data", async () => {
-  const mem = createMemoryStorage({ [OCR_STORAGE_KEY]: '{"version":3,"order":["ai"]}' });
+  const mem = createMemoryStorage({ [OCR_STORAGE_KEY]: '{"version":4,"order":["ai"]}' });
   const store = createOcrSettingsStore(mem.storage);
   await store.load();
   expect(store.loadError()?.key).toBe("storage_malformed");
@@ -285,8 +393,8 @@ test("ocr store: saves a Baidu binding by reference and restores the credential 
   expect(raw).not.toContain(apiKey);
   expect(raw).not.toContain(secretKey);
   expect(JSON.parse(raw)).toEqual({
-    version: 3,
-    order: ["ai", "baidu"],
+    version: 4,
+    order: ["baidu"],
     enabled: { ai: false, baidu: true },
     ai: null,
     baidu: { operation: "accurate", credentialRef: ref },
@@ -387,10 +495,11 @@ test("ocr store: replacing Baidu keys removes the previous credential entry", as
 test("ocr store: saving both channels keeps both enabled in priority order", async () => {
   const mem = createMemoryStorage();
   const store = createOcrSettingsStore(mem.storage);
-  const baidu = await saveBaidu(store, FIRST_KEYS);
   const ai = await store.save(VISION_BINDING);
+  const baidu = await saveBaidu(store, FIRST_KEYS);
 
   expect(ai.ok).toBe(true);
+  expect(store.channelOrder()).toEqual(["ai", "baidu"]);
   expect(store.isEnabled("ai")).toBe(true);
   expect(store.isEnabled("baidu")).toBe(true);
   expect(store.enabledBindings()).toEqual([VISION_BINDING, baidu]);
@@ -408,9 +517,10 @@ test("ocr store: saving both channels keeps both enabled in priority order", asy
 test("ocr store: reordering channels updates priority order and persists", async () => {
   const mem = createMemoryStorage();
   const store = createOcrSettingsStore(mem.storage);
-  const baidu = await saveBaidu(store, FIRST_KEYS);
   await store.save(VISION_BINDING);
+  const baidu = await saveBaidu(store, FIRST_KEYS);
 
+  expect(store.channelOrder()).toEqual(["ai", "baidu"]);
   expect(store.enabledBindings()).toEqual([VISION_BINDING, baidu]);
 
   // Keeping a channel in its position does not write to storage.
@@ -444,8 +554,8 @@ test("ocr store: toggling preserves saved configs, rejects unconfigured enable, 
   expect(unconfigured.key).toBe("channel_unconfigured");
   expect(mem.getSetCalls()).toBe(0);
 
-  const baidu = await saveBaidu(store, FIRST_KEYS, "accurate");
   await store.save(VISION_BINDING);
+  const baidu = await saveBaidu(store, FIRST_KEYS, "accurate");
   expect(store.enabledBindings()).toEqual([VISION_BINDING, baidu]);
 
   // Disabling AI keeps its saved config and drops it from enabledBindings.
@@ -474,8 +584,8 @@ test("ocr store: toggling preserves saved configs, rejects unconfigured enable, 
 test("ocr store: failed toggle or reorder write keeps previous state", async () => {
   const mem = createMemoryStorage();
   const store = createOcrSettingsStore(mem.storage);
-  const baidu = await saveBaidu(store, FIRST_KEYS);
   await store.save(VISION_BINDING);
+  const baidu = await saveBaidu(store, FIRST_KEYS);
   const before = mem.backing[OCR_STORAGE_KEY];
 
   mem.setSetError(new Error("disk full"));

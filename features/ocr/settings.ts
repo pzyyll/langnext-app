@@ -2,9 +2,9 @@ import { signal, Storage } from "nsh";
 import { t } from "nsh/i18n";
 import { createLogger } from "../../services/log";
 
-export const OCR_STORAGE_KEY = "settings.ocr.v3";
+export const OCR_STORAGE_KEY = "settings.ocr.v4";
 export const BAIDU_CREDENTIAL_KEY_PREFIX = "settings.ocr.credentials.";
-const STORAGE_VERSION = 3;
+const STORAGE_VERSION = 4;
 
 const log = createLogger("ocr/settings");
 
@@ -94,7 +94,7 @@ interface OcrSavedSettings {
 }
 
 const EMPTY_SETTINGS: OcrSavedSettings = {
-  order: [...OCR_SERVICE_KINDS],
+  order: [],
   enabled: { ai: false, baidu: false },
   ai: null,
   baidu: null,
@@ -102,8 +102,10 @@ const EMPTY_SETTINGS: OcrSavedSettings = {
 
 export interface OcrSettingsStore {
   load(): Promise<void>;
-  /** Channels in top-to-bottom priority order. */
+  /** Added channels in top-to-bottom priority order. */
   channelOrder(): readonly OcrServiceKind[];
+  /** Channels not yet added to the priority list, in catalog order. */
+  availableChannels(): readonly OcrServiceKind[];
   /** Whether one channel is enabled. */
   isEnabled(kind: OcrServiceKind): boolean;
   /** Enabled configured bindings in top-to-bottom priority order. */
@@ -113,6 +115,10 @@ export interface OcrSettingsStore {
   /** The saved Baidu configuration, independent of enabled state. */
   savedBaiduBinding(): OcrBaiduBinding | null;
   loadError(): OcrLoadError | null;
+  /** Adds a channel to the list, left off until it is configured. */
+  addChannel(kind: OcrServiceKind): Promise<OcrActionResult>;
+  /** Removes a channel from the list and clears its saved binding or credentials. */
+  removeChannel(kind: OcrServiceKind): Promise<OcrActionResult>;
   save(input: SaveOcrBindingInput): Promise<OcrSaveResult>;
   setEnabled(kind: OcrServiceKind, enabled: boolean): Promise<OcrActionResult>;
   /** Moves one channel to a new top-to-bottom priority position, clamped to the list. */
@@ -188,6 +194,10 @@ function bindingForKind(
   return kind === "ai" ? settings.ai : settings.baidu;
 }
 
+function ensureInOrder(order: readonly OcrServiceKind[], kind: OcrServiceKind): OcrServiceKind[] {
+  return order.includes(kind) ? [...order] : [...order, kind];
+}
+
 /** A missing or null entry means "not saved"; `undefined` means the entry is malformed. */
 function parseAiBinding(value: unknown): OcrAiBinding | null | undefined {
   if (value === null || value === undefined) return null;
@@ -206,7 +216,7 @@ function parseBaiduBinding(value: unknown): OcrBaiduBinding | null | undefined {
 }
 
 function parseOrder(value: unknown): OcrServiceKind[] | null {
-  if (!Array.isArray(value) || value.length !== OCR_SERVICE_KINDS.length) return null;
+  if (!Array.isArray(value) || value.length > OCR_SERVICE_KINDS.length) return null;
   const seen = new Set<OcrServiceKind>();
   const order: OcrServiceKind[] = [];
   for (const item of value) {
@@ -214,7 +224,7 @@ function parseOrder(value: unknown): OcrServiceKind[] | null {
     seen.add(item);
     order.push(item);
   }
-  return seen.size === OCR_SERVICE_KINDS.length ? order : null;
+  return order;
 }
 
 function parseEnabledMap(value: unknown): Record<OcrServiceKind, boolean> | null {
@@ -248,6 +258,14 @@ function parseStoredSettings(raw: string): ParsedStorage {
     return { ok: false, key: "storage_malformed" };
   }
   if ((enabled.ai && ai === null) || (enabled.baidu && baidu === null)) {
+    return { ok: false, key: "storage_malformed" };
+  }
+  for (const kind of OCR_SERVICE_KINDS) {
+    if (enabled[kind] && !order.includes(kind)) {
+      return { ok: false, key: "storage_malformed" };
+    }
+  }
+  if ((ai !== null && !order.includes("ai")) || (baidu !== null && !order.includes("baidu"))) {
     return { ok: false, key: "storage_malformed" };
   }
   return { ok: true, settings: { order, enabled, ai, baidu } };
@@ -368,6 +386,10 @@ export function createOcrSettingsStore(storage: OcrSettingsStorage): OcrSettings
       loadErrorSignal.set(null);
     },
     channelOrder: () => [...settingsSignal().order],
+    availableChannels: () => {
+      const added = new Set(settingsSignal().order);
+      return OCR_SERVICE_KINDS.filter((kind) => !added.has(kind));
+    },
     isEnabled: (kind) => settingsSignal().enabled[kind],
     enabledBindings: () => {
       const current = settingsSignal();
@@ -395,6 +417,33 @@ export function createOcrSettingsStore(storage: OcrSettingsStorage): OcrSettings
     },
     loadError: () => loadErrorSignal(),
     readBaiduCredentials: (credentialRef) => readStoredPair(credentialRef),
+    addChannel: async (kind) =>
+      enqueueWrite(async () => {
+        const current = settingsSignal();
+        if (current.order.includes(kind)) return { ok: true };
+        return persistSnapshot({
+          order: ensureInOrder(current.order, kind),
+          enabled: { ...current.enabled },
+          ai: current.ai,
+          baidu: current.baidu,
+        });
+      }),
+    removeChannel: async (kind) =>
+      enqueueWrite(async () => {
+        const current = settingsSignal();
+        if (!current.order.includes(kind)) return { ok: true };
+        const previousBaidu = kind === "baidu" ? current.baidu : null;
+        const written = await persistSnapshot({
+          order: current.order.filter((item) => item !== kind),
+          enabled: { ...current.enabled, [kind]: false },
+          ai: kind === "ai" ? null : current.ai,
+          baidu: kind === "baidu" ? null : current.baidu,
+        });
+        if (written.ok && previousBaidu !== null) {
+          await removeCredentialQuietly(previousBaidu.credentialRef);
+        }
+        return written;
+      }),
     save: async (input) => {
       if (input.kind === "ai") {
         if (!isNonblankModelId(input.modelId)) return failure("model_id_blank");
@@ -404,7 +453,7 @@ export function createOcrSettingsStore(storage: OcrSettingsStorage): OcrSettings
           const nextEnabled = current.ai === null ? true : current.enabled.ai;
           return writeBindingSnapshot(
             {
-              order: [...current.order],
+              order: ensureInOrder(current.order, "ai"),
               enabled: { ...current.enabled, ai: nextEnabled },
               ai: { kind: "ai", modelId },
               baidu: current.baidu,
@@ -425,7 +474,7 @@ export function createOcrSettingsStore(storage: OcrSettingsStorage): OcrSettings
           if (pair === null) return failure("baidu_keys_required");
           return writeBindingSnapshot(
             {
-              order: [...current.order],
+              order: ensureInOrder(current.order, "baidu"),
               enabled: { ...current.enabled },
               ai: current.ai,
               baidu: {
@@ -456,7 +505,7 @@ export function createOcrSettingsStore(storage: OcrSettingsStorage): OcrSettings
         }
         const written = await writeBindingSnapshot(
           {
-            order: [...current.order],
+            order: ensureInOrder(current.order, "baidu"),
             enabled: { ...current.enabled, baidu: nextEnabled },
             ai: current.ai,
             baidu: { kind: "baidu", operation, credentialRef },
@@ -477,7 +526,10 @@ export function createOcrSettingsStore(storage: OcrSettingsStorage): OcrSettings
     setEnabled: async (kind, nextEnabled) =>
       enqueueWrite(async () => {
         const current = settingsSignal();
-        if (nextEnabled && bindingForKind(current, kind) === null) {
+        if (
+          nextEnabled &&
+          (!current.order.includes(kind) || bindingForKind(current, kind) === null)
+        ) {
           return failure("channel_unconfigured");
         }
         if (current.enabled[kind] === nextEnabled) return { ok: true };

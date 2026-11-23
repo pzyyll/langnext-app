@@ -97,6 +97,7 @@ settings:
     saveError: 无法保存双击复制设置，请重试。
   ocr:
     title: OCR
+    addChannel: 添加渠道
     priorityHint: 已启用的渠道按从上到下的顺序使用，其余作为备用。
     notConfigured: 未配置
     saved: OCR 渠道已保存
@@ -104,6 +105,10 @@ settings:
     configureBeforeEnable: 请先配置此渠道再启用。
     configureLabel: 配置 %{name}
     enableLabel: 启用 %{name}
+    removeLabel: 移除 %{name}
+    removeTitle: 移除渠道
+    removeDescription: 移除渠道“%{name}”并清除已保存的配置？
+    removeConfirm: 移除
     moveUp: 上移 %{name}
     moveDown: 下移 %{name}
     reorder: 调整「%{name}」的顺序
@@ -126,6 +131,9 @@ settings:
       general: 标准含位置版
       accurate: 高精度含位置版
     windowsOnly: 屏幕截取仅支持 Windows。
+    emptyTitle: 暂未添加任何 OCR 识别渠道
+    emptyChannels: 可添加的渠道
+    emptyAdd: 添加 %{name}
     error:
       storageReadFailed: 无法读取已保存的 OCR 设置。
       storageMalformed: 已保存的 OCR 设置无法解析。
@@ -147,8 +155,16 @@ settings:
     savedKey: "\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022"
     keyUnreadable: 无法读取已保存的 API Key。请重新填写。
     breadcrumbLabel: 语音合成导航
+    addChannel: 添加渠道
     configureLabel: 配置 %{name}
     enableLabel: 启用 %{name}
+    removeLabel: 移除 %{name}
+    removeTitle: 移除渠道
+    removeDescription: 移除渠道“%{name}”并清除已保存的配置？
+    removeConfirm: 移除
+    emptyTitle: 暂未添加任何语音合成渠道
+    emptyChannels: 可添加的渠道
+    emptyAdd: 添加 %{name}
     itemLabel: "%{name}（%{status}）"
     reorder: 调整「%{name}」的顺序
     reorderHint: 拖动，或按上下方向键。
@@ -289,6 +305,9 @@ settings:
     preferredTranslation: 目标语言
     preferredTranslationHelp: 目标语言设为自动时，母语内容译为所选的语言。
     preferenceUnset: 未设置
+    emptyTitle: 暂未添加任何语言检测渠道
+    emptyChannels: 可添加的渠道
+    emptyAdd: 添加 %{name}
     error:
       storageReadFailed: 无法读取已保存的语言检测设置。
       storageMalformed: 已保存的语言检测设置无法解析。

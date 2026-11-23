@@ -5,6 +5,7 @@ import {
   effect,
   Image,
   reduceMotion,
+  setAccessibilityFocus,
   signal,
   Text,
   View,
@@ -18,10 +19,12 @@ import { t } from "nsh/i18n";
 import googleCloudIcon from "../../assets/icons/google-cloud.svg";
 import microsoftAzureIcon from "../../assets/icons/microsoft-azure.svg";
 import { motion } from "../../components/motion";
-import { Avatar } from "../../components/ui/avatar";
+import { Avatar, type AvatarSize } from "../../components/ui/avatar";
 import { Badge } from "../../components/ui/badge";
 import { Button, KeyboardButton } from "../../components/ui/button";
 import { Card, SectionHeading } from "../../components/ui/card";
+import { AppDialog, ConfirmDialog } from "../../components/ui/dialog";
+import { ChannelEmptyState } from "../../components/ui/empty-state";
 import { Icon } from "../../components/ui/icon";
 import { Input } from "../../components/ui/input";
 import { Switch } from "../../components/ui/switch";
@@ -51,10 +54,21 @@ export type { TtsChannelId };
 /** Time a reordered row takes to settle into its new slot. */
 const REORDER_SETTLE_MS = 180;
 
+function focusTarget(node: ViewRef | null | undefined) {
+  if (!node) return;
+  node.focus();
+  setAccessibilityFocus(node);
+}
+
 interface TtsSectionProps {
   compact: boolean;
   selectedChannel: TtsChannelId | null;
   onSelectChannel: (channel: TtsChannelId | null) => void;
+  getAddButtonRef?: () => ViewRef | null;
+  onRegisterAddTrigger?: (open: () => void) => () => void;
+  onAddBusyChange?: (busy: boolean) => void;
+  /** Reports whether one of the section's dialogs owns Escape. */
+  onDialogOpenChange?: (open: boolean) => void;
 }
 
 type CredentialState = "unknown" | "readable" | "missing";
@@ -64,10 +78,10 @@ function channelName(channel: TtsChannelId): string {
   return t(channel === "azure" ? "settings.tts.azure.channel" : "settings.tts.channel");
 }
 
-function ChannelAvatar(props: { channel: TtsChannelId }) {
+function ChannelAvatar(props: { channel: TtsChannelId; size?: AvatarSize }) {
   return (
     <Avatar
-      size="md"
+      size={props.size ?? "md"}
       accessibilityLabel=""
       fallback={
         <Image
@@ -80,30 +94,122 @@ function ChannelAvatar(props: { channel: TtsChannelId }) {
   );
 }
 
+function AddTtsChannelDialog(props: {
+  open: boolean;
+  availableChannels: readonly TtsChannelId[];
+  busy: boolean;
+  onOpenChange: (open: boolean) => void;
+  onSelect: (channel: TtsChannelId) => void;
+  onClose?: () => void;
+}) {
+  const cardRefs: Partial<Record<TtsChannelId, ViewRef>> = {};
+  const firstChannel = () => props.availableChannels[0];
+
+  return (
+    <AppDialog
+      testID="settings-tts-add-dialog"
+      open={props.open}
+      onOpenChange={(open) => {
+        if (!props.busy) props.onOpenChange(open);
+      }}
+      onOpen={() => {
+        const first = firstChannel();
+        if (first !== undefined) focusTarget(cardRefs[first]);
+      }}
+      onClose={() => props.onClose?.()}
+      title={t("settings.tts.addChannel")}
+      size="md"
+      closeOnEscape={!props.busy}
+      closeOnBackdropPress={!props.busy}
+      footer={
+        <Button
+          testID="settings-tts-add-cancel"
+          variant="outline"
+          size="sm"
+          label={t("common.cancel")}
+          disabled={props.busy}
+          onPress={() => props.onOpenChange(false)}
+        />
+      }
+    >
+      <View class="grid grid-cols-2 gap-3">
+        <Each of={props.availableChannels} key={(channel) => channel}>
+          {(channel) => {
+            const currentChannel = channel();
+            cleanup(() => {
+              delete cardRefs[currentChannel];
+            });
+            return (
+              <Button
+                testID={`settings-tts-option-${channel()}`}
+                ref={(node) => {
+                  cardRefs[channel()] = node;
+                }}
+                variant="outline"
+                size="card"
+                disabled={props.busy}
+                accessibilityLabel={channelName(channel())}
+                onPress={() => props.onSelect(channel())}
+                class="w-full"
+              >
+                <ChannelAvatar channel={channel()} />
+                <Text class="min-w-0 flex-1 truncate text-sm font-medium text-foreground">
+                  {channelName(channel())}
+                </Text>
+              </Button>
+            );
+          }}
+        </Each>
+      </View>
+    </AppDialog>
+  );
+}
+
 interface TtsChannelListProps {
   compact: boolean;
   credentialState: CredentialStates;
+  busy: boolean;
+  listError: string | null;
+  onClearError: () => void;
+  onSetError: (message: string) => void;
+  onBusyChange: (busy: boolean) => void;
   onOpenChannel: (channel: TtsChannelId) => void;
-  onRowRef: (channel: TtsChannelId, node: ViewRef) => void;
-  onGripRef: (channel: TtsChannelId, node: ViewRef) => void;
+  onAddAvailableChannel: (channel: TtsChannelId) => void;
+  onFocusAddButton: () => void;
+  onRowRef: (channel: TtsChannelId, node: ViewRef | null) => void;
+  onGripRef: (channel: TtsChannelId, node: ViewRef | null) => void;
+  onRowFocusRef: (channel: TtsChannelId, node: ViewRef | null) => void;
   onFocusGrip: (channel: TtsChannelId) => void;
+  onFocusChannelFallback: (channel: TtsChannelId) => void;
+  onRemoveDialogOpenChange: (open: boolean) => void;
 }
 
 function TtsChannelList(props: TtsChannelListProps) {
   const entrance = createMotion({ enter: motion.pageEnter });
   const mutating = signal(false);
-  const listError = signal<string | null>(null);
   const dragging = signal<TtsChannelId | null>(null);
   const animating = signal(false);
+  const pendingRemove = signal<TtsChannelId | null>(null);
+  const removeError = signal<string | null>(null);
   // Per-channel drag offsets drive the rows natively; they return to 0 at rest.
   const offsets: Record<TtsChannelId, AnimatedValue> = {
     "google-cloud": createAnimatedValue(0),
     azure: createAnimatedValue(0),
   };
   const rowSlots: Partial<Record<TtsChannelId, { top: number; height: number }>> = {};
+  const removeRefs: Partial<Record<TtsChannelId, ViewRef>> = {};
+  let removeCancelNode: ViewRef | null = null;
+  let pendingRemoveCloseFocus: (() => void) | null = null;
+
+  effect(() => props.onBusyChange(mutating() || animating()));
+  cleanup(() => props.onBusyChange(false));
+  effect(() => props.onRemoveDialogOpenChange(pendingRemove() !== null));
+  cleanup(() => props.onRemoveDialogOpenChange(false));
 
   const order = () => ttsSettingsStore.channelOrder();
   const enabledOrder = () => order().filter((channel) => ttsSettingsStore.isEnabled(channel));
+  const canReorder = () => order().length > 1;
+  const isBusy = () => props.busy || mutating() || animating();
 
   const channelRole = (channel: TtsChannelId): "primary" | "backup" | null => {
     const position = enabledOrder().indexOf(channel);
@@ -124,15 +230,64 @@ function TtsChannelList(props: TtsChannelListProps) {
   };
 
   const handleToggle = async (channel: TtsChannelId, nextEnabled: boolean) => {
-    if (mutating()) return;
-    listError.set(null);
+    if (isBusy()) return;
+    props.onClearError();
     mutating.set(true);
     try {
       const result = await ttsSettingsStore.setEnabled(channel, nextEnabled);
-      if (!result.ok) listError.set(result.message);
+      if (!result.ok) props.onSetError(result.message);
     } finally {
       mutating.set(false);
     }
+  };
+
+  const nextFocusTargetAfterRemove = (
+    previousOrder: readonly TtsChannelId[],
+    removed: TtsChannelId,
+  ): (() => void) => {
+    const index = previousOrder.indexOf(removed);
+    const remaining = previousOrder.filter((item) => item !== removed);
+    if (remaining.length === 0) return props.onFocusAddButton;
+    const target = remaining[Math.min(Math.max(index, 0), remaining.length - 1)]!;
+    return () => props.onFocusChannelFallback(target);
+  };
+
+  const performRemove = async (channel: TtsChannelId, fromConfirmDialog: boolean) => {
+    if (isBusy()) return false;
+    const previousOrder = order();
+    props.onClearError();
+    removeError.set(null);
+    mutating.set(true);
+    try {
+      const result = await ttsSettingsStore.removeChannel(channel);
+      if (!result.ok) {
+        if (fromConfirmDialog) removeError.set(result.message);
+        else props.onSetError(result.message);
+        return false;
+      }
+      const nextFocus = nextFocusTargetAfterRemove(previousOrder, channel);
+      if (fromConfirmDialog) {
+        pendingRemoveCloseFocus = nextFocus;
+        pendingRemove.set(null);
+      } else {
+        queueMicrotask(nextFocus);
+      }
+      return true;
+    } finally {
+      mutating.set(false);
+    }
+  };
+
+  const handleRequestRemove = (channel: TtsChannelId) => {
+    if (isBusy()) return;
+    props.onClearError();
+    removeError.set(null);
+    if (ttsSettingsStore.savedBinding(channel) !== null) {
+      pendingRemoveCloseFocus = () => focusTarget(removeRefs[channel]);
+      pendingRemove.set(channel);
+      return;
+    }
+    void performRemove(channel, false);
   };
 
   const animateOffset = (channel: TtsChannelId, to: number): Promise<unknown> => {
@@ -148,8 +303,8 @@ function TtsChannelList(props: TtsChannelListProps) {
   };
 
   const handleDragStart = (channel: TtsChannelId) => {
-    if (mutating() || animating() || dragging() !== null) return;
-    listError.set(null);
+    if (isBusy() || !canReorder() || dragging() !== null) return;
+    props.onClearError();
     dragging.set(channel);
   };
 
@@ -209,7 +364,7 @@ function TtsChannelList(props: TtsChannelListProps) {
         return;
       }
       await Promise.all(nextOrder.map((row) => animateOffset(row, 0)));
-      listError.set(result.message);
+      props.onSetError(result.message);
     } finally {
       dragging.set(null);
       animating.set(false);
@@ -217,17 +372,17 @@ function TtsChannelList(props: TtsChannelListProps) {
   };
 
   const handleMoveBy = async (channel: TtsChannelId, delta: number, refocus: boolean) => {
-    if (mutating() || animating() || dragging() !== null) return;
+    if (isBusy() || !canReorder() || dragging() !== null) return;
     const list = order();
     const index = list.indexOf(channel);
     const target = index + delta;
     if (index === -1 || target < 0 || target >= list.length) return;
-    listError.set(null);
+    props.onClearError();
     mutating.set(true);
     try {
       const result = await ttsSettingsStore.moveChannelTo(channel, target);
       if (!result.ok) {
-        listError.set(result.message);
+        props.onSetError(result.message);
         return;
       }
       if (refocus) queueMicrotask(() => props.onFocusGrip(channel));
@@ -258,144 +413,226 @@ function TtsChannelList(props: TtsChannelListProps) {
         </Text>
       </If>
 
-      <Card testID="settings-tts-card" class={props.compact ? "gap-1 p-2" : "gap-1 p-3"}>
-        <Each of={order()} key={(channel) => channel}>
-          {(channel, index) => {
-            const name = () => channelName(channel());
-            const configured = () => ttsSettingsStore.savedBinding(channel()) !== null;
-            const enabled = () => ttsSettingsStore.isEnabled(channel());
-            const role = () => channelRole(channel());
-            const summary = () => channelSummary(channel());
-            const rowLabel = () =>
-              t("settings.tts.itemLabel", {
-                name: name(),
-                status:
-                  role() !== null
-                    ? t(`settings.tts.role.${role()!}`)
-                    : configured()
-                      ? t("models.filter.disabled")
-                      : t("settings.tts.notConfigured"),
+      <If
+        when={order().length > 0}
+        else={
+          <ChannelEmptyState
+            testID="settings-tts-empty"
+            icon="mdi:tts"
+            title={t("settings.tts.emptyTitle")}
+            choicesLabel={t("settings.tts.emptyChannels")}
+            busy={props.busy}
+            compact={props.compact}
+            choices={ttsSettingsStore.availableChannels().map((channel) => ({
+              id: channel,
+              label: channelName(channel),
+              accessibilityLabel: t("settings.tts.emptyAdd", { name: channelName(channel) }),
+              testID: `settings-tts-empty-channel-${channel}`,
+              leading: <ChannelAvatar channel={channel} size="sm" />,
+              onPress: () => props.onAddAvailableChannel(channel),
+            }))}
+          />
+        }
+      >
+        <Card testID="settings-tts-card" class={props.compact ? "gap-1 p-2" : "gap-1 p-3"}>
+          <Each of={order()} key={(channel) => channel}>
+            {(channel, index) => {
+              const name = () => channelName(channel());
+              cleanup(() => {
+                delete rowSlots[channel()];
+                delete removeRefs[channel()];
+                offsets[channel()].set(0);
+                props.onRowRef(channel(), null);
+                props.onGripRef(channel(), null);
+                props.onRowFocusRef(channel(), null);
               });
+              const configured = () => ttsSettingsStore.savedBinding(channel()) !== null;
+              const enabled = () => ttsSettingsStore.isEnabled(channel());
+              const role = () => channelRole(channel());
+              const summary = () => channelSummary(channel());
+              const rowLabel = () =>
+                t("settings.tts.itemLabel", {
+                  name: name(),
+                  status:
+                    role() !== null
+                      ? t(`settings.tts.role.${role()!}`)
+                      : configured()
+                        ? t("models.filter.disabled")
+                        : t("settings.tts.notConfigured"),
+                });
 
-            return (
-              <>
-                <If when={index() > 0}>
-                  <View class="mx-2 my-1 h-px bg-border" />
-                </If>
-                <View
-                  testID={`settings-tts-row-${channel()}`}
-                  pan={mutating() || animating() ? undefined : { y: offsets[channel()] }}
-                  onPanStart={() => handleDragStart(channel())}
-                  onPanEnd={(event) => void handleDragEnd(channel(), event)}
-                  onLayout={(event) => {
-                    rowSlots[channel()] = {
-                      top: event.bounds.origin.y,
-                      height: event.bounds.size.height,
-                    };
-                  }}
-                  style={{ translate: [0, offsets[channel()]] }}
-                  class={`flex-row items-center gap-1.5 rounded-lg pr-2 ${motion.navigationFeedback} ${
-                    dragging() === channel()
-                      ? "z-10 cursor-grabbing bg-card shadow-md"
-                      : "hover:bg-accent/60 active:bg-accent"
-                  }`}
-                >
-                  <Button
-                    testID={`settings-tts-channel-${channel()}`}
-                    ref={(node) => props.onRowRef(channel(), node)}
-                    variant="ghost"
-                    size="row"
-                    accessibilityLabel={rowLabel()}
-                    onPress={() => {
-                      listError.set(null);
-                      props.onOpenChannel(channel());
+              return (
+                <>
+                  <If when={index() > 0}>
+                    <View class="mx-2 my-1 h-px bg-border" />
+                  </If>
+                  <View
+                    testID={`settings-tts-row-${channel()}`}
+                    pan={isBusy() || !canReorder() ? undefined : { y: offsets[channel()] }}
+                    onPanStart={() => handleDragStart(channel())}
+                    onPanEnd={(event) => void handleDragEnd(channel(), event)}
+                    onLayout={(event) => {
+                      rowSlots[channel()] = {
+                        top: event.bounds.origin.y,
+                        height: event.bounds.size.height,
+                      };
                     }}
-                    class="min-w-0 flex-1 py-2.5 pl-3 pr-2 hover:bg-transparent active:bg-transparent"
+                    style={{ translate: [0, offsets[channel()]] }}
+                    class={`flex-row items-center gap-1.5 rounded-lg pr-2 ${motion.navigationFeedback} ${
+                      dragging() === channel()
+                        ? "z-10 cursor-grabbing bg-card shadow-md"
+                        : "hover:bg-accent/60 active:bg-accent"
+                    }`}
                   >
-                    <ChannelAvatar channel={channel()} />
-                    <View class="min-w-0 flex-1 gap-0.5">
-                      <View class="flex-row items-center gap-2">
-                        <Text class="min-w-0 shrink truncate text-sm font-medium text-card-foreground">
-                          {name()}
+                    <Button
+                      testID={`settings-tts-channel-${channel()}`}
+                      ref={(node) => props.onRowRef(channel(), node)}
+                      variant="ghost"
+                      size="row"
+                      accessibilityLabel={rowLabel()}
+                      onPress={() => {
+                        props.onClearError();
+                        props.onOpenChannel(channel());
+                      }}
+                      class="min-w-0 flex-1 py-2.5 pl-3 pr-2 hover:bg-transparent active:bg-transparent"
+                    >
+                      <ChannelAvatar channel={channel()} />
+                      <View class="min-w-0 flex-1 gap-0.5">
+                        <View class="flex-row items-center gap-2">
+                          <Text class="min-w-0 shrink truncate text-sm font-medium text-card-foreground">
+                            {name()}
+                          </Text>
+                          <If when={role()}>
+                            {(activeRole) => (
+                              <Badge
+                                testID={`settings-tts-role-${channel()}`}
+                                label={t(`settings.tts.role.${activeRole()}`)}
+                                tone={activeRole() === "primary" ? "primary" : "neutral"}
+                              />
+                            )}
+                          </If>
+                        </View>
+                        <Text
+                          testID={`settings-tts-summary-${channel()}`}
+                          class={`min-w-0 truncate text-xs ${summary().toneClass}`}
+                        >
+                          {summary().text}
                         </Text>
-                        <If when={role()}>
-                          {(activeRole) => (
-                            <Badge
-                              testID={`settings-tts-role-${channel()}`}
-                              label={t(`settings.tts.role.${activeRole()}`)}
-                              tone={activeRole() === "primary" ? "primary" : "neutral"}
-                            />
-                          )}
-                        </If>
                       </View>
-                      <Text
-                        testID={`settings-tts-summary-${channel()}`}
-                        class={`min-w-0 truncate text-xs ${summary().toneClass}`}
+                    </Button>
+
+                    <If when={canReorder()}>
+                      <KeyboardButton
+                        testID={`settings-tts-grip-${channel()}`}
+                        variant="ghost"
+                        size="icon-sm"
+                        focusable={true}
+                        tooltip={t("settings.tts.reorder", { name: name() })}
+                        accessibilityLabel={t("settings.tts.reorder", { name: name() })}
+                        accessibilityHint={t("settings.tts.reorderHint")}
+                        accessibilityActions={[
+                          { name: "moveUp", label: t("settings.tts.moveUp", { name: name() }) },
+                          { name: "moveDown", label: t("settings.tts.moveDown", { name: name() }) },
+                        ]}
+                        onAccessibilityAction={(event) =>
+                          handleAccessibilityMove(channel(), event.actionName)
+                        }
+                        onPress={() => props.onFocusGrip(channel())}
+                        captureKeys={["arrowup", "arrowdown"]}
+                        onKeyDown={(event) => handleGripKey(channel(), event)}
+                        ref={(node) => props.onGripRef(channel(), node)}
+                        class="shrink-0 cursor-grab"
                       >
-                        {summary().text}
-                      </Text>
-                    </View>
-                  </Button>
+                        <Icon name="grip-vertical" tone="muted-foreground" class="size-4" />
+                      </KeyboardButton>
+                    </If>
 
-                  <KeyboardButton
-                    testID={`settings-tts-grip-${channel()}`}
-                    variant="ghost"
-                    size="icon-sm"
-                    focusable={true}
-                    tooltip={t("settings.tts.reorder", { name: name() })}
-                    accessibilityLabel={t("settings.tts.reorder", { name: name() })}
-                    accessibilityHint={t("settings.tts.reorderHint")}
-                    accessibilityActions={[
-                      { name: "moveUp", label: t("settings.tts.moveUp", { name: name() }) },
-                      { name: "moveDown", label: t("settings.tts.moveDown", { name: name() }) },
-                    ]}
-                    onAccessibilityAction={(event) =>
-                      handleAccessibilityMove(channel(), event.actionName)
-                    }
-                    onPress={() => props.onFocusGrip(channel())}
-                    captureKeys={["arrowup", "arrowdown"]}
-                    onKeyDown={(event) => handleGripKey(channel(), event)}
-                    ref={(node) => props.onGripRef(channel(), node)}
-                    class="shrink-0 cursor-grab"
-                  >
-                    <Icon name="grip-vertical" tone="muted-foreground" class="size-4" />
-                  </KeyboardButton>
+                    <Switch
+                      testID={`settings-tts-toggle-${channel()}`}
+                      variant="inline"
+                      checked={enabled()}
+                      disabled={mutating() || props.busy || !configured()}
+                      accessibilityLabel={t("settings.tts.enableLabel", { name: name() })}
+                      tooltip={!configured() ? t("settings.tts.configureBeforeEnable") : undefined}
+                      onChange={(checked) => void handleToggle(channel(), checked)}
+                    />
 
-                  <Switch
-                    testID={`settings-tts-toggle-${channel()}`}
-                    variant="inline"
-                    checked={enabled()}
-                    disabled={mutating() || !configured()}
-                    accessibilityLabel={t("settings.tts.enableLabel", { name: name() })}
-                    tooltip={!configured() ? t("settings.tts.configureBeforeEnable") : undefined}
-                    onChange={(checked) => void handleToggle(channel(), checked)}
-                  />
+                    <Button
+                      testID={`settings-tts-remove-${channel()}`}
+                      ref={(node) => {
+                        removeRefs[channel()] = node;
+                        props.onRowFocusRef(channel(), node);
+                      }}
+                      variant="destructive-ghost"
+                      size="icon-sm"
+                      disabled={isBusy()}
+                      tooltip={t("settings.tts.removeLabel", { name: name() })}
+                      accessibilityLabel={t("settings.tts.removeLabel", { name: name() })}
+                      onPress={() => handleRequestRemove(channel())}
+                    >
+                      <Icon name="delete" tone="muted-foreground" class="size-3.5" />
+                    </Button>
 
-                  <Button
-                    testID={`settings-tts-open-${channel()}`}
-                    variant="ghost"
-                    size="icon-sm"
-                    tooltip={t("settings.tts.configureLabel", { name: name() })}
-                    accessibilityLabel={t("settings.tts.configureLabel", { name: name() })}
-                    onPress={() => {
-                      listError.set(null);
-                      props.onOpenChannel(channel());
-                    }}
-                  >
-                    <Icon name="chevron-right" tone="muted-foreground" class="size-3.5" />
-                  </Button>
-                </View>
-              </>
-            );
-          }}
-        </Each>
-      </Card>
+                    <Button
+                      testID={`settings-tts-open-${channel()}`}
+                      variant="ghost"
+                      size="icon-sm"
+                      tooltip={t("settings.tts.configureLabel", { name: name() })}
+                      accessibilityLabel={t("settings.tts.configureLabel", { name: name() })}
+                      onPress={() => {
+                        props.onClearError();
+                        props.onOpenChannel(channel());
+                      }}
+                    >
+                      <Icon name="chevron-right" tone="muted-foreground" class="size-3.5" />
+                    </Button>
+                  </View>
+                </>
+              );
+            }}
+          </Each>
+        </Card>
+      </If>
 
-      <If when={listError() !== null}>
+      <If when={props.listError !== null}>
         <Text testID="settings-tts-list-error" role="alert" class="px-1 text-sm text-destructive">
-          {listError()}
+          {props.listError}
         </Text>
       </If>
+
+      <ConfirmDialog
+        testID="settings-tts-remove-dialog"
+        open={pendingRemove() !== null}
+        title={t("settings.tts.removeTitle")}
+        description={
+          pendingRemove() !== null
+            ? t("settings.tts.removeDescription", { name: channelName(pendingRemove()!) })
+            : ""
+        }
+        error={removeError()}
+        confirmLabel={t("settings.tts.removeConfirm")}
+        confirmVariant="destructive"
+        busy={mutating()}
+        cancelRef={(node) => {
+          removeCancelNode = node;
+        }}
+        onOpen={() => {
+          focusTarget(removeCancelNode);
+        }}
+        onClose={() => {
+          removeError.set(null);
+          const run = pendingRemoveCloseFocus;
+          pendingRemoveCloseFocus = null;
+          run?.();
+        }}
+        onOpenChange={(open) => {
+          if (!open) pendingRemove.set(null);
+        }}
+        onConfirm={() => {
+          const target = pendingRemove();
+          if (target !== null) void performRemove(target, true);
+        }}
+      />
     </View>
   );
 }
@@ -792,10 +1029,25 @@ export function TtsSection(props: TtsSectionProps) {
     "google-cloud": "unknown",
     azure: "unknown",
   });
+  const addDialogOpen = signal(false);
+  const addingChannel = signal(false);
+  const listBusy = signal(false);
+  const listError = signal<string | null>(null);
+  const removeDialogOpen = signal(false);
   const rowRefs: Partial<Record<TtsChannelId, ViewRef>> = {};
   const gripRefs: Partial<Record<TtsChannelId, ViewRef>> = {};
+  const fallbackFocusRefs: Partial<Record<TtsChannelId, ViewRef>> = {};
+  let pendingDialogCloseFocus: (() => void) | null = null;
   let returnChannel: TtsChannelId | null = null;
   let restoreFocusOnList = false;
+
+  const focusAddButton = () => focusTarget(props.getAddButtonRef?.() ?? null);
+
+  effect(() => props.onAddBusyChange?.(addingChannel() || listBusy()));
+  cleanup(() => props.onAddBusyChange?.(false));
+
+  effect(() => props.onDialogOpenChange?.(addDialogOpen() || removeDialogOpen()));
+  cleanup(() => props.onDialogOpenChange?.(false));
 
   effect(() => {
     for (const channel of TTS_CHANNELS) {
@@ -831,6 +1083,51 @@ export function TtsSection(props: TtsSectionProps) {
     });
   });
 
+  const handleOpenAddDialog = () => {
+    if (addingChannel() || listBusy() || ttsSettingsStore.availableChannels().length === 0) {
+      return;
+    }
+    listError.set(null);
+    pendingDialogCloseFocus = focusAddButton;
+    addDialogOpen.set(true);
+  };
+
+  const unregisterAddTrigger = props.onRegisterAddTrigger?.(handleOpenAddDialog);
+  if (unregisterAddTrigger) cleanup(unregisterAddTrigger);
+
+  const addChannelKind = async (channel: TtsChannelId): Promise<boolean> => {
+    if (addingChannel()) return false;
+    listError.set(null);
+    addingChannel.set(true);
+    try {
+      const result = await ttsSettingsStore.addChannel(channel);
+      if (!result.ok) {
+        listError.set(result.message);
+        return false;
+      }
+      return true;
+    } finally {
+      addingChannel.set(false);
+    }
+  };
+
+  const handleSelectAddKind = async (channel: TtsChannelId) => {
+    if (addingChannel()) return;
+    const added = await addChannelKind(channel);
+    addDialogOpen.set(false);
+    if (!added) return;
+    pendingDialogCloseFocus = null;
+    props.onSelectChannel(channel);
+  };
+
+  /** Adding from the empty state skips the picker and opens the new channel directly. */
+  const handleAddAvailableChannel = async (channel: TtsChannelId) => {
+    if (addingChannel()) return;
+    const added = await addChannelKind(channel);
+    if (!added) return;
+    props.onSelectChannel(channel);
+  };
+
   const selected = () => props.selectedChannel;
 
   return (
@@ -839,16 +1136,49 @@ export function TtsSection(props: TtsSectionProps) {
         <TtsChannelList
           compact={props.compact}
           credentialState={credentialState()}
+          busy={addingChannel()}
+          listError={listError()}
+          onClearError={() => listError.set(null)}
+          onSetError={(message) => listError.set(message)}
+          onBusyChange={(busy) => listBusy.set(busy)}
           onOpenChannel={(channel) => props.onSelectChannel(channel)}
+          onAddAvailableChannel={(channel) => void handleAddAvailableChannel(channel)}
+          onFocusAddButton={focusAddButton}
           onRowRef={(channel, node) => {
-            rowRefs[channel] = node;
+            if (node) rowRefs[channel] = node;
+            else delete rowRefs[channel];
           }}
           onGripRef={(channel, node) => {
-            gripRefs[channel] = node;
+            if (node) gripRefs[channel] = node;
+            else delete gripRefs[channel];
+          }}
+          onRowFocusRef={(channel, node) => {
+            if (node) fallbackFocusRefs[channel] = node;
+            else delete fallbackFocusRefs[channel];
           }}
           onFocusGrip={(channel) => gripRefs[channel]?.focus()}
+          onFocusChannelFallback={(channel) =>
+            focusTarget(
+              rowRefs[channel] ?? fallbackFocusRefs[channel] ?? props.getAddButtonRef?.() ?? null,
+            )
+          }
+          onRemoveDialogOpenChange={(open) => removeDialogOpen.set(open)}
         />
       </If>
+
+      <AddTtsChannelDialog
+        open={addDialogOpen()}
+        availableChannels={ttsSettingsStore.availableChannels()}
+        busy={addingChannel()}
+        onOpenChange={(open) => addDialogOpen.set(open)}
+        onSelect={(channel) => void handleSelectAddKind(channel)}
+        onClose={() => {
+          const run = pendingDialogCloseFocus;
+          pendingDialogCloseFocus = null;
+          run?.();
+        }}
+      />
+
       <If when={selected() === "google-cloud"}>
         <ChannelDetail
           channel="google-cloud"

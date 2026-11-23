@@ -29,7 +29,7 @@ function ttsRecord(options: {
   order?: readonly string[];
 }): string {
   return JSON.stringify({
-    version: 2,
+    version: 3,
     order: options.order ?? ["google-cloud", "azure"],
     googleCloud: options.googleCloud ?? null,
     azure: options.azure ?? null,

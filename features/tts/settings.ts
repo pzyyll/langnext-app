@@ -11,14 +11,14 @@ import {
 import type { TtsChannelId } from "./synthesis";
 
 /** Current settings record. Version 1 records stay untouched and do not load. */
-export const TTS_STORAGE_KEY = "settings.tts.v2";
+export const TTS_STORAGE_KEY = "settings.tts.v3";
 export const TTS_LEGACY_STORAGE_KEY = "settings.tts.v1";
 export const TTS_CREDENTIAL_KEY_PREFIX = "settings.tts.credentials.";
-const STORAGE_VERSION = 2;
+const STORAGE_VERSION = 3;
 
 const log = createLogger("tts/settings");
 
-/** Channels in the default top-to-bottom priority order. */
+/** Supported text-to-speech channels in catalog order. */
 export const TTS_CHANNELS = ["google-cloud", "azure"] as const satisfies readonly TtsChannelId[];
 
 /** Storage key for one TTS API key, addressed by its non-secret reference. */
@@ -82,12 +82,18 @@ export type TtsSaveChannelInput =
 export interface TtsSettingsStore {
   load(): Promise<void>;
   loadError(): TtsLoadError | null;
-  /** Channels in top-to-bottom priority order. */
+  /** Added channels in top-to-bottom priority order. */
   channelOrder(): readonly TtsChannelId[];
+  /** Channels not yet added to the priority list, in catalog order. */
+  availableChannels(): readonly TtsChannelId[];
   isEnabled(channel: TtsChannelId): boolean;
   savedBinding(channel: TtsChannelId): TtsChannelBinding | null;
   /** The first enabled channel in priority order, or null when both are off. */
   activeBinding(): TtsChannelBinding | null;
+  /** Adds a channel to the list; it stays off until it is configured and switched on. */
+  addChannel(channel: TtsChannelId): Promise<TtsActionResult>;
+  /** Removes a channel from the list and clears its saved binding and key. */
+  removeChannel(channel: TtsChannelId): Promise<TtsActionResult>;
   saveChannel(input: TtsSaveChannelInput): Promise<TtsSaveResult>;
   setEnabled(channel: TtsChannelId, enabled: boolean): Promise<TtsActionResult>;
   /** Moves one channel to a new top-to-bottom priority position, clamped to the list. */
@@ -132,7 +138,7 @@ interface ChannelRecord {
 }
 
 const EMPTY_RECORD: ChannelRecord = {
-  order: [...TTS_CHANNELS],
+  order: [],
   googleCloud: null,
   azure: null,
 };
@@ -205,6 +211,10 @@ function isEnabledIn(record: ChannelRecord, channel: TtsChannelId): boolean {
     : record.googleCloud?.enabled === true;
 }
 
+function ensureInOrder(order: readonly TtsChannelId[], channel: TtsChannelId): TtsChannelId[] {
+  return order.includes(channel) ? [...order] : [...order, channel];
+}
+
 function parseGoogle(value: unknown): GoogleStored | null | "malformed" {
   if (value === undefined || value === null) return null;
   if (!isPlainObject(value) || typeof value.enabled !== "boolean") return "malformed";
@@ -246,13 +256,19 @@ function parseStoredSettings(raw: string): ParsedStorage {
   if (azure === "malformed") return { ok: false, key: "storage_malformed" };
   const order = parseOrder("order" in parsed ? parsed.order : undefined);
   if (order === null) return { ok: false, key: "storage_malformed" };
+  if (
+    (googleCloud !== null && !order.includes("google-cloud")) ||
+    (azure !== null && !order.includes("azure"))
+  ) {
+    return { ok: false, key: "storage_malformed" };
+  }
   return { ok: true, record: { order, googleCloud, azure } };
 }
 
-/** A missing order means the default priority; anything else must list each channel once. */
+/** A missing order means no channels were added; anything else lists each added channel once. */
 function parseOrder(value: unknown): TtsChannelId[] | null {
-  if (value === undefined) return [...TTS_CHANNELS];
-  if (!Array.isArray(value) || value.length !== TTS_CHANNELS.length) return null;
+  if (value === undefined) return [];
+  if (!Array.isArray(value) || value.length > TTS_CHANNELS.length) return null;
   const seen = new Set<TtsChannelId>();
   const order: TtsChannelId[] = [];
   for (const item of value) {
@@ -262,7 +278,7 @@ function parseOrder(value: unknown): TtsChannelId[] | null {
     seen.add(item as TtsChannelId);
     order.push(item as TtsChannelId);
   }
-  return seen.size === TTS_CHANNELS.length ? order : null;
+  return order;
 }
 
 function storagePayload(record: ChannelRecord): string {
@@ -388,6 +404,7 @@ export function createTtsSettingsStore(storage: TtsSettingsStorage): TtsSettings
             return failure("storage_write_failed");
           }
           const next = cloneRecord(current);
+          next.order = ensureInOrder(current.order, "azure");
           next.azure = { enabled, credentialRef, region: azureRegion };
           const written = await persistRecord(next);
           if (!written.ok) {
@@ -444,6 +461,7 @@ export function createTtsSettingsStore(storage: TtsSettingsStorage): TtsSettings
           credentialRef = existing.credentialRef;
         }
         const next = cloneRecord(current);
+        next.order = ensureInOrder(current.order, "google-cloud");
         next.googleCloud = { enabled: existing?.enabled ?? false, credentialRef, preferences };
         const written = await persistRecord(next);
         if (!written.ok) {
@@ -463,6 +481,9 @@ export function createTtsSettingsStore(storage: TtsSettingsStorage): TtsSettings
       enqueueWrite(async () => {
         const current = cloneRecord(settingsSignal());
         const target = channel === "azure" ? current.azure : current.googleCloud;
+        if (enabled && !current.order.includes(channel)) {
+          return failure("channel_unconfigured");
+        }
         if (target === null)
           return enabled ? failure("channel_unconfigured") : { ok: true as const };
         if (target.enabled === enabled) return { ok: true as const };
@@ -481,7 +502,34 @@ export function createTtsSettingsStore(storage: TtsSettingsStorage): TtsSettings
         return persistRecord(current);
       }),
     channelOrder: () => [...settingsSignal().order],
+    availableChannels: () => {
+      const added = new Set(settingsSignal().order);
+      return TTS_CHANNELS.filter((channel) => !added.has(channel));
+    },
     isEnabled: (channel) => isEnabledIn(settingsSignal(), channel),
+    addChannel: async (channel) =>
+      enqueueWrite(async () => {
+        const current = cloneRecord(settingsSignal());
+        if (current.order.includes(channel)) return { ok: true as const };
+        current.order = [...current.order, channel];
+        return persistRecord(current);
+      }),
+    removeChannel: async (channel) =>
+      enqueueWrite(async () => {
+        const current = cloneRecord(settingsSignal());
+        if (!current.order.includes(channel)) return { ok: true as const };
+        const target = channel === "azure" ? current.azure : current.googleCloud;
+        const next = cloneRecord(current);
+        next.order = current.order.filter((item) => item !== channel);
+        if (channel === "azure") next.azure = null;
+        else next.googleCloud = null;
+        const written = await persistRecord(next);
+        if (written.ok && target !== null) {
+          await removeCredentialQuietly(target.credentialRef);
+        }
+        return written;
+      }),
+
     moveChannelTo: async (channel, targetIndex) =>
       enqueueWrite(async () => {
         const current = cloneRecord(settingsSignal());

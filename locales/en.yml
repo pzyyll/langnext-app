@@ -97,6 +97,7 @@ settings:
     saveError: Could not save the double-copy setting. Check storage and try again.
   ocr:
     title: OCR
+    addChannel: Add Channel
     priorityHint: Enabled channels run in order from top to bottom. Later ones act as backups.
     notConfigured: Not configured
     saved: OCR channel saved
@@ -104,6 +105,10 @@ settings:
     configureBeforeEnable: Configure this channel before enabling it.
     configureLabel: Configure %{name}
     enableLabel: Enable %{name}
+    removeLabel: Remove %{name}
+    removeTitle: Remove Channel
+    removeDescription: 'Remove channel "%{name}" and clear its saved configuration?'
+    removeConfirm: Remove
     moveUp: Move %{name} up
     moveDown: Move %{name} down
     reorder: Reorder %{name}
@@ -126,6 +131,9 @@ settings:
       general: General with Location
       accurate: Accurate with Location
     windowsOnly: Screen capture works on Windows only.
+    emptyTitle: No OCR channels yet
+    emptyChannels: Available channels
+    emptyAdd: Add %{name}
     error:
       storageReadFailed: Could not read the saved OCR settings.
       storageMalformed: The saved OCR settings are unreadable.
@@ -147,8 +155,16 @@ settings:
     savedKey: "\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022"
     keyUnreadable: The saved API key could not be read. Enter it again.
     breadcrumbLabel: Text-to-speech navigation
+    addChannel: Add Channel
     configureLabel: Configure %{name}
     enableLabel: Enable %{name}
+    removeLabel: Remove %{name}
+    removeTitle: Remove Channel
+    removeDescription: 'Remove channel "%{name}" and clear its saved configuration?'
+    removeConfirm: Remove
+    emptyTitle: No speech channels yet
+    emptyChannels: Available channels
+    emptyAdd: Add %{name}
     itemLabel: "%{name} (%{status})"
     reorder: Reorder %{name}
     reorderHint: Drag, or press the up and down arrow keys.
@@ -289,6 +305,9 @@ settings:
     preferredTranslation: Target language
     preferredTranslationHelp: With an Automatic target, your native language is translated into the selected language.
     preferenceUnset: Not set
+    emptyTitle: No detection channels yet
+    emptyChannels: Available channels
+    emptyAdd: Add %{name}
     error:
       storageReadFailed: Could not read the saved language detection settings.
       storageMalformed: The saved language detection settings are unreadable.
