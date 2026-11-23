@@ -41,7 +41,7 @@ const TRIGGER_VARIANT_CLASSES: Record<SelectVariant, string> = {
     "justify-between gap-2 rounded-xl border border-input bg-surface-control px-3 hover:bg-accent/50",
   chip: "h-6 justify-between gap-1 rounded-md border border-border bg-surface-control px-2 hover:bg-accent/60 active:bg-accent",
   inline:
-    "h-6 justify-between gap-1 rounded-full bg-transparent px-2 hover:bg-surface-control/80 active:bg-surface-control",
+    "h-6 justify-between gap-1 rounded-full bg-transparent px-2 hover:bg-accent active:bg-border",
 };
 
 /** Single-choice dropdown built over nsh/base Select with theme tokens. */
