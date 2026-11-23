@@ -131,6 +131,9 @@ settings:
       general: General with Location
       accurate: Accurate with Location
     windowsOnly: Screen capture works on Windows only.
+    emptyTitle: No OCR channels yet
+    emptyAction: Add First OCR Channel
+    emptyChannels: Available channels
     error:
       storageReadFailed: Could not read the saved OCR settings.
       storageMalformed: The saved OCR settings are unreadable.

@@ -1126,15 +1126,21 @@ test("ocr settings: starts empty, adds AI via the header picker, and configures 
   await app.press("id:settings-nav-ocr");
   await app.waitFor("id:settings-ocr-add");
 
-  // Default state shows the header add button and no pre-populated channel card.
+  // Default state shows the empty-state card and no pre-populated channel card.
   expect(app.shows("id:settings-ocr-card")).toBe(false);
   expect(app.shows("id:settings-ocr-row-ai")).toBe(false);
   expect(app.shows("id:settings-ocr-row-baidu")).toBe(false);
+  expect(app.shows("id:settings-ocr-empty")).toBe(true);
   expect(app.shows("id:settings-ocr-priority-info")).toBe(true);
+  expect(app.texts()).toContain("No OCR channels yet");
+  expect(app.texts()).toContain("Add First OCR Channel");
+  expect(app.texts()).toContain("Available channels");
+  expect(app.texts()).toContain("AI OCR");
+  expect(app.texts()).toContain("Baidu OCR");
   expect(app.storage()[OCR_STORAGE_KEY]).toBeUndefined();
 
   // Escape and Cancel dismiss the picker cleanly without writing.
-  await app.press("id:settings-ocr-add");
+  await app.press("id:settings-ocr-empty-add");
   await app.waitFor("id:settings-ocr-option-ai");
   expect(app.shows("id:settings-ocr-option-baidu")).toBe(true);
   await app.keyboard.press("escape");
@@ -1182,6 +1188,7 @@ test("ocr settings: starts empty, adds AI via the header picker, and configures 
   await app.press("id:settings-ocr-breadcrumb-root");
   await app.waitFor("id:settings-ocr-card");
   expect(app.shows("id:settings-ocr-detail-card")).toBe(false);
+  expect(app.shows("id:settings-ocr-empty")).toBe(false);
   expect(app.shows("id:settings-ocr-role-ai")).toBe(true);
   expect(app.texts()).toContain("Primary");
   expect(app.texts()).toContain("OpenAI Main · gpt-4.1");
@@ -1259,6 +1266,23 @@ test("language detection: an open priority tooltip does not keep the picker from
   await app.keyboard.press("escape");
   await app.waitUntil(() => !app.shows("id:settings-detection-add-dialog"));
   expect(app.storage()[LANGUAGE_DETECTION_STORAGE_KEY]).toBeUndefined();
+});
+
+test("ocr settings: localizes the empty state and the first-channel action", async () => {
+  const app = await open(APP_ENTRY, { ...viewport, storage: { "settings.language": "zh-CN" } });
+  await app.press("id:nav-settings");
+  await app.press("id:settings-nav-ocr");
+  await app.waitFor("id:settings-ocr-empty");
+
+  expect(app.texts()).toContain("暂未添加任何 OCR 识别渠道");
+  expect(app.texts()).toContain("添加首个 OCR 渠道");
+  expect(app.texts()).toContain("可添加的渠道");
+  expect(app.texts()).toContain("AI OCR");
+  expect(app.texts()).toContain("百度 OCR");
+
+  await app.press("id:settings-ocr-empty-add");
+  await app.waitFor("id:settings-ocr-add-dialog");
+  expect(app.texts()).toContain("百度 OCR");
 });
 
 test("ocr settings: an open priority tooltip does not swallow Escape for the remove dialog", async () => {
@@ -1569,6 +1593,8 @@ test("ocr settings: removes channels, confirms saved configs, and re-offers the 
   await app.press("role:button[Remove]");
   await app.waitUntil(() => !app.shows("id:settings-ocr-card"));
   expect(app.shows("id:settings-ocr-row-baidu")).toBe(false);
+  expect(app.shows("id:settings-ocr-empty")).toBe(true);
+  expect(app.texts()).toContain("No OCR channels yet");
   expect(app.storage()[baiduCredentialStorageKey(ref)]).toBeUndefined();
   expect(JSON.parse(app.storage()[OCR_STORAGE_KEY]!)).toMatchObject({
     version: 4,

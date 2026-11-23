@@ -131,6 +131,9 @@ settings:
       general: 标准含位置版
       accurate: 高精度含位置版
     windowsOnly: 屏幕截取仅支持 Windows。
+    emptyTitle: 暂未添加任何 OCR 识别渠道
+    emptyAction: 添加首个 OCR 渠道
+    emptyChannels: 可添加的渠道
     error:
       storageReadFailed: 无法读取已保存的 OCR 设置。
       storageMalformed: 已保存的 OCR 设置无法解析。
