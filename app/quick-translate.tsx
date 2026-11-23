@@ -267,7 +267,7 @@ function QuickTranslateWindowBody(props: { controller: QuickTranslateController 
             onPress={() => props.controller.toggleAutoTranslate()}
           >
             <Icon
-              name={props.controller.autoTranslate() ? "lightning-solid" : "lightning"}
+              name={props.controller.autoTranslate() ? "mdi:flash" : "mdi:flash-outline"}
               tone={props.controller.autoTranslate() ? "brand" : "muted-foreground"}
               class="size-3.5"
             />
@@ -284,7 +284,11 @@ function QuickTranslateWindowBody(props: { controller: QuickTranslateController 
             }
           >
             <Icon
-              name={markdownEnabledPreference() ? "markdown-solid" : "markdown-outline"}
+              name={
+                markdownEnabledPreference()
+                  ? "mdi:language-markdown"
+                  : "mdi:language-markdown-outline"
+              }
               tone={markdownEnabledPreference() ? "brand" : "muted-foreground"}
               class="size-3.5"
             />
@@ -300,7 +304,7 @@ function QuickTranslateWindowBody(props: { controller: QuickTranslateController 
               onPress={() => void props.controller.startOcr()}
               ref={(node) => ocrAction.set(node)}
             >
-              <Icon name="scanning" tone="muted-foreground" class="size-3.5" />
+              <Icon name="mdi:ocr" tone="muted-foreground" class="size-3.5" />
             </Button>
           </If>
           <Button
@@ -317,7 +321,7 @@ function QuickTranslateWindowBody(props: { controller: QuickTranslateController 
             onPress={() => props.controller.togglePinned()}
           >
             <Icon
-              name={props.controller.isPinned() ? "pin-solid" : "pin"}
+              name={props.controller.isPinned() ? "mdi:pin" : "mdi:pin-outline"}
               tone={props.controller.isPinned() ? "brand" : "muted-foreground"}
               class="size-3.5"
             />
@@ -332,7 +336,7 @@ function QuickTranslateWindowBody(props: { controller: QuickTranslateController 
               accessibilityLabel={t("quickTranslate.close")}
               onPress={() => props.controller.close()}
             >
-              <Icon name="close" tone="muted-foreground" class="size-3.5" />
+              <Icon name="mdi:close" tone="muted-foreground" class="size-3.5" />
             </Button>
           </If>
         </View>

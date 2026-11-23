@@ -101,7 +101,7 @@ export function Select(props: SelectProps) {
             {entry.title}
           </Text>
           <Icon
-            name="check"
+            name="mdi:check"
             tone="foreground"
             class="size-3.5 shrink-0 opacity-0 group-selected:opacity-100"
           />
@@ -128,7 +128,7 @@ export function Select(props: SelectProps) {
             </Text>
           </View>
           <Icon
-            name="chevron-down"
+            name="mdi:chevron-down"
             tone="muted-foreground"
             class={isCompact() ? "size-3 shrink-0" : "size-3.5 shrink-0"}
           />

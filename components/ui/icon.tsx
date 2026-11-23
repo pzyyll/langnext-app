@@ -25,6 +25,27 @@ import lightningSolidIcon from "../../assets/icons/lightning-solid.svg";
 import lightningIcon from "../../assets/icons/lightning.svg";
 import markdownOutlineIcon from "../../assets/icons/markdown-outline.svg";
 import markdownSolidIcon from "../../assets/icons/markdown-solid.svg";
+import mdiArrowCollapseIcon from "../../assets/icons/mdi--arrow-collapse.svg";
+import mdiCheckIcon from "../../assets/icons/mdi--check.svg";
+import mdiChevronDownIcon from "../../assets/icons/mdi--chevron-down.svg";
+import mdiChevronRightIcon from "../../assets/icons/mdi--chevron-right.svg";
+import mdiChevronUpIcon from "../../assets/icons/mdi--chevron-up.svg";
+import mdiCloseCircleIcon from "../../assets/icons/mdi--close-circle.svg";
+import mdiCloseIcon from "../../assets/icons/mdi--close.svg";
+import mdiContentCopyIcon from "../../assets/icons/mdi--content-copy.svg";
+import mdiFlashIcon from "../../assets/icons/mdi--flash.svg";
+import mdiFlashOutlineIcon from "../../assets/icons/mdi--flash-outline.svg";
+import mdiLanguageMarkdownIcon from "../../assets/icons/mdi--language-markdown.svg";
+import mdiLanguageMarkdownOutlineIcon from "../../assets/icons/mdi--language-markdown-outline.svg";
+import mdiOcrIcon from "../../assets/icons/mdi--ocr.svg";
+import mdiPauseIcon from "../../assets/icons/mdi--pause.svg";
+import mdiPencilIcon from "../../assets/icons/mdi--pencil.svg";
+import mdiPinOutlineIcon from "../../assets/icons/mdi--pin-outline.svg";
+import mdiPinIcon from "../../assets/icons/mdi--pin.svg";
+import mdiPlusIcon from "../../assets/icons/mdi--plus.svg";
+import mdiRefreshIcon from "../../assets/icons/mdi--refresh.svg";
+import mdiSwapHorizontalIcon from "../../assets/icons/mdi--swap-horizontal.svg";
+import mdiVolumeHighIcon from "../../assets/icons/mdi--volume-high.svg";
 import minusIcon from "../../assets/icons/minus.svg";
 import pauseIcon from "../../assets/icons/icon-park-outline--pause.svg";
 import picIcon from "../../assets/icons/pic.svg";
@@ -65,6 +86,27 @@ const ICONS = {
   "lightning-solid": lightningSolidIcon,
   "markdown-outline": markdownOutlineIcon,
   "markdown-solid": markdownSolidIcon,
+  "mdi:arrow-collapse": mdiArrowCollapseIcon,
+  "mdi:check": mdiCheckIcon,
+  "mdi:chevron-down": mdiChevronDownIcon,
+  "mdi:chevron-right": mdiChevronRightIcon,
+  "mdi:chevron-up": mdiChevronUpIcon,
+  "mdi:close": mdiCloseIcon,
+  "mdi:close-circle": mdiCloseCircleIcon,
+  "mdi:content-copy": mdiContentCopyIcon,
+  "mdi:flash": mdiFlashIcon,
+  "mdi:flash-outline": mdiFlashOutlineIcon,
+  "mdi:language-markdown": mdiLanguageMarkdownIcon,
+  "mdi:language-markdown-outline": mdiLanguageMarkdownOutlineIcon,
+  "mdi:ocr": mdiOcrIcon,
+  "mdi:pause": mdiPauseIcon,
+  "mdi:pencil": mdiPencilIcon,
+  "mdi:pin": mdiPinIcon,
+  "mdi:pin-outline": mdiPinOutlineIcon,
+  "mdi:plus": mdiPlusIcon,
+  "mdi:refresh": mdiRefreshIcon,
+  "mdi:swap-horizontal": mdiSwapHorizontalIcon,
+  "mdi:volume-high": mdiVolumeHighIcon,
   minus: minusIcon,
   pause: pauseIcon,
   pic: picIcon,

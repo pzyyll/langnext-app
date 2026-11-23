@@ -98,7 +98,7 @@ export function QuickTranslateLanguageBar(props: QuickTranslateLanguageBarProps)
         class="shrink-0 rounded-full"
         onPress={() => props.onSwapLanguages()}
       >
-        <Icon name="switch" tone="muted-foreground" class="size-3" />
+        <Icon name="mdi:swap-horizontal" tone="muted-foreground" class="size-3" />
       </Button>
       <Select
         testID="quick-translate-target-language"

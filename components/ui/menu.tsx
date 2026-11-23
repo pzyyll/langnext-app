@@ -68,7 +68,7 @@ export function Submenu(props: SubmenuProps) {
           class={`h-8 w-full flex-row items-center justify-between gap-2 rounded-lg px-2.5 hover:bg-accent focus:bg-accent aria-expanded:bg-accent active:bg-border disabled:opacity-50 ${motion.navigationFeedback}`}
         >
           <Text class="min-w-0 flex-1 truncate text-sm text-popover-foreground">{props.label}</Text>
-          <Icon name="chevron-right" tone="muted-foreground" class="size-3.5 shrink-0" />
+          <Icon name="mdi:chevron-right" tone="muted-foreground" class="size-3.5 shrink-0" />
         </View>
       }
     >
@@ -108,7 +108,7 @@ export function MenuItem(props: MenuItemProps) {
       indicator={
         isCheckable() ? (
           <Icon
-            name="check"
+            name="mdi:check"
             tone="foreground"
             class="size-3.5 opacity-0 group-checked:opacity-100"
           />

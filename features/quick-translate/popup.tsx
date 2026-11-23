@@ -15,7 +15,7 @@ import { t } from "nsh/i18n";
 import { Button } from "../../components/ui/button";
 import { Card } from "../../components/ui/card";
 import { LARGEST_FONT_STEP } from "../../components/ui/font-step";
-import { Icon } from "../../components/ui/icon";
+import { Icon, type IconName } from "../../components/ui/icon";
 import { Kbd } from "../../components/ui/kbd";
 import { Menu, MenuItem } from "../../components/ui/menu";
 import { Select, type SelectItem } from "../../components/ui/select";
@@ -71,7 +71,7 @@ function RetryIconButton(props: { testID: string; onPress: () => void }) {
       accessibilityLabel={t("common.retry")}
       onPress={() => props.onPress()}
     >
-      <Icon name="refresh" tone="muted-foreground" class="size-3.5" />
+      <Icon name="mdi:refresh" tone="muted-foreground" class="size-3.5" />
     </Button>
   );
 }
@@ -81,7 +81,7 @@ function SpeakerButton(props: {
   disabled: boolean;
   tooltip?: string;
   label: string;
-  icon: "speaker-one" | "close-circle" | "pause";
+  icon: IconName;
   onPress: () => void;
 }) {
   return (
@@ -118,7 +118,7 @@ function renderAddPresetButton(options: { disabled?: boolean; selected?: boolean
       class="gap-1 px-1.5"
     >
       <Icon
-        name="plus"
+        name="mdi:plus"
         tone={options.selected ? "foreground" : "muted-foreground"}
         class="size-3"
       />
@@ -248,7 +248,7 @@ interface PresetCardRowProps {
     disabled: boolean;
     tooltip?: string;
     label: string;
-    icon: "speaker-one" | "close-circle" | "pause";
+    icon: IconName;
   }>;
   speakError: Accessor<string | null>;
   onSpeak: () => void;
@@ -337,7 +337,7 @@ function PresetCardRow(props: PresetCardRowProps) {
             onPress={() => props.onToggleCollapse(props.card().id)}
           >
             <Icon
-              name={props.card().collapsed ? "chevron-down" : "chevron-up"}
+              name={props.card().collapsed ? "mdi:chevron-down" : "mdi:chevron-up"}
               tone="muted-foreground"
               class="size-3.5"
             />
@@ -350,7 +350,7 @@ function PresetCardRow(props: PresetCardRowProps) {
             accessibilityLabel={t("quickTranslate.removeCard")}
             onPress={() => props.onRemove(props.card().id)}
           >
-            <Icon name="close" tone="muted-foreground" class="size-3.5" />
+            <Icon name="mdi:close" tone="muted-foreground" class="size-3.5" />
           </Button>
         </View>
       </View>
@@ -426,7 +426,7 @@ function PresetCardRow(props: PresetCardRowProps) {
                   onPress={() => props.onCopy(props.card().id)}
                 >
                   <Icon
-                    name={props.card().copied ? "check" : "copy"}
+                    name={props.card().copied ? "mdi:check" : "mdi:content-copy"}
                     tone={props.card().copied ? "success" : "muted-foreground"}
                     class="size-3.5"
                   />
@@ -733,7 +733,7 @@ export function QuickTranslatePopup(props: QuickTranslatePopupProps) {
         disabled: false,
         tooltip: t("common.cancel"),
         label: t("common.cancel"),
-        icon: "close-circle" as const,
+        icon: "mdi:close-circle" as const,
         busy: true,
       };
     }
@@ -742,7 +742,7 @@ export function QuickTranslatePopup(props: QuickTranslatePopupProps) {
         disabled: false,
         tooltip: t("settings.tts.stop"),
         label: t("settings.tts.stop"),
-        icon: "pause" as const,
+        icon: "mdi:pause" as const,
         busy: true,
       };
     }
@@ -750,7 +750,7 @@ export function QuickTranslatePopup(props: QuickTranslatePopupProps) {
       disabled: !speakEnabled(),
       tooltip: speakEnabled() ? undefined : t("quickTranslate.speakOff"),
       label: speakEnabled() ? t("quickTranslate.speak") : t("quickTranslate.speakOff"),
-      icon: "speaker-one" as const,
+      icon: "mdi:volume-high" as const,
       busy: false,
     };
   };
@@ -792,7 +792,7 @@ export function QuickTranslatePopup(props: QuickTranslatePopupProps) {
           }}
         >
           <Icon
-            name={isSourceCollapsed() ? "edit" : "collapse-text-input"}
+            name={isSourceCollapsed() ? "mdi:pencil" : "mdi:arrow-collapse"}
             tone="muted-foreground"
             class="size-3.5"
           />
@@ -805,7 +805,7 @@ export function QuickTranslatePopup(props: QuickTranslatePopupProps) {
           accessibilityLabel={t("common.clearInput")}
           onPress={() => props.session.handleClearSource()}
         >
-          <Icon name="close-circle" tone="muted-foreground" class="size-3.5" />
+          <Icon name="mdi:close-circle" tone="muted-foreground" class="size-3.5" />
         </Button>
       </View>
     </If>
@@ -949,7 +949,7 @@ export function QuickTranslatePopup(props: QuickTranslatePopupProps) {
                   {sourceFirstLine()}
                 </Text>
                 <If when={sourceHasMultipleLines()}>
-                  <Icon name="chevron-down" tone="muted-foreground" class="size-3.5 shrink-0" />
+                  <Icon name="mdi:chevron-down" tone="muted-foreground" class="size-3.5 shrink-0" />
                 </If>
               </View>
             </Button>
