@@ -19,11 +19,12 @@ import {
 import { t } from "nsh/i18n";
 import baiduIcon from "../../assets/icons/baidu.svg";
 import { motion } from "../../components/motion";
-import { Avatar } from "../../components/ui/avatar";
+import { Avatar, type AvatarSize } from "../../components/ui/avatar";
 import { Badge } from "../../components/ui/badge";
 import { Button, KeyboardButton } from "../../components/ui/button";
 import { Card, SectionHeading } from "../../components/ui/card";
 import { AppDialog, ConfirmDialog } from "../../components/ui/dialog";
+import { ChannelEmptyState } from "../../components/ui/empty-state";
 import { Icon } from "../../components/ui/icon";
 import { Input } from "../../components/ui/input";
 import { Select, type SelectItem } from "../../components/ui/select";
@@ -66,14 +67,14 @@ function focusTarget(node: ViewRef | null | undefined) {
   setAccessibilityFocus(node);
 }
 
-function OcrChannelAvatar(props: { kind: OcrServiceKind }) {
+function OcrChannelAvatar(props: { kind: OcrServiceKind; size?: AvatarSize }) {
   return (
     <If
       when={props.kind === "baidu"}
-      else={<Avatar size="md" icon="cube-outline" accessibilityLabel="" />}
+      else={<Avatar size={props.size ?? "md"} icon="cube-outline" accessibilityLabel="" />}
     >
       <Avatar
-        size="md"
+        size={props.size ?? "md"}
         accessibilityLabel=""
         fallback={
           <Image
@@ -88,57 +89,6 @@ function OcrChannelAvatar(props: { kind: OcrServiceKind }) {
     </If>
   );
 }
-
-/** First-run card shown until the first OCR channel is added. */
-function OcrEmptyState(props: {
-  compact: boolean;
-  busy: boolean;
-  availableKinds: readonly OcrServiceKind[];
-  onSelect: (kind: OcrServiceKind) => void;
-}) {
-  return (
-    <Card testID="settings-ocr-empty" class={props.compact ? "gap-4 p-5" : "gap-6 p-8"}>
-      <View class="items-center gap-4">
-        <View class="size-16 items-center justify-center rounded-2xl bg-muted">
-          <Icon name="scanning" tone="muted-foreground" class="size-7" />
-        </View>
-        <Text role="header" class="text-center text-lg font-semibold text-card-foreground">
-          {t("settings.ocr.emptyTitle")}
-        </Text>
-      </View>
-
-      <View class={props.compact ? "mx-4 h-px bg-border" : "mx-6 h-px bg-border"} />
-
-      <View class="items-center gap-3">
-        <Text class="text-center text-xs text-muted-foreground">
-          {t("settings.ocr.emptyChannels")}
-        </Text>
-        <View class="flex-row flex-wrap justify-center gap-2">
-          <Each of={props.availableKinds} key={(kind) => kind}>
-            {(kind) => (
-              <Button
-                testID={`settings-ocr-empty-channel-${kind()}`}
-                variant="outline"
-                size="sm"
-                disabled={props.busy}
-                accessibilityLabel={t("settings.ocr.emptyAdd", {
-                  name: t(`settings.ocr.${kind()}`),
-                })}
-                onPress={() => props.onSelect(kind())}
-                class="h-auto px-4 py-1.5"
-              >
-                <Text class="text-sm font-medium text-foreground">
-                  {t(`settings.ocr.${kind()}`)}
-                </Text>
-              </Button>
-            )}
-          </Each>
-        </View>
-      </View>
-    </Card>
-  );
-}
-
 function AddOcrChannelDialog(props: {
   open: boolean;
   availableKinds: readonly OcrServiceKind[];
@@ -495,11 +445,21 @@ function OcrChannelList(props: OcrChannelListProps) {
       <If
         when={order().length > 0}
         else={
-          <OcrEmptyState
-            compact={props.compact}
+          <ChannelEmptyState
+            testID="settings-ocr-empty"
+            icon="scanning"
+            title={t("settings.ocr.emptyTitle")}
+            choicesLabel={t("settings.ocr.emptyChannels")}
             busy={props.busy}
-            availableKinds={ocrSettingsStore.availableChannels()}
-            onSelect={props.onAddAvailableChannel}
+            compact={props.compact}
+            choices={ocrSettingsStore.availableChannels().map((kind) => ({
+              id: kind,
+              label: t(`settings.ocr.${kind}`),
+              accessibilityLabel: t("settings.ocr.emptyAdd", { name: t(`settings.ocr.${kind}`) }),
+              testID: `settings-ocr-empty-channel-${kind}`,
+              leading: <OcrChannelAvatar kind={kind} size="sm" />,
+              onPress: () => props.onAddAvailableChannel(kind),
+            }))}
           />
         }
       >

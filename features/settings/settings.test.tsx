@@ -510,6 +510,12 @@ test("language detection: starts with the header add button, adds channels via p
   expect(app.shows("id:settings-detection-row-ai")).toBe(false);
   expect(app.shows("id:settings-detection-row-google")).toBe(false);
   expect(app.shows("id:settings-detection-row-google-cloud")).toBe(false);
+  expect(app.shows("id:settings-detection-empty")).toBe(true);
+  expect(app.shows("id:settings-detection-empty-channel-ai")).toBe(true);
+  expect(app.shows("id:settings-detection-empty-channel-google")).toBe(true);
+  expect(app.shows("id:settings-detection-empty-channel-google-cloud")).toBe(true);
+  expect(app.texts()).toContain("No detection channels yet");
+  expect(app.texts()).toContain("Available channels");
   expect(app.shows("id:settings-detection-priority-info")).toBe(true);
   // Escape dismisses the picker cleanly without writing.
   await app.press("id:settings-detection-add");
@@ -634,6 +640,63 @@ test("language detection: starts with the header add button, adds channels via p
   await reopened.press("id:settings-detection-channel-ai");
   await reopened.waitFor("id:settings-detection-detail-card");
   expect(reopened.texts()).toContain("模型");
+});
+
+test("language detection: adds detectors directly from the empty state", async () => {
+  const emptyApp = await open(APP_ENTRY, { ...viewport, storage: { "settings.language": "en" } });
+  await emptyApp.press("id:nav-settings");
+  await emptyApp.press("id:settings-nav-language-detection");
+  await emptyApp.waitFor("id:settings-detection-empty");
+  expect(emptyApp.shows("id:settings-detection-add")).toBe(true);
+
+  // AI opens its configuration page after it is added.
+  await emptyApp.press("id:settings-detection-empty-channel-ai");
+  await emptyApp.waitFor("id:settings-detection-detail-card");
+  expect(emptyApp.shows("id:settings-detection-breadcrumb")).toBe(true);
+  expect(emptyApp.shows("id:settings-detection-model")).toBe(true);
+  expect(JSON.parse(emptyApp.storage()[LANGUAGE_DETECTION_STORAGE_KEY]!).order).toEqual(["ai"]);
+
+  // The free Google endpoint enables itself and stays on the list.
+  const googleApp = await open(APP_ENTRY, { ...viewport, storage: { "settings.language": "en" } });
+  await googleApp.press("id:nav-settings");
+  await googleApp.press("id:settings-nav-language-detection");
+  await googleApp.waitFor("id:settings-detection-empty");
+  await googleApp.press("id:settings-detection-empty-channel-google");
+  await googleApp.waitFor("id:settings-detection-card");
+  expect(googleApp.shows("id:settings-detection-empty")).toBe(false);
+  expect(googleApp.shows("id:settings-detection-breadcrumb")).toBe(false);
+  expect(googleApp.texts()).toContain("Free Google Translate endpoint");
+  expect(googleApp.enabled("id:settings-detection-toggle-google")).toBe(true);
+  expect(JSON.parse(googleApp.storage()[LANGUAGE_DETECTION_STORAGE_KEY]!).order).toEqual([
+    "google",
+  ]);
+
+  // Google Cloud opens its API key page.
+  const cloudApp = await open(APP_ENTRY, { ...viewport, storage: { "settings.language": "en" } });
+  await cloudApp.press("id:nav-settings");
+  await cloudApp.press("id:settings-nav-language-detection");
+  await cloudApp.waitFor("id:settings-detection-empty");
+  await cloudApp.press("id:settings-detection-empty-channel-google-cloud");
+  await cloudApp.waitFor("id:settings-detection-detail-card");
+  expect(cloudApp.shows("id:settings-detection-google-cloud-api-key")).toBe(true);
+});
+
+test("language detection: localizes the empty state and the first-channel actions", async () => {
+  const app = await open(APP_ENTRY, { ...viewport, storage: { "settings.language": "zh-CN" } });
+  await app.press("id:nav-settings");
+  await app.press("id:settings-nav-language-detection");
+  await app.waitFor("id:settings-detection-empty");
+
+  expect(app.texts()).toContain("暂未添加任何语言检测渠道");
+  expect(app.texts()).toContain("可添加的渠道");
+  expect(app.shows("role:button[添加 AI]")).toBe(true);
+  expect(app.shows("role:button[添加 Google]")).toBe(true);
+  expect(app.shows("role:button[添加 Google Cloud]")).toBe(true);
+
+  await app.press("id:settings-detection-empty-channel-google");
+  await app.waitFor("id:settings-detection-card");
+  expect(app.texts()).toContain("免费的 Google 翻译接口");
+  expect(app.enabled("id:settings-detection-toggle-google")).toBe(true);
 });
 
 test("language detection: adds Google Cloud, hides add button when full, and removes channels", async () => {

@@ -297,6 +297,9 @@ settings:
     preferredTranslation: Target language
     preferredTranslationHelp: With an Automatic target, your native language is translated into the selected language.
     preferenceUnset: Not set
+    emptyTitle: No detection channels yet
+    emptyChannels: Available channels
+    emptyAdd: Add %{name}
     error:
       storageReadFailed: Could not read the saved language detection settings.
       storageMalformed: The saved language detection settings are unreadable.

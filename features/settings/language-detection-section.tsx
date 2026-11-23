@@ -19,11 +19,12 @@ import { t } from "nsh/i18n";
 import googleMark from "../../assets/icons/google.svg";
 import googleCloudMark from "../../assets/icons/google-cloud.svg";
 import { motion } from "../../components/motion";
-import { Avatar } from "../../components/ui/avatar";
+import { Avatar, type AvatarSize } from "../../components/ui/avatar";
 import { Badge } from "../../components/ui/badge";
 import { Button, KeyboardButton } from "../../components/ui/button";
 import { Card, SectionHeading } from "../../components/ui/card";
 import { AppDialog, ConfirmDialog } from "../../components/ui/dialog";
+import { ChannelEmptyState } from "../../components/ui/empty-state";
 import { Icon } from "../../components/ui/icon";
 import { Input } from "../../components/ui/input";
 import { Select, type SelectItem } from "../../components/ui/select";
@@ -124,17 +125,17 @@ function detectorSummary(
     : { text: info.reason ?? info.label, toneClass: "text-warning" };
 }
 
-function DetectionChannelAvatar(props: { kind: LanguageDetectorKind }) {
+function DetectionChannelAvatar(props: { kind: LanguageDetectorKind; size?: AvatarSize }) {
   const mark = () =>
     props.kind === "google" ? googleMark : props.kind === "google-cloud" ? googleCloudMark : null;
 
   return (
     <If
       when={mark() !== null}
-      else={<Avatar size="md" icon="cube-outline" accessibilityLabel="" />}
+      else={<Avatar size={props.size ?? "md"} icon="cube-outline" accessibilityLabel="" />}
     >
       <Avatar
-        size="md"
+        size={props.size ?? "md"}
         accessibilityLabel=""
         fallback={
           <Image src={mark()!} accessibilityElementsHidden={true} class="size-4 overflow-hidden" />
@@ -273,6 +274,7 @@ interface DetectionChannelListProps {
   onRowFocusRef: (kind: LanguageDetectorKind, node: ViewRef | null) => void;
   onFocusGrip: (kind: LanguageDetectorKind) => void;
   onFocusChannelFallback: (kind: LanguageDetectorKind) => void;
+  onAddAvailableDetector: (kind: LanguageDetectorKind) => void;
   onRemoveDialogOpenChange: (open: boolean) => void;
 }
 
@@ -501,7 +503,29 @@ function DetectionChannelList(props: DetectionChannelListProps) {
         </Text>
       </If>
 
-      <If when={order().length > 0}>
+      <If
+        when={order().length > 0}
+        else={
+          <ChannelEmptyState
+            testID="settings-detection-empty"
+            icon="mdi:translate"
+            title={t("settings.languageDetection.emptyTitle")}
+            choicesLabel={t("settings.languageDetection.emptyChannels")}
+            busy={props.busy}
+            compact={props.compact}
+            choices={languageDetectionStore.availableDetectors().map((kind) => ({
+              id: kind,
+              label: t(`settings.languageDetection.${kind}`),
+              accessibilityLabel: t("settings.languageDetection.emptyAdd", {
+                name: t(`settings.languageDetection.${kind}`),
+              }),
+              testID: `settings-detection-empty-channel-${kind}`,
+              leading: <DetectionChannelAvatar kind={kind} size="sm" />,
+              onPress: () => props.onAddAvailableDetector(kind),
+            }))}
+          />
+        }
+      >
         <Card testID="settings-detection-card" class={props.compact ? "gap-1 p-2" : "gap-1 p-3"}>
           <Each of={order()} key={(kind) => kind}>
             {(kind, index) => {
@@ -1128,30 +1152,50 @@ export function LanguageDetectionSection(props: LanguageDetectionSectionProps) {
   const unregisterAddTrigger = props.onRegisterAddTrigger?.(handleOpenAddDialog);
   if (unregisterAddTrigger) cleanup(unregisterAddTrigger);
 
-  const handleSelectAddKind = async (kind: LanguageDetectorKind) => {
-    if (addingChannel()) return;
+  const addDetectorKind = async (kind: LanguageDetectorKind): Promise<boolean> => {
+    if (addingChannel()) return false;
     listError.set(null);
     addingChannel.set(true);
     try {
       const result = await languageDetectionStore.addDetector(kind);
       if (!result.ok) {
-        addDialogOpen.set(false);
         listError.set(result.message);
-        return;
+        return false;
       }
-      pendingDialogCloseFocus = isDetectorOpenable(kind)
-        ? null
-        : () =>
-            focusTarget(
-              rowRefs[kind] ?? fallbackFocusRefs[kind] ?? props.getAddButtonRef?.() ?? null,
-            );
-      addDialogOpen.set(false);
-      if (isDetectorOpenable(kind)) {
-        props.onSelectChannel(kind);
-      }
+      return true;
     } finally {
       addingChannel.set(false);
     }
+  };
+
+  const handleSelectAddKind = async (kind: LanguageDetectorKind) => {
+    if (addingChannel()) return;
+    const added = await addDetectorKind(kind);
+    addDialogOpen.set(false);
+    if (!added) return;
+    pendingDialogCloseFocus = isDetectorOpenable(kind)
+      ? null
+      : () =>
+          focusTarget(
+            rowRefs[kind] ?? fallbackFocusRefs[kind] ?? props.getAddButtonRef?.() ?? null,
+          );
+    if (isDetectorOpenable(kind)) {
+      props.onSelectChannel(kind);
+    }
+  };
+
+  /** Adding from the empty state skips the picker and opens the new detector directly. */
+  const handleAddAvailableDetector = async (kind: LanguageDetectorKind) => {
+    if (addingChannel()) return;
+    const added = await addDetectorKind(kind);
+    if (!added) return;
+    if (isDetectorOpenable(kind)) {
+      props.onSelectChannel(kind);
+      return;
+    }
+    queueMicrotask(() =>
+      focusTarget(rowRefs[kind] ?? fallbackFocusRefs[kind] ?? props.getAddButtonRef?.() ?? null),
+    );
   };
 
   return (
@@ -1195,6 +1239,7 @@ export function LanguageDetectionSection(props: LanguageDetectionSectionProps) {
               rowRefs[kind] ?? fallbackFocusRefs[kind] ?? props.getAddButtonRef?.() ?? null,
             )
           }
+          onAddAvailableDetector={(kind) => void handleAddAvailableDetector(kind)}
           onRemoveDialogOpenChange={(open) => removeDialogOpen.set(open)}
         />
       </If>
