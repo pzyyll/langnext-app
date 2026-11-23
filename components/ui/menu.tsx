@@ -8,6 +8,7 @@ import {
 } from "nsh/base";
 import { motion } from "../motion";
 import { Icon } from "./icon";
+import { DROPDOWN_ITEM_GEOMETRY, DROPDOWN_POPUP_SURFACE } from "./popup-surface";
 
 interface MenuProps {
   open?: boolean;
@@ -31,7 +32,7 @@ export function Menu(props: MenuProps) {
       placement={props.placement ?? "bottom"}
       align={props.align ?? "start"}
       offset={props.offset ?? 4}
-      popupClass={`${props.popupClass ?? "w-48 max-h-44"} rounded-xl border border-border bg-popover p-1 shadow-lg ${motion.popup}`}
+      popupClass={`${props.popupClass ?? "w-48 max-h-44"} ${DROPDOWN_POPUP_SURFACE}`}
       popupStartingClass={motion.popupHidden}
       popupEndingClass={motion.popupHidden}
       trigger={props.trigger}
@@ -65,7 +66,7 @@ export function Submenu(props: SubmenuProps) {
         <View
           testID={props.testID}
           accessibilityLabel={props.accessibilityLabel ?? props.label}
-          class={`h-8 w-full flex-row items-center justify-between gap-2 rounded-lg px-2.5 hover:bg-accent focus:bg-accent aria-expanded:bg-accent active:bg-border disabled:opacity-50 ${motion.navigationFeedback}`}
+          class={`w-full flex-row items-center justify-between gap-2 ${DROPDOWN_ITEM_GEOMETRY} hover:bg-selection/50 focus:bg-selection/50 aria-expanded:bg-selection/50 active:bg-border disabled:opacity-50`}
         >
           <Text class="min-w-0 flex-1 truncate text-sm text-popover-foreground">{props.label}</Text>
           <Icon name="mdi:chevron-right" tone="muted-foreground" class="size-3.5 shrink-0" />
@@ -103,7 +104,7 @@ export function MenuItem(props: MenuItemProps) {
       closeOnSelect={props.closeOnSelect}
       accessibilityLabel={props.accessibilityLabel ?? props.label}
       onSelect={() => props.onSelect?.()}
-      class={`group h-8 flex-row items-center gap-2 rounded-lg px-2.5 hover:bg-accent focus:bg-accent active:bg-border checked:bg-accent/60 disabled:opacity-50 ${motion.navigationFeedback} ${props.class ?? ""}`}
+      class={`group flex-row items-center gap-2 ${DROPDOWN_ITEM_GEOMETRY} hover:bg-selection/50 focus:bg-selection/50 active:bg-border checked:bg-selection/70 disabled:opacity-50 ${props.class ?? ""}`}
       indicatorClass={isCheckable() ? "size-3.5 shrink-0 items-center justify-center" : undefined}
       indicator={
         isCheckable() ? (
@@ -127,5 +128,5 @@ export function MenuItem(props: MenuItemProps) {
 
 /** Hairline divider grouping menu items. */
 export function MenuSeparator(props: { class?: string }) {
-  return <BaseMenuSeparator class={`my-1 h-px bg-border ${props.class ?? ""}`} />;
+  return <BaseMenuSeparator class={`mx-1.5 my-0.5 h-px bg-border ${props.class ?? ""}`} />;
 }

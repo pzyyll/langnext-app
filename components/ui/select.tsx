@@ -3,6 +3,7 @@ import { Select as BaseSelect, type SelectItem } from "nsh/base";
 import { t } from "nsh/i18n";
 import { motion } from "../motion";
 import { Icon } from "./icon";
+import { DROPDOWN_ITEM_GEOMETRY, DROPDOWN_POPUP_SURFACE } from "./popup-surface";
 import { buildHoverTooltip, buildTooltip } from "./tooltip";
 
 export type { SelectItem };
@@ -92,12 +93,12 @@ export function Select(props: SelectProps) {
         props.onOpenChange?.(open);
       }}
       class={props.class}
-      popupClass={`min-w-44 rounded-xl border border-border bg-popover p-1 shadow-lg ${motion.popup}`}
+      popupClass={`min-w-44 ${DROPDOWN_POPUP_SURFACE}`}
       listClass="max-h-60"
-      itemClass={`group flex-row items-center justify-between gap-2 rounded-lg px-3 py-1.5 focus:bg-accent selected:bg-accent/60 disabled:opacity-50 ${motion.navigationFeedback}`}
+      itemClass={`group justify-center ${DROPDOWN_ITEM_GEOMETRY} focus:bg-selection/50 selected:bg-selection/70 selected:shadow-control disabled:opacity-50`}
       renderItem={(entry) => (
-        <View class="flex-1 flex-row items-center justify-between gap-2">
-          <Text class="min-w-0 flex-1 text-sm text-popover-foreground group-selected:font-medium">
+        <View class="flex-row items-center justify-between gap-2">
+          <Text class="min-w-0 flex-1 text-sm text-popover-foreground group-selected:font-semibold">
             {entry.title}
           </Text>
           <Icon

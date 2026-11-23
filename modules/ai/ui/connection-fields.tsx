@@ -54,7 +54,7 @@ export function ConnectionFields(props: ProviderSettingsProps) {
       <View class={props.compact ? "gap-3.5" : "flex-row items-start gap-4"}>
         <FormField
           label={t("models.connection.apiType")}
-          class={props.compact ? undefined : "w-56 shrink-0"}
+          class={props.compact ? undefined : "w-64 shrink-0"}
         >
           <If
             when={hasFixedApiType()}

@@ -247,7 +247,7 @@ export function ChannelEditor(props: ChannelEditorProps) {
               <View class={compactLayout() ? "gap-3.5" : "flex-row items-start gap-4"}>
                 <FormField
                   label={t("models.channel.provider")}
-                  class={compactLayout() ? undefined : "w-56 shrink-0"}
+                  class={compactLayout() ? undefined : "w-64 shrink-0"}
                 >
                   <View class="h-9 flex-row items-center gap-2 rounded-xl border border-border bg-muted px-3">
                     <If when={providerPresentation() !== null}>
