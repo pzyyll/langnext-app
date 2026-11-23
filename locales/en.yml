@@ -752,6 +752,7 @@ quickTranslate:
   showMarkdown: Show results as Markdown
   showPlainText: Show results as plain text
   speak: Read aloud
+  speakBackTranslation: Read back-translation aloud
   speakOff: Turn on text-to-speech in Settings.
   speakUnsupportedAzure: This language has no Azure Speech voice.
   speakTooLongAzure: Shorten the text. This app sends at most 5,000 bytes to Azure.
@@ -764,6 +765,12 @@ quickTranslate:
   speakPlayback: Could not play the audio. Try again.
   copy: Copy
   copied: Copied
+  backTranslate: Back-translate
+  backTranslating: Back-translating…
+  closeBackTranslation: Close back-translation
+  retryBackTranslation: Retry back-translation
+  copyBackTranslation: Copy back-translation
+  backTranslationCopied: Back-translation copied
   sourceLabel: Source text
   sourcePlaceholder: Enter text to translate…
   collapseSource: Collapse input
@@ -775,7 +782,9 @@ quickTranslate:
     noModels: Selected preset has no models configured. Add a model in Presets.
     noEligibleModel: No configured model in this preset is available. Check Models or Presets.
     translationFailed: "Translation failed: %{detail}"
+    emptyBackTranslation: No back-translation returned.
     copyFailed: Could not copy translation to the clipboard.
+    copyBackTranslationFailed: Could not copy the back-translation.
     savePreferences: Could not save Quick Translate preferences. Your changes apply until you close the app.
 deepl:
   error:

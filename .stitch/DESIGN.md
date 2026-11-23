@@ -126,6 +126,18 @@ Recorded for the Google voice settings before editing its TSX. Every entry reuse
 - Markdown on or off: Swap the outline and filled icons in place and change the selected background and tint. Keep focus on the button. Reflow the result in the existing scroll region, with no enter or exit animation.
 - Streaming and completion: Update the result in place and keep the current scroll region. Do not add a caret, progress animation, or new overlay. Reduced motion does not change the text updates.
 
+### Quick Translate Back-translation
+
+Recorded before editing the Quick Translate TSX. Every entry reuses an existing token from `components/motion.ts`; the change adds no decorative motion.
+
+| State change                                                                               | Tool and reduced motion                                                                                                                                                                                                                     |
+| ------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Reply, lower speak, lower copy, lower retry, and close buttons hover, press, or gain focus | Existing `Button` (`ghost`, `icon-xs`) with `motion.pressScale` (0.95 active scale, 150ms easeOut), `focus-visible:ring-2`, and `buildTooltip` (`motion.tooltip`). Reduced motion removes transitions, tooltip fade, and press scale.       |
+| Lower back-translation area opens, shows loading or error, or closes                       | Immediate insertion or removal inside the existing card and `Scroll` region, with no enter, exit, or layout animation. Loading text swaps immediately to the completed `TranslationOutput` or inline error. Reduced motion makes no change. |
+| Lower copy icon and label change                                                           | Instant swap between `mdi:content-copy` and `mdi:check` (`success` tone) with no glyph animation.                                                                                                                                           |
+| Lower speak icon and label change during loading and playback                              | Instant swap between `mdi:volume-high`, `mdi:close-circle`, and `mdi:stop-circle-outline`, keeping button size and toolbar alignment fixed.                                                                                                 |
+| Drag or keyboard reorder, continuous or ambient animation, sound                           | Reorder uses existing `CARD_REORDER_SETTLE_MS` on the card container. No continuous animation or sound.                                                                                                                                     |
+
 ### Google Cloud Translation presets and card
 
 Recorded before editing the Presets and Quick Translate TSX. Every entry reuses an existing token from `components/motion.ts`; the change adds no decorative motion.

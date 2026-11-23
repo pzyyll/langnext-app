@@ -2049,3 +2049,136 @@ test("quick tts: hiding the window for screenshot selection stops playback and d
   expect(app.audio().filter((call) => call.command === "open")).toHaveLength(1);
   expect(app.texts()).not.toContain("Stop");
 });
+
+test("quick window: back-translation respects Markdown toggle without retranslating", async () => {
+  const forwardMarkdown = "## Forward Heading\n\n**Bonjour**";
+  const reverseMarkdown = "## Reverse Heading\n\n**Hello**";
+  let aiCalls = 0;
+  const app = await open(HARNESS_ENTRY, {
+    ...viewport,
+    storage: {
+      ...makeSeedStorage({
+        channels: [makeChannel({ adapterId: "openai-compatible", enabled: true })],
+        models: [makeModel({ enabled: true })],
+        credentials: { "ch-1": "sk-test" },
+      }),
+      [PRESETS_STORAGE_KEY]: JSON.stringify({ version: 1, items: [quickPreset] }),
+      "settings.language": "en",
+      "quickTranslate.preferences.v1": popupPreferences({
+        cards: [{ id: "card-1", presetId: quickPreset.id }],
+      }),
+    },
+    network: {
+      "POST https://api.openai.com/v1/chat/completions": () => {
+        aiCalls += 1;
+        return {
+          status: 200,
+          body: {
+            choices: [{ message: { content: aiCalls === 1 ? forwardMarkdown : reverseMarkdown } }],
+          },
+        };
+      },
+    },
+  });
+
+  await app.press("id:harness-tray-quick-translate");
+  await app.waitFor("id:quick-translate-source");
+  await app.type("id:quick-translate-source", "Hello");
+  await app.keyboard.press("enter");
+  await app.waitFor("id:quick-translate-card-card-1 >> id:quick-translate-back-translate");
+  await app.press("id:quick-translate-card-card-1 >> id:quick-translate-back-translate");
+  await app.waitFor("id:quick-translate-card-card-1 >> id:quick-translate-copy-back-translation");
+
+  expect(app.texts()).toContain(forwardMarkdown);
+  expect(app.texts()).toContain(reverseMarkdown);
+
+  await app.press("id:quick-translate-header >> id:quick-translate-markdown-toggle");
+  await app.waitFor("id:quick-translate-card-card-1 >> text:Reverse Heading");
+  expect(app.texts()).toContain("Forward Heading");
+  expect(app.texts()).toContain("Reverse Heading");
+  expect(app.texts()).not.toContain(reverseMarkdown);
+  expect(app.requests()).toHaveLength(2);
+});
+
+test("quick window: back-translation adds no height when closed, fits open content within display work area, and preserves collapse/remove/retry", async () => {
+  const mediumReverse = Array.from({ length: 10 }, (_, i) => `Back-translation line ${i + 1}`).join(
+    "\n",
+  );
+  const longReverse = Array.from({ length: 60 }, (_, i) => `Overflow back line ${i + 1}`).join(
+    "\n",
+  );
+  let aiCalls = 0;
+  const app = await open(HARNESS_ENTRY, {
+    ...viewport,
+    storage: {
+      ...makeSeedStorage({
+        channels: [makeChannel({ adapterId: "openai-compatible", enabled: true })],
+        models: [makeModel({ enabled: true })],
+        credentials: { "ch-1": "sk-test" },
+      }),
+      [PRESETS_STORAGE_KEY]: JSON.stringify({ version: 1, items: [quickPreset] }),
+      "settings.language": "en",
+      "quickTranslate.preferences.v1": popupPreferences({
+        cards: [
+          { id: "card-1", presetId: quickPreset.id },
+          { id: "card-2", presetId: quickPreset.id },
+        ],
+      }),
+    },
+    network: {
+      "POST https://api.openai.com/v1/chat/completions": (req) => {
+        aiCalls += 1;
+        const body = JSON.parse(req.body ?? "{}") as { messages?: Array<{ content: string }> };
+        if (body.messages?.[1]?.content === "Hello") {
+          return { status: 200, body: { choices: [{ message: { content: "Bonjour" } }] } };
+        }
+        return {
+          status: 200,
+          body: {
+            choices: [{ message: { content: aiCalls === 3 ? mediumReverse : longReverse } }],
+          },
+        };
+      },
+    },
+  });
+
+  const window = app.window("quick-translate");
+  const height = () => window.state()?.contentBounds.size.height ?? 0;
+
+  await app.press("id:harness-tray-quick-translate");
+  await app.waitFor("id:quick-translate-source");
+  await app.type("id:quick-translate-source", "Hello");
+  await app.keyboard.press("enter");
+  await app.waitFor("id:quick-translate-card-card-2 >> id:quick-translate-back-translate");
+  await app.waitUntil(() => height() > 200);
+  const closedHeight = height();
+
+  // Opening a normal-height back-translation grows the window cleanly and closing restores closedHeight.
+  await app.press("id:quick-translate-card-card-1 >> id:quick-translate-back-translate");
+  await app.waitFor("id:quick-translate-card-card-1 >> id:quick-translate-copy-back-translation");
+  const work = app.texts().find((value) => value.startsWith("quick-work-area:"))!;
+  const [, , workHeight] = work.split(":").map(Number);
+  await app.waitUntil(() => height() > closedHeight + 40);
+  const mediumHeight = height();
+  expect(mediumHeight).toBeGreaterThan(closedHeight);
+  expect(window.state()!.bounds.size.height).toBeLessThanOrEqual(workHeight! + 1);
+
+  await app.press("id:quick-translate-card-card-1 >> id:quick-translate-close-back-translation");
+  await app.waitUntil(() => Math.abs(height() - closedHeight) < 1);
+
+  // An overflowing 60-line back-translation clamps within the display work area while top controls remain interactive.
+  await app.press("id:quick-translate-card-card-2 >> id:quick-translate-back-translate");
+  await app.waitFor("id:quick-translate-card-card-2 >> id:quick-translate-copy-back-translation");
+  await app.waitUntil(() => Math.abs(window.state()!.bounds.size.height - workHeight!) < 1);
+  expect(window.state()!.bounds.size.height).toBeLessThanOrEqual(workHeight! + 1);
+
+  // Existing collapse, retry, and remove controls continue operating normally.
+  await app.press("id:quick-translate-card-card-2 >> id:quick-translate-collapse");
+  await app.waitUntil(() => height() < closedHeight);
+  await app.press("id:quick-translate-card-card-2 >> id:quick-translate-collapse");
+  await app.waitUntil(() => Math.abs(height() - closedHeight) < 1);
+  await app.press("id:quick-translate-card-card-1 >> id:quick-translate-retry");
+  await app.waitUntil(() => aiCalls >= 5);
+  await app.press("id:quick-translate-card-card-2 >> id:quick-translate-remove");
+  expect(app.shows("id:quick-translate-card-card-2")).toBe(false);
+});

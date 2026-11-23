@@ -57,8 +57,20 @@ export type CardResultState =
   | { status: "idle" }
   | { status: "loading" }
   | { status: "streaming"; text: string }
-  | { status: "success"; text: string; modelId: string | null; targetLanguage: LanguageId }
+  | {
+      status: "success";
+      text: string;
+      modelId: string | null;
+      sourceLanguage: LanguageId;
+      targetLanguage: LanguageId;
+    }
   | { status: "error"; message: string; text?: string };
+
+export type BackTranslationState =
+  | { status: "closed" }
+  | { status: "loading" }
+  | { status: "success"; text: string; copied: boolean; copyError: string | null }
+  | { status: "error"; message: string };
 
 export interface CardViewItem {
   id: string;
@@ -68,6 +80,7 @@ export interface CardViewItem {
   result: CardResultState;
   copied: boolean;
   copyError: string | null;
+  backTranslation: BackTranslationState;
 }
 
 interface CardQuery {
@@ -76,11 +89,25 @@ interface CardQuery {
   streamFlushTimer: ReturnType<typeof setTimeout> | null;
 }
 
+interface BackTranslationRuntime {
+  forwardQuery: CardQuery;
+  open: boolean;
+  state:
+    | { status: "loading"; abort: AbortController }
+    | { status: "success"; text: string }
+    | { status: "error"; message: string };
+  copyResetTimer: ReturnType<typeof setTimeout> | null;
+  copied: boolean;
+  copyError: string | null;
+  copyEpoch: number;
+}
+
 interface CardRuntime {
   context: { preset: TranslationPreset; text: string; languageKey: string } | null;
   queries: Map<string | null, CardQuery>;
   selectedQuery: CardQuery | null;
   copyResetTimer: ReturnType<typeof setTimeout> | null;
+  backTranslation: BackTranslationRuntime | null;
 }
 
 /** One action's immutable source text and language selections. */
@@ -141,6 +168,10 @@ export interface QuickTranslateSession {
   handleRemoveCard: (cardId: string) => void;
   handleRetryCard: (cardId: string) => void;
   handleCopyCard: (cardId: string) => void;
+  handleBackTranslate: (cardId: string) => void;
+  handleCloseBackTranslation: (cardId: string) => void;
+  handleRetryBackTranslation: (cardId: string) => void;
+  handleCopyBackTranslation: (cardId: string) => void;
   retryLoadPresets: () => void;
   notifyOverlayOpenChange: (menuId: string, open: boolean) => void;
 }
@@ -151,6 +182,19 @@ function createCardRuntime(): CardRuntime {
     queries: new Map(),
     selectedQuery: null,
     copyResetTimer: null,
+    backTranslation: null,
+  };
+}
+
+function toBackTranslationViewState(bt: BackTranslationRuntime | null): BackTranslationState {
+  if (!bt || !bt.open) return { status: "closed" };
+  if (bt.state.status === "loading") return { status: "loading" };
+  if (bt.state.status === "error") return { status: "error", message: bt.state.message };
+  return {
+    status: "success",
+    text: bt.state.text,
+    copied: bt.copied,
+    copyError: bt.copyError,
   };
 }
 
@@ -265,6 +309,24 @@ export function createQuickTranslateSession(
     }
   };
 
+  const clearBackTranslationCopyTimer = (bt: BackTranslationRuntime) => {
+    if (bt.copyResetTimer !== null) {
+      clearTimeout(bt.copyResetTimer);
+      bt.copyResetTimer = null;
+    }
+  };
+
+  const clearBackTranslation = (runtime: CardRuntime) => {
+    const bt = runtime.backTranslation;
+    if (!bt) return;
+    bt.copyEpoch += 1;
+    clearBackTranslationCopyTimer(bt);
+    if (bt.state.status === "loading") {
+      bt.state.abort.abort();
+    }
+    runtime.backTranslation = null;
+  };
+
   const clearStreamTimer = (query: CardQuery) => {
     if (query.streamFlushTimer !== null) {
       clearTimeout(query.streamFlushTimer);
@@ -280,6 +342,7 @@ export function createQuickTranslateSession(
 
   const cancelRuntime = (runtime: CardRuntime) => {
     clearCopyTimer(runtime);
+    clearBackTranslation(runtime);
     for (const query of runtime.queries.values()) cancelQuery(query);
     runtime.queries.clear();
     runtime.selectedQuery = null;
@@ -297,6 +360,7 @@ export function createQuickTranslateSession(
         copied: false,
         copyError: null,
         result: { status: "idle" },
+        backTranslation: { status: "closed" },
       })),
     );
   };
@@ -366,6 +430,7 @@ export function createQuickTranslateSession(
         result: { status: "idle" },
         copied: false,
         copyError: null,
+        backTranslation: { status: "closed" },
       }));
     } else if (firstAvailable) {
       const id = allocateCardId();
@@ -379,6 +444,7 @@ export function createQuickTranslateSession(
           result: { status: "idle" },
           copied: false,
           copyError: null,
+          backTranslation: { status: "closed" },
         },
       ];
     } else {
@@ -419,11 +485,18 @@ export function createQuickTranslateSession(
     const selectQuery = (query: CardQuery | null, result = query?.result) => {
       runtime.selectedQuery = query;
       clearCopyTimer(runtime);
+      if (runtime.backTranslation && runtime.backTranslation.forwardQuery !== query) {
+        clearBackTranslation(runtime);
+      }
       updateCard(cardId, (item) => ({
         ...item,
         copied: false,
         copyError: null,
         result: result ?? { status: "idle" },
+        backTranslation:
+          runtime.backTranslation && runtime.backTranslation.forwardQuery === query
+            ? toBackTranslationViewState(runtime.backTranslation)
+            : { status: "closed" },
       }));
     };
 
@@ -538,6 +611,7 @@ export function createQuickTranslateSession(
           status: "success",
           text: outcome.text,
           modelId: outcome.modelId,
+          sourceLanguage: pair.sourceLanguage,
           targetLanguage: pair.targetLanguage,
         });
       } else if (outcome.cancelled) {
@@ -667,6 +741,7 @@ export function createQuickTranslateSession(
         result: { status: "idle" },
         copied: false,
         copyError: null,
+        backTranslation: { status: "closed" },
       },
     ]);
     persistPreferencesState();
@@ -710,6 +785,7 @@ export function createQuickTranslateSession(
       copied: false,
       copyError: null,
       result: { status: "idle" },
+      backTranslation: { status: "closed" },
     }));
     persistPreferencesState();
   };
@@ -734,6 +810,7 @@ export function createQuickTranslateSession(
     const runtime = cardRuntimes.get(cardId);
     if (!runtime) return;
     clearCopyTimer(runtime);
+    clearBackTranslation(runtime);
     runtime.selectedQuery = null;
     batch(() => {
       updateCard(cardId, (item) => ({
@@ -742,10 +819,30 @@ export function createQuickTranslateSession(
         copied: false,
         copyError: null,
         result: { status: "idle" },
+        backTranslation: { status: "closed" },
       }));
       if (!current.collapsed) void executeCard(cardId, "auto");
     });
     persistPreferencesState();
+  };
+
+  const closeBackTranslationRuntime = (runtime: CardRuntime) => {
+    const bt = runtime.backTranslation;
+    if (!bt) return;
+    bt.copyEpoch += 1;
+    clearBackTranslationCopyTimer(bt);
+    bt.copied = false;
+    bt.copyError = null;
+    if (bt.state.status === "loading") {
+      bt.state.abort.abort();
+      runtime.backTranslation = null;
+      return;
+    }
+    if (bt.state.status === "error") {
+      runtime.backTranslation = null;
+      return;
+    }
+    bt.open = false;
   };
 
   const handleToggleCollapse = (cardId: string) => {
@@ -757,11 +854,18 @@ export function createQuickTranslateSession(
       const runtime = cardRuntimes.get(cardId);
       if (runtime) {
         clearCopyTimer(runtime);
+        closeBackTranslationRuntime(runtime);
         for (const [templateId, query] of runtime.queries) {
           if (!query.abort) continue;
           cancelQuery(query);
           runtime.queries.delete(templateId);
           if (runtime.selectedQuery === query) runtime.selectedQuery = null;
+        }
+        if (
+          runtime.backTranslation &&
+          runtime.backTranslation.forwardQuery !== runtime.selectedQuery
+        ) {
+          clearBackTranslation(runtime);
         }
       }
       updateCard(cardId, (item) => ({
@@ -770,6 +874,7 @@ export function createQuickTranslateSession(
         copied: false,
         copyError: null,
         result: runtime?.selectedQuery?.result ?? { status: "idle" },
+        backTranslation: { status: "closed" },
       }));
     } else {
       batch(() => {
@@ -798,39 +903,283 @@ export function createQuickTranslateSession(
     invalidateAllCards();
   };
 
-  const handleCopyCard = async (cardId: string) => {
+  const runCopyWithFeedback = async (params: {
+    text: string;
+    isValid: () => boolean;
+    setFeedback: (patch: { copied?: boolean; copyError?: string | null }) => void;
+    clearTimer: () => void;
+    setTimer: (timer: ReturnType<typeof setTimeout> | null) => void;
+    errorKey: string;
+  }) => {
+    params.setFeedback({ copyError: null });
+    try {
+      await clipboardApi.writeText(params.text);
+      if (!params.isValid()) return;
+      params.clearTimer();
+      params.setFeedback({ copied: true, copyError: null });
+      params.setTimer(
+        setTimeout(() => {
+          params.setTimer(null);
+          if (params.isValid()) {
+            params.setFeedback({ copied: false });
+          }
+        }, COPY_FEEDBACK_DURATION_MS),
+      );
+    } catch {
+      if (params.isValid()) {
+        params.setFeedback({ copied: false, copyError: t(params.errorKey) });
+      }
+    }
+  };
+
+  const handleCopyCard = (cardId: string) => {
     const card = cards().find((item) => item.id === cardId);
     const runtime = cardRuntimes.get(cardId);
     if (!card || !runtime || card.result.status !== "success") return;
 
     const expectedText = card.result.text;
-    updateCard(cardId, (item) => ({ ...item, copyError: null }));
-    try {
-      await clipboardApi.writeText(expectedText);
-      if (disposed || !cardRuntimes.has(cardId)) return;
-      const latest = cards().find((item) => item.id === cardId);
-      if (!latest || latest.result.status !== "success" || latest.result.text !== expectedText) {
-        return;
-      }
-      if (runtime.copyResetTimer !== null) {
-        clearTimeout(runtime.copyResetTimer);
-      }
-      updateCard(cardId, (item) => ({ ...item, copied: true }));
-      runtime.copyResetTimer = setTimeout(() => {
-        runtime.copyResetTimer = null;
-        if (!disposed && cardRuntimes.has(cardId)) {
-          updateCard(cardId, (item) => ({ ...item, copied: false }));
-        }
-      }, COPY_FEEDBACK_DURATION_MS);
-    } catch {
-      if (!disposed && cardRuntimes.has(cardId)) {
+    const expectedQuery = runtime.selectedQuery;
+    void runCopyWithFeedback({
+      text: expectedText,
+      isValid: () => {
+        if (disposed || cardRuntimes.get(cardId) !== runtime) return false;
+        const latest = cards().find((item) => item.id === cardId);
+        return (
+          latest !== undefined &&
+          runtime.selectedQuery === expectedQuery &&
+          latest.result.status === "success" &&
+          latest.result.text === expectedText
+        );
+      },
+      setFeedback: (patch) => updateCard(cardId, (item) => ({ ...item, ...patch })),
+      clearTimer: () => clearCopyTimer(runtime),
+      setTimer: (timer) => {
+        runtime.copyResetTimer = timer;
+      },
+      errorKey: "quickTranslate.error.copyFailed",
+    });
+  };
+
+  const handleCopyBackTranslation = (cardId: string) => {
+    const card = cards().find((item) => item.id === cardId);
+    const runtime = cardRuntimes.get(cardId);
+    const bt = runtime?.backTranslation;
+    if (
+      !card ||
+      card.collapsed ||
+      !runtime ||
+      !bt ||
+      !bt.open ||
+      bt.forwardQuery !== runtime.selectedQuery ||
+      bt.state.status !== "success" ||
+      bt.state.text.trim().length === 0
+    ) {
+      return;
+    }
+
+    const expectedQuery = bt.forwardQuery;
+    const expectedText = bt.state.text;
+    const expectedEpoch = bt.copyEpoch;
+    void runCopyWithFeedback({
+      text: expectedText,
+      isValid: () =>
+        !disposed &&
+        cardRuntimes.get(cardId) === runtime &&
+        runtime.backTranslation === bt &&
+        bt.open &&
+        bt.copyEpoch === expectedEpoch &&
+        bt.forwardQuery === runtime.selectedQuery &&
+        bt.forwardQuery === expectedQuery &&
+        bt.state.status === "success" &&
+        bt.state.text === expectedText,
+      setFeedback: (patch) => {
+        if (patch.copied !== undefined) bt.copied = patch.copied;
+        if (patch.copyError !== undefined) bt.copyError = patch.copyError;
         updateCard(cardId, (item) => ({
           ...item,
-          copied: false,
-          copyError: t("quickTranslate.error.copyFailed"),
+          backTranslation: toBackTranslationViewState(bt),
         }));
+      },
+      clearTimer: () => clearBackTranslationCopyTimer(bt),
+      setTimer: (timer) => {
+        bt.copyResetTimer = timer;
+      },
+      errorKey: "quickTranslate.error.copyBackTranslationFailed",
+    });
+  };
+
+  const startBackTranslation = async (
+    cardId: string,
+    runtime: CardRuntime,
+    forwardQuery: CardQuery,
+    forwardResult: Extract<CardResultState, { status: "success" }>,
+    preset: TranslationPreset,
+  ) => {
+    clearBackTranslation(runtime);
+    const abort = new AbortController();
+    const bt: BackTranslationRuntime = {
+      forwardQuery,
+      open: true,
+      state: { status: "loading", abort },
+      copyResetTimer: null,
+      copied: false,
+      copyError: null,
+      copyEpoch: 0,
+    };
+    runtime.backTranslation = bt;
+    updateCard(cardId, (item) => ({
+      ...item,
+      backTranslation: { status: "loading" },
+    }));
+
+    const isStillCurrent = () =>
+      !disposed &&
+      cardRuntimes.get(cardId) === runtime &&
+      runtime.backTranslation === bt &&
+      runtime.selectedQuery === forwardQuery &&
+      bt.state.status === "loading" &&
+      bt.state.abort === abort &&
+      !abort.signal.aborted;
+
+    const failReverse = (message: string) => {
+      if (!isStillCurrent()) return;
+      bt.state = { status: "error", message };
+      updateCard(cardId, (item) => ({
+        ...item,
+        backTranslation: toBackTranslationViewState(bt),
+      }));
+    };
+
+    try {
+      const outcome = await runTranslate(
+        {
+          preset,
+          sourceText: forwardResult.text,
+          sourceLanguage: forwardResult.targetLanguage,
+          targetLanguage: forwardResult.sourceLanguage,
+          purpose: "back-translation",
+        },
+        { signal: abort.signal },
+      );
+      if (!isStillCurrent()) return;
+      if (outcome.ok) {
+        if (outcome.text.trim().length === 0) {
+          failReverse(t("quickTranslate.error.emptyBackTranslation"));
+          return;
+        }
+        bt.state = { status: "success", text: outcome.text };
+        updateCard(cardId, (item) => ({
+          ...item,
+          backTranslation: toBackTranslationViewState(bt),
+        }));
+      } else if (outcome.cancelled) {
+        clearBackTranslation(runtime);
+        updateCard(cardId, (item) => ({ ...item, backTranslation: { status: "closed" } }));
+      } else {
+        failReverse(outcome.error);
+      }
+    } catch (error) {
+      failReverse(error instanceof Error ? error.message : t("protocol.error.networkDefault"));
+    }
+  };
+
+  const handleBackTranslate = (cardId: string) => {
+    const card = cards().find((item) => item.id === cardId);
+    const runtime = cardRuntimes.get(cardId);
+    if (!card || card.collapsed || !runtime || disposed) return;
+    const forwardQuery = runtime.selectedQuery;
+    if (!forwardQuery || card.result.status !== "success") return;
+    if (
+      card.result.text.trim().length === 0 ||
+      card.result.sourceLanguage === card.result.targetLanguage
+    ) {
+      return;
+    }
+
+    if (runtime.backTranslation && runtime.backTranslation.forwardQuery !== forwardQuery) {
+      clearBackTranslation(runtime);
+    }
+    const existing = runtime.backTranslation;
+    if (existing && existing.forwardQuery === forwardQuery) {
+      if (existing.open) return;
+      if (existing.state.status === "success") {
+        existing.open = true;
+        updateCard(cardId, (item) => ({
+          ...item,
+          backTranslation: toBackTranslationViewState(existing),
+        }));
+        return;
       }
     }
+
+    const preset =
+      store.records().find((item) => item.id === card.presetId) ?? runtime.context?.preset;
+    if (!preset) {
+      const bt: BackTranslationRuntime = {
+        forwardQuery,
+        open: true,
+        state: { status: "error", message: t("quickTranslate.error.noEnabledPresets") },
+        copyResetTimer: null,
+        copied: false,
+        copyError: null,
+        copyEpoch: 0,
+      };
+      runtime.backTranslation = bt;
+      updateCard(cardId, (item) => ({
+        ...item,
+        backTranslation: toBackTranslationViewState(bt),
+      }));
+      return;
+    }
+
+    void startBackTranslation(cardId, runtime, forwardQuery, card.result, preset);
+  };
+
+  const handleCloseBackTranslation = (cardId: string) => {
+    const runtime = cardRuntimes.get(cardId);
+    if (!runtime || disposed) return;
+    closeBackTranslationRuntime(runtime);
+    updateCard(cardId, (item) => ({
+      ...item,
+      backTranslation: { status: "closed" },
+    }));
+  };
+
+  const handleRetryBackTranslation = (cardId: string) => {
+    const card = cards().find((item) => item.id === cardId);
+    const runtime = cardRuntimes.get(cardId);
+    if (!card || card.collapsed || !runtime || disposed) return;
+    const forwardQuery = runtime.selectedQuery;
+    const bt = runtime.backTranslation;
+    if (
+      !forwardQuery ||
+      card.result.status !== "success" ||
+      !bt ||
+      !bt.open ||
+      bt.state.status !== "error" ||
+      bt.forwardQuery !== forwardQuery
+    ) {
+      return;
+    }
+    if (
+      card.result.text.trim().length === 0 ||
+      card.result.sourceLanguage === card.result.targetLanguage
+    ) {
+      return;
+    }
+
+    const preset =
+      store.records().find((item) => item.id === card.presetId) ?? runtime.context?.preset;
+    if (!preset) {
+      bt.state = { status: "error", message: t("quickTranslate.error.noEnabledPresets") };
+      updateCard(cardId, (item) => ({
+        ...item,
+        backTranslation: toBackTranslationViewState(bt),
+      }));
+      return;
+    }
+
+    void startBackTranslation(cardId, runtime, forwardQuery, card.result, preset);
   };
 
   return {
@@ -862,7 +1211,11 @@ export function createQuickTranslateSession(
     handleToggleCollapse,
     handleRemoveCard,
     handleRetryCard: (cardId: string) => void executeCard(cardId, "manual"),
-    handleCopyCard: (cardId: string) => void handleCopyCard(cardId),
+    handleCopyCard,
+    handleBackTranslate,
+    handleCloseBackTranslation,
+    handleRetryBackTranslation,
+    handleCopyBackTranslation,
     retryLoadPresets: () => void store.load(),
     notifyOverlayOpenChange: (menuId: string, open: boolean) =>
       options.onOverlayOpenChange?.(menuId, open),

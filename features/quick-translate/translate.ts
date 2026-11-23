@@ -18,6 +18,11 @@ import type { PromptTemplate, TranslationPreset } from "../presets/types";
 
 const TEMPLATE_TOKEN_PATTERN = /\{\{\s*(source_language|target_language|text)\s*\}\}/g;
 const RETRYABLE_ERROR_KINDS = new Set(["timeout", "network", "rate_limited", "server"]);
+const BACK_TRANSLATION_PROMPT: Pick<PromptTemplate, "systemTemplate" | "userTemplate"> = {
+  systemTemplate:
+    "You are a professional translator. Translate the user's text from {{source_language}} to {{target_language}}. Return only the translation, with no extra explanation.",
+  userTemplate: "{{text}}",
+};
 
 export interface TranslateWithPresetInput {
   preset: TranslationPreset;
@@ -26,6 +31,7 @@ export interface TranslateWithPresetInput {
   sourceLanguage: LanguageId;
   targetLanguage: LanguageId;
   templateId?: string;
+  purpose?: "back-translation";
 }
 
 export interface TranslateWithPresetOptions {
@@ -282,9 +288,12 @@ export async function translateWithPreset(
     return translateWithGoogleCloud(preset, input, options);
   }
 
+  const isBackTranslation = input.purpose === "back-translation";
   const effectiveTemplateId = input.templateId ?? preset.engine.defaultTemplateId;
-  const template = preset.engine.templates.find((item) => item.id === effectiveTemplateId);
-  if (!template) {
+  const template = isBackTranslation
+    ? null
+    : preset.engine.templates.find((item) => item.id === effectiveTemplateId);
+  if (!isBackTranslation && !template) {
     return failureResult(t("quickTranslate.error.missingTemplate"));
   }
 
@@ -292,11 +301,14 @@ export async function translateWithPreset(
     return failureResult(t("quickTranslate.error.noModels"));
   }
 
-  const { system, user } = renderPromptTemplate(template, {
-    sourceLanguage: input.sourceLanguage,
-    targetLanguage: input.targetLanguage,
-    text: sourceText,
-  });
+  const { system, user } = renderPromptTemplate(
+    isBackTranslation ? BACK_TRANSLATION_PROMPT : template!,
+    {
+      sourceLanguage: input.sourceLanguage,
+      targetLanguage: input.targetLanguage,
+      text: sourceText,
+    },
+  );
 
   const resolveModel = options.resolveModelRequest ?? resolveSavedModelRequest;
   const runGeneration = options.streamText ?? aiClient.streamText;
@@ -340,7 +352,7 @@ export async function translateWithPreset(
         ok: true,
         text,
         modelId: resolved.modelId,
-        templateId: template.id,
+        templateId: isBackTranslation ? null : template!.id,
       };
     } catch (error) {
       if (

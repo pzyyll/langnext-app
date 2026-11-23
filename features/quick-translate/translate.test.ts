@@ -892,3 +892,65 @@ test("DeepL preset: rejects disabled, blank, and aborted actions before reading 
   expect(aborted).toMatchObject({ ok: false, cancelled: true });
   expect(reads).toBe(0);
 });
+
+test("back-translation purpose: ignores preset templates, returns templateId null, and keeps fallback chain and generation options", async () => {
+  const preset = makePreset({
+    engine: {
+      kind: "ai",
+      modelIds: ["m-fail", "m-ok"],
+      temperature: 0.4,
+      maxOutputTokens: 300,
+      disableReasoning: false,
+      templates: [
+        {
+          id: "tpl-grammar",
+          name: "Grammar",
+          systemTemplate: "GRAMMAR_TEMPLATE_MUST_NOT_BE_USED",
+          userTemplate: "Grammar {{text}}",
+        },
+      ],
+      defaultTemplateId: "tpl-grammar",
+    },
+  });
+
+  const attempted: Array<{ modelId: string; system: string; user: string }> = [];
+  const result = await translateWithPreset(
+    {
+      preset,
+      sourceText: "Bonjour {{target_language}}",
+      sourceLanguage: "fr",
+      targetLanguage: "en",
+      templateId: "tpl-grammar",
+      purpose: "back-translation",
+    },
+    {
+      resolveModelRequest: async (id) => makeReadyResolution(id, `key-${id}`),
+      streamText: async (_conn, req) => {
+        attempted.push({ modelId: req.modelId, system: req.system, user: req.user });
+        expect(req.temperature).toBe(0.4);
+        expect(req.maxOutputTokens).toBe(300);
+        expect(req.disableReasoning).toBe(false);
+        if (req.modelId === "key-m-fail") {
+          throw new ProviderProtocolError(
+            "rate_limited",
+            t("protocol.error.rateLimited", { status: 429 }),
+            429,
+          );
+        }
+        return "Hello {{target_language}}";
+      },
+    },
+  );
+
+  expect(result).toEqual({
+    ok: true,
+    text: "Hello {{target_language}}",
+    modelId: "m-ok",
+    templateId: null,
+  });
+  expect(attempted).toHaveLength(2);
+  expect(attempted[1]!.system).not.toContain("GRAMMAR_TEMPLATE_MUST_NOT_BE_USED");
+  expect(attempted[1]!.system).toContain(getLanguageLabel("fr"));
+  expect(attempted[1]!.system).toContain(getLanguageLabel("en"));
+  expect(attempted[1]!.user).toBe("Bonjour {{target_language}}");
+});

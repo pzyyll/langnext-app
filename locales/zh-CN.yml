@@ -752,6 +752,7 @@ quickTranslate:
   showMarkdown: 以 Markdown 显示译文
   showPlainText: 以纯文本显示译文
   speak: 朗读
+  speakBackTranslation: 朗读回译文
   speakOff: 请在设置中打开语音合成。
   speakUnsupportedAzure: 此语言没有 Azure 语音。
   speakTooLongAzure: 请缩短文字。本应用发给 Azure 的文本最多 5000 字节。
@@ -764,6 +765,12 @@ quickTranslate:
   speakPlayback: 无法播放音频。请重试。
   copy: 复制
   copied: 已复制
+  backTranslate: 回译
+  backTranslating: 正在回译…
+  closeBackTranslation: 关闭回译
+  retryBackTranslation: 重试回译
+  copyBackTranslation: 复制回译文
+  backTranslationCopied: 已复制回译文
   sourceLabel: 源文本
   sourcePlaceholder: 输入要翻译的文本…
   collapseSource: 收起输入框
@@ -775,7 +782,9 @@ quickTranslate:
     noModels: 所选预设未配置任何模型，请在“预设”中添加模型。
     noEligibleModel: 此预设中的已配置模型均不可用，请检查“模型”或“预设”。
     translationFailed: "翻译失败：%{detail}"
+    emptyBackTranslation: 未返回回译文。
     copyFailed: 无法将译文复制到剪贴板。
+    copyBackTranslationFailed: 无法复制回译文。
     savePreferences: 无法保存快速翻译偏好设置。本次更改将在关闭应用前生效。
 deepl:
   error:

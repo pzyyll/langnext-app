@@ -42,6 +42,7 @@ export type HarnessMode =
   | "live"
   | "preset-load-error-then-recover"
   | "clipboard-error"
+  | "clipboard-deferred"
   | "out-of-order"
   | "late-after-close"
   | "language-resolution"
@@ -147,6 +148,7 @@ function PopupHarnessApp(props: {
   let fifthDeferred: Deferred<TranslateWithPresetResult> | null = null;
   let streamDeferred: Deferred<TranslateWithPresetResult> | null = null;
   let streamOnText: ((text: string) => void) | null = null;
+  let clipboardDeferred: { resolve: () => void; reject: (err: Error) => void } | null = null;
 
   const translateStub = async (
     input: TranslateWithPresetInput,
@@ -210,7 +212,15 @@ function PopupHarnessApp(props: {
             throw new Error("Clipboard locked");
           },
         }
-      : undefined;
+      : props.mode === "clipboard-deferred"
+        ? {
+            writeText() {
+              return new Promise<void>((resolve, reject) => {
+                clipboardDeferred = { resolve, reject };
+              });
+            },
+          }
+        : undefined;
 
   return (
     <View class="flex-1 bg-background p-3 text-foreground">
@@ -283,6 +293,24 @@ function PopupHarnessApp(props: {
             label="Fix Storage"
             onPress={() => presetsErrorFail.set(false)}
           />
+        </If>
+        <If when={props.mode === "clipboard-deferred"}>
+          <View class="flex-row gap-1">
+            <Button
+              testID="harness-resolve-clipboard"
+              size="xs"
+              variant="outline"
+              label="Resolve Clipboard"
+              onPress={() => clipboardDeferred?.resolve()}
+            />
+            <Button
+              testID="harness-reject-clipboard"
+              size="xs"
+              variant="outline"
+              label="Reject Clipboard"
+              onPress={() => clipboardDeferred?.reject(new Error("Clipboard locked"))}
+            />
+          </View>
         </If>
         <If when={props.mode === "streaming"}>
           <View class="flex-row gap-1">
@@ -534,6 +562,7 @@ void Promise.all([
   const mode: HarnessMode =
     modeRaw === "preset-load-error-then-recover" ||
     modeRaw === "clipboard-error" ||
+    modeRaw === "clipboard-deferred" ||
     modeRaw === "out-of-order" ||
     modeRaw === "late-after-close" ||
     modeRaw === "language-resolution" ||

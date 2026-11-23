@@ -2935,3 +2935,1341 @@ test("Google Cloud card: a late result cannot replace a newer result or repopula
   expect(lateClose.value("id:quick-translate-source")).toBe("");
   expect(lateClose.shows("id:quick-translate-copy")).toBe(false);
 });
+
+test("back-translation: request translates a completed AI result in reverse without the selected grammar template", async () => {
+  const grammarPreset = makePreset({
+    engine: {
+      kind: "ai",
+      modelIds: ["m-1"],
+      temperature: 0.3,
+      maxOutputTokens: 128,
+      disableReasoning: false,
+      templates: [
+        {
+          id: "tpl-1",
+          name: "Default",
+          systemTemplate: "Translate from {{source_language}} to {{target_language}}.",
+          userTemplate: "{{text}}",
+        },
+        {
+          id: "tpl-grammar",
+          name: "Grammar Check",
+          systemTemplate:
+            "GRAMMAR_ONLY_MARKER Check grammar for {{source_language}} to {{target_language}}.",
+          userTemplate: "Grammar: {{text}}",
+        },
+      ],
+      defaultTemplateId: "tpl-1",
+    },
+  });
+
+  let aiCalls = 0;
+  const app = await open(POPUP_HARNESS, {
+    ...viewport,
+    storage: seedWithPresets([grammarPreset]),
+    network: {
+      "POST https://api.openai.com/v1/chat/completions": () => {
+        aiCalls += 1;
+        return {
+          status: 200,
+          body: { choices: [{ message: { content: aiCalls === 1 ? "Bonjour" : "Hello" } }] },
+        };
+      },
+    },
+  });
+
+  await app.waitFor("id:quick-translate-card-card-1");
+  await app.press("id:quick-translate-card-card-1 >> id:quick-translate-template");
+  await app.waitFor("role:option[Grammar Check]");
+  await app.press("role:option[Grammar Check]");
+
+  await app.type("id:quick-translate-source", "Good morning");
+  await app.keyboard.press("enter");
+  await app.waitFor("id:quick-translate-card-card-1 >> id:quick-translate-copy");
+
+  expect(app.requests()).toHaveLength(1);
+  const forwardBody = JSON.parse(app.requests()[0]!.body!) as {
+    messages: Array<{ role: string; content: string }>;
+  };
+  expect(forwardBody.messages[0]!.content).toContain("GRAMMAR_ONLY_MARKER");
+  expect(forwardBody.messages[1]!.content).toBe("Grammar: Good morning");
+
+  expect(app.shows("id:quick-translate-card-card-1 >> id:quick-translate-back-translate")).toBe(
+    true,
+  );
+  await app.press("id:quick-translate-card-card-1 >> id:quick-translate-back-translate");
+  await app.waitFor("id:quick-translate-card-card-1 >> text:Hello");
+
+  expect(app.requests()).toHaveLength(2);
+  const reverseBody = JSON.parse(app.requests()[1]!.body!) as {
+    model: string;
+    temperature?: number;
+    max_completion_tokens?: number;
+    messages: Array<{ role: string; content: string }>;
+  };
+  expect(reverseBody.model).toBe("gpt-4.1-mini");
+  expect(reverseBody.temperature).toBe(0.3);
+  expect(reverseBody.max_completion_tokens).toBe(128);
+  expect(reverseBody.messages[0]!.content).not.toContain("GRAMMAR_ONLY_MARKER");
+  expect(reverseBody.messages[0]!.content).toContain(getLanguageLabel("fr"));
+  expect(reverseBody.messages[0]!.content).toContain(getLanguageLabel("en"));
+  expect(reverseBody.messages[0]!.content.indexOf(getLanguageLabel("fr"))).toBeLessThan(
+    reverseBody.messages[0]!.content.indexOf(getLanguageLabel("en")),
+  );
+  expect(reverseBody.messages[1]!.content).toBe("Bonjour");
+
+  expect(app.shows("id:quick-translate-card-card-1 >> text:Bonjour")).toBe(true);
+  expect(app.shows("id:quick-translate-card-card-1 >> text:Hello")).toBe(true);
+  expect(showsLanguagePair(app, "en", "fr")).toBe(true);
+});
+
+test("back-translation: request reverses Auto source and target without a second detector call and checks tooltip and loading copy", async () => {
+  let translateCalls = 0;
+  const app = await open(POPUP_HARNESS, {
+    ...viewport,
+    storage: seedAutoPair([false]),
+    network: {
+      [DETECT_URL]: { status: 200, body: { choices: [{ message: { content: "fr" } }] } },
+      [TRANSLATE_URL]: () => {
+        translateCalls += 1;
+        return translateCalls === 1
+          ? { status: 200, body: { choices: [{ message: { content: "早上好" } }] } }
+          : {
+              status: 200,
+              delay: 700,
+              body: { choices: [{ message: { content: "Bonjour encore" } }] },
+            };
+      },
+    },
+  });
+
+  await app.waitFor("id:quick-translate-card-card-1");
+  await app.type("id:quick-translate-source", "Bonjour");
+  await app.keyboard.press("enter");
+  await app.waitFor("id:quick-translate-card-card-1 >> id:quick-translate-back-translate");
+
+  expect(requestsTo(app, DETECT_URL)).toHaveLength(1);
+  await app.hover("id:quick-translate-card-card-1 >> id:quick-translate-back-translate");
+  await app.waitFor(`text:${t("quickTranslate.backTranslate")}`);
+
+  await app.press("id:quick-translate-card-card-1 >> id:quick-translate-back-translate");
+  await app.waitFor(
+    `id:quick-translate-card-card-1 >> text:${t("quickTranslate.backTranslating")}`,
+  );
+  await app.waitFor("id:quick-translate-card-card-1 >> text:Bonjour encore");
+
+  expect(requestsTo(app, DETECT_URL)).toHaveLength(1);
+  const bodies = translateBodies(app);
+  expect(bodies).toHaveLength(2);
+  expect(bodies[1].messages[0].content).toContain(getLanguageLabel("zh"));
+  expect(bodies[1].messages[0].content).toContain(getLanguageLabel("fr"));
+  expect(bodies[1].messages[0].content.indexOf(getLanguageLabel("zh"))).toBeLessThan(
+    bodies[1].messages[0].content.indexOf(getLanguageLabel("fr")),
+  );
+  expect(bodies[1].messages[1].content).toBe("早上好");
+});
+
+test("back-translation: request supports DeepL and Google Cloud cards with saved credentials and reversed wire codes", async () => {
+  let googleCalls = 0;
+  let deeplCalls = 0;
+  const app = await open(POPUP_HARNESS, {
+    ...viewport,
+    storage: seedGoogleCards({
+      cards: ["google", "deepl"],
+      sourceLanguage: "en",
+      targetLanguage: "zh",
+      detectionMode: "off",
+      aiModels: false,
+    }),
+    network: {
+      [GOOGLE_TRANSLATE_URL]: () => {
+        googleCalls += 1;
+        return {
+          status: 200,
+          body: {
+            data: {
+              translations: [{ translatedText: googleCalls === 1 ? "早上好" : "Good morning" }],
+            },
+          },
+        };
+      },
+      [DEEPL_URL]: () => {
+        deeplCalls += 1;
+        return {
+          status: 200,
+          body: {
+            translations: [
+              {
+                detected_source_language: deeplCalls === 1 ? "EN" : "ZH",
+                text: deeplCalls === 1 ? "早安" : "Morning",
+              },
+            ],
+          },
+        };
+      },
+    },
+  });
+
+  await app.waitFor("id:quick-translate-card-card-2");
+  await app.type("id:quick-translate-source", "Good morning");
+  await app.keyboard.press("enter");
+  await app.waitFor("id:quick-translate-card-card-1 >> id:quick-translate-back-translate");
+  await app.waitFor("id:quick-translate-card-card-2 >> id:quick-translate-back-translate");
+
+  await app.press("id:quick-translate-card-card-1 >> id:quick-translate-back-translate");
+  await app.waitFor("id:quick-translate-card-card-1 >> text:Good morning");
+  const googleReqs = requestsTo(app, GOOGLE_TRANSLATE_URL);
+  expect(googleReqs).toHaveLength(2);
+  expect(googleReqs[1]!.headers?.["x-goog-api-key"]).toBe("google-key-1");
+  expect(JSON.parse(googleReqs[1]!.body!)).toEqual({
+    q: ["早上好"],
+    source: "zh-CN",
+    target: "en",
+    format: "text",
+  });
+
+  await app.press("id:quick-translate-card-card-2 >> id:quick-translate-back-translate");
+  await app.waitFor("id:quick-translate-card-card-2 >> text:Morning");
+  const deeplReqs = requestsTo(app, DEEPL_URL);
+  expect(deeplReqs).toHaveLength(2);
+  expect(deeplReqs[1]!.headers?.authorization).toBe("DeepL-Auth-Key deepl-key:fx");
+  expect(JSON.parse(deeplReqs[1]!.body!)).toEqual({
+    text: ["早安"],
+    source_lang: "ZH",
+    target_lang: "EN-US",
+  });
+});
+
+test("back-translation: request hides reply for idle, streaming, failed, blank, and same-language results and never publishes partial reverse output", async () => {
+  // 1. Streaming forward hides reply; streaming reverse never publishes partial text.
+  const streamApp = await open(POPUP_HARNESS, {
+    ...viewport,
+    storage: seedWithPresets([makePreset()], { [POPUP_HARNESS_MODE_KEY]: "streaming" }),
+  });
+  await streamApp.waitFor("id:quick-translate-card-card-1");
+  expect(streamApp.shows("id:quick-translate-back-translate")).toBe(false);
+
+  await streamApp.type("id:quick-translate-source", "Hello");
+  await streamApp.keyboard.press("enter");
+  await streamApp.waitUntil(() => streamApp.texts().includes("Bon"));
+  expect(streamApp.shows("id:quick-translate-back-translate")).toBe(false);
+
+  await streamApp.press("id:harness-complete-stream");
+  await streamApp.waitFor("id:quick-translate-back-translate");
+  await streamApp.press("id:quick-translate-back-translate");
+  await streamApp.waitFor(`text:${t("quickTranslate.backTranslating")}`);
+  expect(streamApp.texts()).not.toContain("Bon");
+  await streamApp.press("id:harness-complete-stream");
+  await streamApp.waitFor("id:quick-translate-back-translation-text");
+
+  // 2. Failed forward hides reply.
+  const failedApp = await open(POPUP_HARNESS, {
+    ...viewport,
+    storage: seedWithPresets([makePreset()]),
+    network: {
+      "POST https://api.openai.com/v1/chat/completions": {
+        status: 500,
+        body: { error: { message: "server down" } },
+      },
+    },
+  });
+  await failedApp.waitFor("id:quick-translate-source");
+  await failedApp.type("id:quick-translate-source", "Hello");
+  await failedApp.keyboard.press("enter");
+  await failedApp.waitFor("id:quick-translate-error");
+  expect(failedApp.shows("id:quick-translate-back-translate")).toBe(false);
+
+  // 3. Blank forward result hides reply (DeepL/Google Cloud can return blank text).
+  const blankApp = await open(POPUP_HARNESS, {
+    ...viewport,
+    storage: seedGoogleCards({
+      cards: ["deepl"],
+      sourceLanguage: "en",
+      targetLanguage: "zh",
+      detectionMode: "off",
+      aiModels: false,
+    }),
+    network: {
+      [DEEPL_URL]: {
+        status: 200,
+        body: { translations: [{ detected_source_language: "EN", text: "   " }] },
+      },
+    },
+  });
+  await blankApp.waitFor("id:quick-translate-source");
+  await blankApp.type("id:quick-translate-source", "Hello");
+  await blankApp.keyboard.press("enter");
+  await blankApp.waitFor("id:quick-translate-copy");
+  expect(blankApp.shows("id:quick-translate-speak-result")).toBe(false);
+  expect(blankApp.shows("id:quick-translate-back-translate")).toBe(false);
+
+  // 4. Same source and target language hides reply (explicit en -> en and detected fr -> fr).
+  const sameExplicit = await open(POPUP_HARNESS, {
+    ...viewport,
+    storage: seedWithPresets([makePreset()], {
+      [QUICK_TRANSLATE_PREFERENCES_KEY]: JSON.stringify({
+        version: 1,
+        doubleCopyEnabled: false,
+        autoTranslate: false,
+        sourceLanguage: "en",
+        targetLanguage: "en",
+        cards: [],
+      }),
+    }),
+    network: {
+      "POST https://api.openai.com/v1/chat/completions": {
+        status: 200,
+        body: { choices: [{ message: { content: "Hello" } }] },
+      },
+    },
+  });
+  await sameExplicit.waitFor("id:quick-translate-source");
+  await sameExplicit.type("id:quick-translate-source", "Hello");
+  await sameExplicit.keyboard.press("enter");
+  await sameExplicit.waitFor("id:quick-translate-copy");
+  expect(sameExplicit.shows("id:quick-translate-back-translate")).toBe(false);
+
+  const sameDetected = await open(POPUP_HARNESS, {
+    ...viewport,
+    storage: {
+      ...seedAutoPair([false]),
+      [QUICK_TRANSLATE_PREFERENCES_KEY]: JSON.stringify({
+        version: 1,
+        doubleCopyEnabled: false,
+        autoTranslate: false,
+        sourceLanguage: "auto",
+        targetLanguage: "fr",
+        cards: [{ id: "card-1", presetId: "preset-auto", templateId: null, collapsed: false }],
+      }),
+    },
+    network: {
+      [DETECT_URL]: { status: 200, body: { choices: [{ message: { content: "fr" } }] } },
+      [TRANSLATE_URL]: { status: 200, body: { choices: [{ message: { content: "Bonjour" } }] } },
+    },
+  });
+  await sameDetected.waitFor("id:quick-translate-source");
+  await sameDetected.type("id:quick-translate-source", "Bonjour");
+  await sameDetected.keyboard.press("enter");
+  await sameDetected.waitFor("id:quick-translate-copy");
+  expect(sameDetected.shows("id:quick-translate-back-translate")).toBe(false);
+});
+
+test("back-translation: lifetime closes completed lower area without closing forward result and reopens from memory", async () => {
+  let aiCalls = 0;
+  const app = await open(POPUP_HARNESS, {
+    ...viewport,
+    storage: seedWithPresets([makePreset()]),
+    network: {
+      "POST https://api.openai.com/v1/chat/completions": () => {
+        aiCalls += 1;
+        return {
+          status: 200,
+          body: { choices: [{ message: { content: aiCalls === 1 ? "Bonjour" : "Hello" } }] },
+        };
+      },
+    },
+  });
+
+  await app.waitFor("id:quick-translate-card-card-1");
+  await app.type("id:quick-translate-source", "Good morning");
+  await app.keyboard.press("enter");
+  await app.waitFor("id:quick-translate-card-card-1 >> id:quick-translate-back-translate");
+
+  await app.press("id:quick-translate-card-card-1 >> id:quick-translate-back-translate");
+  await app.waitFor("id:quick-translate-card-card-1 >> id:quick-translate-back-translation-text");
+  expect(app.requests()).toHaveLength(2);
+
+  // Repeated activation while open must not create another request.
+  await app.press("id:quick-translate-card-card-1 >> id:quick-translate-back-translate");
+  expect(app.requests()).toHaveLength(2);
+
+  await app.press("id:quick-translate-card-card-1 >> id:quick-translate-close-back-translation");
+  await app.waitUntil(
+    () => !app.shows("id:quick-translate-card-card-1 >> id:quick-translate-back-translation"),
+  );
+  expect(app.shows("id:quick-translate-card-card-1 >> id:quick-translate-result-text")).toBe(true);
+  expect(app.texts()).toContain("Bonjour");
+  expect(app.texts()).not.toContain("Hello");
+
+  // Reopening a completed lower result makes no request.
+  await app.press("id:quick-translate-card-card-1 >> id:quick-translate-back-translate");
+  await app.waitFor("id:quick-translate-card-card-1 >> text:Hello");
+  expect(app.requests()).toHaveLength(2);
+});
+
+test("back-translation: lifetime cancels a loading reverse request on close, ignores late response, and starts fresh on reopen", async () => {
+  let aiCalls = 0;
+  const app = await open(POPUP_HARNESS, {
+    ...viewport,
+    storage: seedWithPresets([makePreset()]),
+    network: {
+      "POST https://api.openai.com/v1/chat/completions": () => {
+        aiCalls += 1;
+        if (aiCalls === 1) {
+          return { status: 200, body: { choices: [{ message: { content: "Bonjour" } }] } };
+        }
+        if (aiCalls === 2) {
+          return {
+            status: 200,
+            delay: 600,
+            body: { choices: [{ message: { content: "Stale Reverse" } }] },
+          };
+        }
+        return { status: 200, body: { choices: [{ message: { content: "Fresh Reverse" } }] } };
+      },
+    },
+  });
+
+  await app.waitFor("id:quick-translate-card-card-1");
+  await app.type("id:quick-translate-source", "Good morning");
+  await app.keyboard.press("enter");
+  await app.waitFor("id:quick-translate-card-card-1 >> id:quick-translate-back-translate");
+
+  await app.press("id:quick-translate-card-card-1 >> id:quick-translate-back-translate");
+  await app.waitFor(
+    `id:quick-translate-card-card-1 >> text:${t("quickTranslate.backTranslating")}`,
+  );
+
+  await app.press("id:quick-translate-card-card-1 >> id:quick-translate-close-back-translation");
+  await app.waitUntil(
+    () => !app.shows("id:quick-translate-card-card-1 >> id:quick-translate-back-translation"),
+  );
+
+  await app.wait(700);
+  expect(app.shows("id:quick-translate-card-card-1 >> id:quick-translate-back-translation")).toBe(
+    false,
+  );
+  expect(app.texts()).not.toContain("Stale Reverse");
+
+  await app.press("id:quick-translate-card-card-1 >> id:quick-translate-back-translate");
+  await app.waitFor("id:quick-translate-card-card-1 >> text:Fresh Reverse");
+  expect(app.requests()).toHaveLength(3);
+});
+
+test("back-translation: lifetime handles reverse failure, blank response, close-discard, retry, and focus return", async () => {
+  // 1. AI provider error -> retry -> close -> discard failure -> reopen fresh; plus focus return on close.
+  let aiCalls = 0;
+  const app = await open(POPUP_HARNESS, {
+    ...viewport,
+    platform: "linux",
+    storage: seedWithPresets([makePreset()]),
+    network: {
+      "POST https://api.openai.com/v1/chat/completions": () => {
+        aiCalls += 1;
+        if (aiCalls === 1) {
+          return { status: 200, body: { choices: [{ message: { content: "Bonjour" } }] } };
+        }
+        if (aiCalls === 2 || aiCalls === 3) {
+          return { status: 500, body: { error: { message: "reverse error" } } };
+        }
+        return { status: 200, body: { choices: [{ message: { content: "Hello back" } }] } };
+      },
+    },
+  });
+
+  await app.waitFor("id:quick-translate-card-card-1");
+  await app.type("id:quick-translate-source", "Good morning");
+  await app.keyboard.press("enter");
+  await app.waitFor("id:quick-translate-card-card-1 >> id:quick-translate-back-translate");
+
+  await app.press("id:quick-translate-card-card-1 >> id:quick-translate-back-translate");
+  await app.waitFor("id:quick-translate-card-card-1 >> id:quick-translate-back-translation-error");
+  expect(app.shows("id:quick-translate-card-card-1 >> id:quick-translate-result-text")).toBe(true);
+  expect(app.texts()).toContain("Bonjour");
+  expect(
+    app.shows("id:quick-translate-card-card-1 >> id:quick-translate-close-back-translation"),
+  ).toBe(true);
+  expect(
+    app.shows("id:quick-translate-card-card-1 >> id:quick-translate-retry-back-translation"),
+  ).toBe(true);
+
+  // Check retry tooltip & accessible name.
+  await app.hover("id:quick-translate-card-card-1 >> id:quick-translate-retry-back-translation");
+  await app.waitFor(`text:${t("quickTranslate.retryBackTranslation")}`);
+  expect(app.shows(`role:button[${t("quickTranslate.retryBackTranslation")}]`)).toBe(true);
+  expect(app.shows(`role:button[${t("quickTranslate.closeBackTranslation")}]`)).toBe(true);
+
+  // Retry repeats ONLY the reverse request (call 3 fails too).
+  await app.press("id:quick-translate-card-card-1 >> id:quick-translate-retry-back-translation");
+  await app.waitUntil(() => app.requests().length === 3);
+  expect(JSON.parse(app.requests()[2]!.body!).messages[1].content).toBe("Bonjour");
+  await app.waitFor("id:quick-translate-card-card-1 >> id:quick-translate-back-translation-error");
+
+  // Closing an error discards failure; focus returns to reply; pressing space/enter starts a fresh attempt.
+  await app.press("id:quick-translate-card-card-1 >> id:quick-translate-close-back-translation");
+  await app.waitUntil(
+    () => !app.shows("id:quick-translate-card-card-1 >> id:quick-translate-back-translation"),
+  );
+  await app.keyboard.press("space");
+  await app.waitFor("id:quick-translate-card-card-1 >> text:Hello back");
+  expect(app.requests()).toHaveLength(4);
+
+  // Closing a success returns focus to reply; pressing enter reopens from memory with no request.
+  await app.press("id:quick-translate-card-card-1 >> id:quick-translate-close-back-translation");
+  await app.waitUntil(
+    () => !app.shows("id:quick-translate-card-card-1 >> id:quick-translate-back-translation"),
+  );
+  await app.keyboard.press("enter");
+  await app.waitFor("id:quick-translate-card-card-1 >> text:Hello back");
+  expect(app.requests()).toHaveLength(4);
+
+  // 2. Blank reverse response (via DeepL) shows emptyBackTranslation error and retry.
+  let deeplCalls = 0;
+  const blankReverseApp = await open(POPUP_HARNESS, {
+    ...viewport,
+    storage: seedGoogleCards({
+      cards: ["deepl"],
+      sourceLanguage: "en",
+      targetLanguage: "zh",
+      detectionMode: "off",
+      aiModels: false,
+    }),
+    network: {
+      [DEEPL_URL]: () => {
+        deeplCalls += 1;
+        return {
+          status: 200,
+          body: {
+            translations: [
+              {
+                detected_source_language: deeplCalls === 1 ? "EN" : "ZH",
+                text: deeplCalls === 1 ? "早上好" : deeplCalls === 2 ? "   " : "Good morning",
+              },
+            ],
+          },
+        };
+      },
+    },
+  });
+  await blankReverseApp.waitFor("id:quick-translate-card-card-1");
+  await blankReverseApp.type("id:quick-translate-source", "Good morning");
+  await blankReverseApp.keyboard.press("enter");
+  await blankReverseApp.waitFor(
+    "id:quick-translate-card-card-1 >> id:quick-translate-back-translate",
+  );
+
+  await blankReverseApp.press(
+    "id:quick-translate-card-card-1 >> id:quick-translate-back-translate",
+  );
+  await blankReverseApp.waitFor(
+    "id:quick-translate-card-card-1 >> id:quick-translate-back-translation-error",
+  );
+  expect(blankReverseApp.texts()).toContain(t("quickTranslate.error.emptyBackTranslation"));
+
+  await blankReverseApp.press(
+    "id:quick-translate-card-card-1 >> id:quick-translate-retry-back-translation",
+  );
+  await blankReverseApp.waitFor("id:quick-translate-card-card-1 >> text:Good morning");
+});
+
+const BACK_TRANSLATION_ALPHA_PRESET = makePreset({
+  id: "preset-1",
+  name: "Preset Alpha",
+  engine: {
+    kind: "ai",
+    modelIds: ["m-1"],
+    temperature: null,
+    maxOutputTokens: null,
+    disableReasoning: true,
+    templates: [
+      {
+        id: "tpl-1",
+        name: "Default",
+        systemTemplate: "Default {{source_language}}->{{target_language}}",
+        userTemplate: "{{text}}",
+      },
+      {
+        id: "tpl-2",
+        name: "Formal",
+        systemTemplate: "Formal {{source_language}}->{{target_language}}",
+        userTemplate: "Formal: {{text}}",
+      },
+    ],
+    defaultTemplateId: "tpl-1",
+  },
+});
+
+const BACK_TRANSLATION_BETA_PRESET = makePreset({ id: "preset-2", name: "Preset Beta" });
+
+test("back-translation: lifetime invalidates on forward retry, template, preset, input, language, and collapse", async () => {
+  // 1. Forward retry, template change, preset change, input change, language change, collapse/expand.
+  let reverseSeq = 0;
+  const app = await open(POPUP_HARNESS, {
+    ...viewport,
+    storage: seedWithPresets([BACK_TRANSLATION_ALPHA_PRESET, BACK_TRANSLATION_BETA_PRESET]),
+    network: {
+      "POST https://api.openai.com/v1/chat/completions": (req) => {
+        const body = JSON.parse(req.body!) as { messages: Array<{ content: string }> };
+        // Keep forward output identical ("Bonjour") across retries to prove binding is by query identity, not text.
+        if (body.messages[1]!.content !== "Bonjour") {
+          return { status: 200, body: { choices: [{ message: { content: "Bonjour" } }] } };
+        }
+        reverseSeq += 1;
+        return {
+          status: 200,
+          body: { choices: [{ message: { content: `Reverse-${reverseSeq}` } }] },
+        };
+      },
+    },
+  });
+
+  await app.waitFor("id:quick-translate-card-card-1");
+  await app.type("id:quick-translate-source", "Hello");
+  await app.keyboard.press("enter");
+  await app.waitFor("id:quick-translate-card-card-1 >> id:quick-translate-back-translate");
+  await app.press("id:quick-translate-card-card-1 >> id:quick-translate-back-translate");
+  await app.waitFor("id:quick-translate-card-card-1 >> text:Reverse-1");
+
+  // Forward retry clears lower result even when forward returns the same text ("Bonjour").
+  await app.press("id:quick-translate-card-card-1 >> id:quick-translate-retry");
+  await app.waitUntil(() => app.requests().length === 3);
+  await app.waitFor("id:quick-translate-card-card-1 >> id:quick-translate-back-translate");
+  expect(app.shows("id:quick-translate-card-card-1 >> id:quick-translate-back-translation")).toBe(
+    false,
+  );
+  // Re-opening after forward retry must run a fresh request (not reuse Reverse-1).
+  await app.press("id:quick-translate-card-card-1 >> id:quick-translate-back-translate");
+  await app.waitFor("id:quick-translate-card-card-1 >> text:Reverse-2");
+
+  // Template switch clears lower result, even if switching back to Default.
+  await app.press("id:quick-translate-card-card-1 >> id:quick-translate-template");
+  await app.waitFor("role:option[Formal]");
+  await app.press("role:option[Formal]");
+  await app.waitUntil(() => app.requests().length === 5);
+  await app.waitFor("id:quick-translate-card-card-1 >> id:quick-translate-back-translate");
+  expect(app.shows("id:quick-translate-card-card-1 >> id:quick-translate-back-translation")).toBe(
+    false,
+  );
+  await app.press("id:quick-translate-card-card-1 >> id:quick-translate-template");
+  await app.waitFor("role:option[Default]");
+  await app.press("role:option[Default]");
+  await app.waitFor("id:quick-translate-card-card-1 >> id:quick-translate-back-translate");
+  expect(app.shows("id:quick-translate-card-card-1 >> id:quick-translate-back-translation")).toBe(
+    false,
+  );
+
+  // Open lower result again, then collapse & expand: lower area closes on collapse and reopens from memory on reply!
+  await app.press("id:quick-translate-card-card-1 >> id:quick-translate-back-translate");
+  await app.waitFor("id:quick-translate-card-card-1 >> text:Reverse-3");
+  const countBeforeCollapse = app.requests().length;
+  await app.press("id:quick-translate-card-card-1 >> id:quick-translate-collapse");
+  expect(app.shows("id:quick-translate-card-card-1 >> id:quick-translate-back-translation")).toBe(
+    false,
+  );
+  await app.press("id:quick-translate-card-card-1 >> id:quick-translate-collapse");
+  await app.waitFor("id:quick-translate-card-card-1 >> id:quick-translate-back-translate");
+  expect(app.shows("id:quick-translate-card-card-1 >> id:quick-translate-back-translation")).toBe(
+    false,
+  );
+  await app.press("id:quick-translate-card-card-1 >> id:quick-translate-back-translate");
+  await app.waitFor("id:quick-translate-card-card-1 >> text:Reverse-3");
+  expect(app.requests()).toHaveLength(countBeforeCollapse);
+
+  // Language change clears lower result.
+  await app.press("id:quick-translate-target-language");
+  await app.waitFor(`role:option[${getTargetLanguageLabel("de")}]`);
+  await app.press(`role:option[${getTargetLanguageLabel("de")}]`);
+  expect(app.shows("id:quick-translate-card-card-1 >> id:quick-translate-back-translation")).toBe(
+    false,
+  );
+
+  // Translate again, open reverse, then input change clears it.
+  await app.submit("id:quick-translate-source");
+  await app.waitUntil(() => app.requests().length === countBeforeCollapse + 1);
+  await app.press("id:quick-translate-card-card-1 >> id:quick-translate-back-translate");
+  await app.waitFor("id:quick-translate-card-card-1 >> text:Reverse-4");
+  await app.type("id:quick-translate-source", "!");
+  expect(app.shows("id:quick-translate-card-card-1 >> id:quick-translate-back-translation")).toBe(
+    false,
+  );
+
+  // Translate again, open reverse, then preset change clears it.
+  await app.submit("id:quick-translate-source");
+  await app.waitUntil(() => app.requests().length === countBeforeCollapse + 3);
+  await app.press("id:quick-translate-card-card-1 >> id:quick-translate-back-translate");
+  await app.waitFor("id:quick-translate-card-card-1 >> text:Reverse-5");
+  await app.press("id:quick-translate-card-card-1 >> id:quick-translate-preset");
+  await app.waitFor("role:option[Preset Beta]");
+  await app.press("role:option[Preset Beta]");
+  expect(app.shows("id:quick-translate-card-card-1 >> id:quick-translate-back-translation")).toBe(
+    false,
+  );
+});
+
+test("back-translation: lifetime isolates multi-card results, preserves reorder, and handles remove", async () => {
+  const multiApp = await open(POPUP_HARNESS, {
+    ...viewport,
+    storage: seedWithSavedCards(
+      [BACK_TRANSLATION_ALPHA_PRESET, BACK_TRANSLATION_BETA_PRESET],
+      [
+        { id: "card-1", presetId: "preset-1", templateId: null, collapsed: false },
+        { id: "card-2", presetId: "preset-2", templateId: null, collapsed: false },
+      ],
+    ),
+    network: {
+      "POST https://api.openai.com/v1/chat/completions": (req) => {
+        const body = JSON.parse(req.body!) as { messages: Array<{ content: string }> };
+        if (body.messages[1]!.content === "Hello") {
+          return {
+            status: 200,
+            body: {
+              choices: [
+                {
+                  message: {
+                    content: body.messages[0]!.content.includes("Default") ? "Bonjour" : "Salut",
+                  },
+                },
+              ],
+            },
+          };
+        }
+        return {
+          status: 200,
+          body: { choices: [{ message: { content: `Back:${body.messages[1]!.content}` } }] },
+        };
+      },
+    },
+  });
+
+  await multiApp.waitFor("id:quick-translate-card-card-2");
+  await multiApp.type("id:quick-translate-source", "Hello");
+  await multiApp.keyboard.press("enter");
+  await multiApp.waitFor("id:quick-translate-card-card-1 >> id:quick-translate-back-translate");
+  await multiApp.waitFor("id:quick-translate-card-card-2 >> id:quick-translate-back-translate");
+
+  await multiApp.press("id:quick-translate-card-card-1 >> id:quick-translate-back-translate");
+  await multiApp.waitFor("id:quick-translate-card-card-1 >> text:Back:Bonjour");
+  await multiApp.press("id:quick-translate-card-card-2 >> id:quick-translate-back-translate");
+  await multiApp.waitFor("id:quick-translate-card-card-2 >> text:Back:Salut");
+
+  // Reordering keeps both cards' lower results intact.
+  await multiApp.drag("id:quick-translate-card-header-card-2", { x: 0, y: -220 });
+  await multiApp.waitUntil(() => savedCardIds(multiApp.storage())[0] === "card-2");
+  expect(multiApp.shows("id:quick-translate-card-card-1 >> text:Back:Bonjour")).toBe(true);
+  expect(multiApp.shows("id:quick-translate-card-card-2 >> text:Back:Salut")).toBe(true);
+
+  // Acting on card 2 (closing/removing) leaves card 1's lower result intact.
+  await multiApp.press(
+    "id:quick-translate-card-card-2 >> id:quick-translate-close-back-translation",
+  );
+  expect(multiApp.shows("id:quick-translate-card-card-1 >> text:Back:Bonjour")).toBe(true);
+  await multiApp.press("id:quick-translate-card-card-2 >> id:quick-translate-remove");
+  expect(multiApp.shows("id:quick-translate-card-card-2")).toBe(false);
+  expect(multiApp.shows("id:quick-translate-card-card-1 >> text:Back:Bonjour")).toBe(true);
+});
+
+test("back-translation: lifetime guards late resolution across reopen, collapse, and popup close", async () => {
+  const lateStorage = seedWithSavedCards(
+    [BACK_TRANSLATION_ALPHA_PRESET, BACK_TRANSLATION_BETA_PRESET],
+    [
+      { id: "card-1", presetId: "preset-1", templateId: null, collapsed: false },
+      { id: "card-2", presetId: "preset-2", templateId: null, collapsed: false },
+    ],
+  );
+  lateStorage[POPUP_HARNESS_MODE_KEY] = "multi-card";
+  const lateApp = await open(POPUP_HARNESS, {
+    ...viewport,
+    storage: lateStorage,
+  });
+  await lateApp.waitFor("id:quick-translate-card-card-2");
+  await lateApp.type("id:quick-translate-source", "Hello");
+  await lateApp.keyboard.press("enter");
+  await lateApp.waitUntil(() => lateApp.texts().some((line) => line.includes("calls=2|")));
+
+  await lateApp.press("id:harness-resolve-second");
+  await lateApp.waitFor("id:quick-translate-card-card-2 >> id:quick-translate-back-translate");
+
+  // Start reverse request #3 on card 2, close it, reopen reverse request #4, then resolve #3 late.
+  await lateApp.press("id:quick-translate-card-card-2 >> id:quick-translate-back-translate");
+  await lateApp.waitUntil(() => lateApp.texts().some((line) => line.includes("calls=3|")));
+  await lateApp.press(
+    "id:quick-translate-card-card-2 >> id:quick-translate-close-back-translation",
+  );
+  await lateApp.waitUntil(() => lateApp.texts().some((line) => line.includes("aborted-3")));
+
+  await lateApp.press("id:quick-translate-card-card-2 >> id:quick-translate-back-translate");
+  await lateApp.waitUntil(() => lateApp.texts().some((line) => line.includes("calls=4|")));
+  await lateApp.press("id:harness-resolve-third");
+  expect(lateApp.texts()).not.toContain("Card 1 Retry Result");
+  expect(
+    lateApp.shows(`id:quick-translate-card-card-2 >> text:${t("quickTranslate.backTranslating")}`),
+  ).toBe(true);
+
+  // Collapsing card 2 aborts reverse request #4; expanding keeps it closed and late resolution is ignored.
+  await lateApp.press("id:quick-translate-card-card-2 >> id:quick-translate-collapse");
+  await lateApp.waitUntil(() => lateApp.texts().some((line) => line.includes("aborted-4")));
+  await lateApp.press("id:harness-resolve-fourth");
+  await lateApp.press("id:quick-translate-card-card-2 >> id:quick-translate-collapse");
+  await lateApp.waitFor("id:quick-translate-card-card-2 >> id:quick-translate-back-translate");
+  expect(lateApp.texts()).not.toContain("Stale Card 2 Late Result");
+  expect(
+    lateApp.shows("id:quick-translate-card-card-2 >> id:quick-translate-back-translation"),
+  ).toBe(false);
+
+  // Start reverse request #5 on card 2, then close the popup: aborts #5 and ignores late resolve.
+  await lateApp.press("id:quick-translate-card-card-2 >> id:quick-translate-back-translate");
+  await lateApp.waitUntil(() => lateApp.texts().some((line) => line.includes("calls=5|")));
+  await lateApp.press("id:harness-toggle-open");
+  await lateApp.waitUntil(() => lateApp.texts().some((line) => line.includes("aborted-5")));
+  await lateApp.press("id:harness-resolve-fifth");
+  expect(lateApp.texts()).not.toContain("Card 1 Expanded Result");
+});
+
+test("back-translation: copy copies only the lower text with isolated checkmark feedback", async () => {
+  let aiCalls = 0;
+  const app = await open(POPUP_HARNESS, {
+    ...viewport,
+    storage: seedWithPresets([makePreset()]),
+    network: {
+      "POST https://api.openai.com/v1/chat/completions": () => {
+        aiCalls += 1;
+        return {
+          status: 200,
+          body: {
+            choices: [{ message: { content: aiCalls === 1 ? "Bonjour" : "Hello back" } }],
+          },
+        };
+      },
+    },
+  });
+
+  await app.waitFor("id:quick-translate-card-card-1");
+  await app.type("id:quick-translate-source", "Good morning");
+  await app.keyboard.press("enter");
+  await app.waitFor("id:quick-translate-card-card-1 >> id:quick-translate-back-translate");
+  expect(
+    app.shows("id:quick-translate-card-card-1 >> id:quick-translate-copy-back-translation"),
+  ).toBe(false);
+
+  await app.press("id:quick-translate-card-card-1 >> id:quick-translate-back-translate");
+  await app.waitFor("id:quick-translate-card-card-1 >> id:quick-translate-copy-back-translation");
+
+  await app.press("id:quick-translate-card-card-1 >> id:quick-translate-copy-back-translation");
+  expect(app.clipboard()).toBe("Hello back");
+  expect(app.shows(`role:button[${t("quickTranslate.backTranslationCopied")}]`)).toBe(true);
+  expect(app.shows(`role:button[${t("quickTranslate.copied")}]`)).toBe(false);
+
+  await app.press("id:quick-translate-card-card-1 >> id:quick-translate-copy");
+  expect(app.clipboard()).toBe("Bonjour");
+  expect(app.shows(`role:button[${t("quickTranslate.copied")}]`)).toBe(true);
+  expect(app.shows(`role:button[${t("quickTranslate.backTranslationCopied")}]`)).toBe(true);
+});
+
+test("back-translation: copy hides button on loading/error, resets checkmark timer, isolates copy error, and ignores late clipboard settle", async () => {
+  // 1. Copy button hidden during loading and error; checkmark resets after 1500 ms.
+  let aiCalls = 0;
+  const timedApp = await open(POPUP_HARNESS, {
+    ...viewport,
+    clock: {},
+    storage: seedWithPresets([makePreset()]),
+    network: {
+      "POST https://api.openai.com/v1/chat/completions": () => {
+        aiCalls += 1;
+        if (aiCalls === 1) {
+          return { status: 200, body: { choices: [{ message: { content: "Bonjour" } }] } };
+        }
+        if (aiCalls === 2) {
+          return { status: 500, body: { error: { message: "fail" } } };
+        }
+        return {
+          status: 200,
+          delay: 700,
+          body: { choices: [{ message: { content: "Hello back" } }] },
+        };
+      },
+    },
+  });
+  await timedApp.waitFor("id:quick-translate-card-card-1");
+  await timedApp.type("id:quick-translate-source", "Good morning");
+  await timedApp.keyboard.press("enter");
+  await timedApp.waitFor("id:quick-translate-card-card-1 >> id:quick-translate-back-translate");
+
+  await timedApp.press("id:quick-translate-card-card-1 >> id:quick-translate-back-translate");
+  await timedApp.waitFor(
+    "id:quick-translate-card-card-1 >> id:quick-translate-back-translation-error",
+  );
+  expect(
+    timedApp.shows("id:quick-translate-card-card-1 >> id:quick-translate-copy-back-translation"),
+  ).toBe(false);
+
+  await timedApp.press(
+    "id:quick-translate-card-card-1 >> id:quick-translate-retry-back-translation",
+  );
+  await timedApp.waitFor(`text:${t("quickTranslate.backTranslating")}`);
+  expect(
+    timedApp.shows("id:quick-translate-card-card-1 >> id:quick-translate-copy-back-translation"),
+  ).toBe(false);
+  await timedApp.waitFor(
+    "id:quick-translate-card-card-1 >> id:quick-translate-copy-back-translation",
+  );
+
+  await timedApp.hover(
+    "id:quick-translate-card-card-1 >> id:quick-translate-copy-back-translation",
+  );
+  await timedApp.waitFor(`text:${t("quickTranslate.copyBackTranslation")}`);
+  await timedApp.press(
+    "id:quick-translate-card-card-1 >> id:quick-translate-copy-back-translation",
+  );
+  expect(timedApp.shows(`role:button[${t("quickTranslate.backTranslationCopied")}]`)).toBe(true);
+  await timedApp.clock!.runFor(1500);
+  expect(timedApp.shows(`role:button[${t("quickTranslate.backTranslationCopied")}]`)).toBe(false);
+  expect(timedApp.shows(`role:button[${t("quickTranslate.copyBackTranslation")}]`)).toBe(true);
+
+  // 2. Copy failure shows localized lower copy error without setting forward copy error.
+  let errCalls = 0;
+  const copyErr = await open(POPUP_HARNESS, {
+    ...viewport,
+    storage: seedWithPresets([makePreset()], { [POPUP_HARNESS_MODE_KEY]: "clipboard-error" }),
+    network: {
+      "POST https://api.openai.com/v1/chat/completions": () => {
+        errCalls += 1;
+        return {
+          status: 200,
+          body: { choices: [{ message: { content: errCalls === 1 ? "Bonjour" : "Hello back" } }] },
+        };
+      },
+    },
+  });
+  await copyErr.waitFor("id:quick-translate-source");
+  await copyErr.type("id:quick-translate-source", "Good morning");
+  await copyErr.keyboard.press("enter");
+  await copyErr.waitFor("id:quick-translate-card-card-1 >> id:quick-translate-back-translate");
+  await copyErr.press("id:quick-translate-card-card-1 >> id:quick-translate-back-translate");
+  await copyErr.waitFor(
+    "id:quick-translate-card-card-1 >> id:quick-translate-copy-back-translation",
+  );
+
+  await copyErr.press("id:quick-translate-card-card-1 >> id:quick-translate-copy-back-translation");
+  await copyErr.waitFor("id:quick-translate-copy-back-translation-error");
+  expect(copyErr.texts()).toContain(t("quickTranslate.error.copyBackTranslationFailed"));
+  expect(copyErr.shows("id:quick-translate-copy-error")).toBe(false);
+
+  // Closing clears lower copy error.
+  await copyErr.press(
+    "id:quick-translate-card-card-1 >> id:quick-translate-close-back-translation",
+  );
+  await copyErr.press("id:quick-translate-card-card-1 >> id:quick-translate-back-translate");
+  await copyErr.waitFor(
+    "id:quick-translate-card-card-1 >> id:quick-translate-copy-back-translation",
+  );
+  expect(copyErr.shows("id:quick-translate-copy-back-translation-error")).toBe(false);
+});
+
+test("back-translation: copy ignores late clipboard resolve or reject after close and reopen", async () => {
+  let lateCalls = 0;
+  const lateCopy = await open(POPUP_HARNESS, {
+    ...viewport,
+    storage: seedWithPresets([makePreset()], { [POPUP_HARNESS_MODE_KEY]: "clipboard-deferred" }),
+    network: {
+      "POST https://api.openai.com/v1/chat/completions": () => {
+        lateCalls += 1;
+        return {
+          status: 200,
+          body: { choices: [{ message: { content: lateCalls === 1 ? "Bonjour" : "Hello back" } }] },
+        };
+      },
+    },
+  });
+  await lateCopy.waitFor("id:quick-translate-source");
+  await lateCopy.type("id:quick-translate-source", "Good morning");
+  await lateCopy.keyboard.press("enter");
+  await lateCopy.waitFor("id:quick-translate-card-card-1 >> id:quick-translate-back-translate");
+  await lateCopy.press("id:quick-translate-card-card-1 >> id:quick-translate-back-translate");
+  await lateCopy.waitFor(
+    "id:quick-translate-card-card-1 >> id:quick-translate-copy-back-translation",
+  );
+
+  await lateCopy.press(
+    "id:quick-translate-card-card-1 >> id:quick-translate-copy-back-translation",
+  );
+  await lateCopy.press(
+    "id:quick-translate-card-card-1 >> id:quick-translate-close-back-translation",
+  );
+  await lateCopy.press("id:quick-translate-card-card-1 >> id:quick-translate-back-translate");
+  await lateCopy.waitFor(
+    "id:quick-translate-card-card-1 >> id:quick-translate-copy-back-translation",
+  );
+  await lateCopy.press("id:harness-resolve-clipboard");
+  expect(lateCopy.shows(`role:button[${t("quickTranslate.backTranslationCopied")}]`)).toBe(false);
+
+  await lateCopy.press(
+    "id:quick-translate-card-card-1 >> id:quick-translate-copy-back-translation",
+  );
+  await lateCopy.press(
+    "id:quick-translate-card-card-1 >> id:quick-translate-close-back-translation",
+  );
+  await lateCopy.press("id:quick-translate-card-card-1 >> id:quick-translate-back-translate");
+  await lateCopy.waitFor(
+    "id:quick-translate-card-card-1 >> id:quick-translate-copy-back-translation",
+  );
+  await lateCopy.press("id:harness-reject-clipboard");
+  expect(lateCopy.shows("id:quick-translate-copy-back-translation-error")).toBe(false);
+});
+
+test("back-translation: speech reads the lower text aloud in the stored source language without playing on open", async () => {
+  let aiCalls = 0;
+  const app = await open(POPUP_HARNESS, {
+    ...viewport,
+    storage: seedWithPresets([makePreset()], enabledTtsStorage()),
+    network: {
+      "POST https://api.openai.com/v1/chat/completions": () => {
+        aiCalls += 1;
+        return {
+          status: 200,
+          body: { choices: [{ message: { content: aiCalls === 1 ? "Bonjour" : "Hello again" } }] },
+        };
+      },
+      [QUICK_TTS_URL]: { status: 200, body: QUICK_TTS_MP3 },
+    },
+  });
+
+  await app.waitFor("id:quick-translate-source");
+  await app.type("id:quick-translate-source", "Good morning");
+  await app.keyboard.press("enter");
+  await app.waitFor("id:quick-translate-card-card-1 >> id:quick-translate-back-translate");
+
+  await app.press("id:quick-translate-card-card-1 >> id:quick-translate-back-translate");
+  await app.waitFor("id:quick-translate-card-card-1 >> id:quick-translate-speak-back-translation");
+  expect(app.requests().some((request) => request.url === GOOGLE_CLOUD_TTS_URL)).toBe(false);
+  expect(app.audio()).toEqual([]);
+
+  expect(
+    app.shows(
+      `id:quick-translate-card-card-1 >> role:button[${t("quickTranslate.speakBackTranslation")}]`,
+    ),
+  ).toBe(true);
+
+  await app.press("id:quick-translate-card-card-1 >> id:quick-translate-speak-back-translation");
+  await app.waitUntil(() => app.requests().some((request) => request.url === GOOGLE_CLOUD_TTS_URL));
+  const speechReqs = app.requests().filter((request) => request.url === GOOGLE_CLOUD_TTS_URL);
+  expect(speechReqs).toHaveLength(1);
+  expect(JSON.parse(speechReqs[0]!.body ?? "").input.text).toBe("Hello again");
+  expect(ttsVoice(speechReqs[0]!.body)).toEqual({
+    languageCode: "en-US",
+    name: "en-US-Standard-C",
+  });
+  await app.waitFor(`id:quick-translate-card-card-1 >> role:button[${t("settings.tts.stop")}]`);
+  await app.endAudio();
+  await app.waitFor(
+    `id:quick-translate-card-card-1 >> role:button[${t("quickTranslate.speakBackTranslation")}]`,
+  );
+});
+
+test("back-translation: speech drops delayed TTS response on close and stops active playback on close", async () => {
+  // 1. Closing during delayed TTS response prevents audio from opening.
+  let loadingAiCalls = 0;
+  const loadingApp = await open(POPUP_HARNESS, {
+    ...viewport,
+    storage: seedWithPresets([makePreset()], enabledTtsStorage()),
+    network: {
+      "POST https://api.openai.com/v1/chat/completions": () => {
+        loadingAiCalls += 1;
+        return {
+          status: 200,
+          body: {
+            choices: [{ message: { content: loadingAiCalls === 1 ? "Bonjour" : "Hello again" } }],
+          },
+        };
+      },
+      [QUICK_TTS_URL]: { status: 200, delay: 600, body: QUICK_TTS_MP3 },
+    },
+  });
+  await loadingApp.waitFor("id:quick-translate-source");
+  await loadingApp.type("id:quick-translate-source", "Good morning");
+  await loadingApp.keyboard.press("enter");
+  await loadingApp.waitFor("id:quick-translate-card-card-1 >> id:quick-translate-back-translate");
+  await loadingApp.press("id:quick-translate-card-card-1 >> id:quick-translate-back-translate");
+  await loadingApp.waitFor(
+    "id:quick-translate-card-card-1 >> id:quick-translate-speak-back-translation",
+  );
+
+  await loadingApp.press(
+    "id:quick-translate-card-card-1 >> id:quick-translate-speak-back-translation",
+  );
+  await loadingApp.waitFor(`id:quick-translate-card-card-1 >> role:button[${t("common.cancel")}]`);
+  await loadingApp.press(
+    "id:quick-translate-card-card-1 >> id:quick-translate-close-back-translation",
+  );
+  await loadingApp.wait(700);
+  expect(loadingApp.audio().some((call) => call.command === "open")).toBe(false);
+  expect(loadingApp.texts()).not.toContain(t("quickTranslate.speakPlayback"));
+
+  // 2. Closing during playback stops audio immediately.
+  let playingAiCalls = 0;
+  const playingApp = await open(POPUP_HARNESS, {
+    ...viewport,
+    storage: seedWithPresets([makePreset()], enabledTtsStorage()),
+    network: {
+      "POST https://api.openai.com/v1/chat/completions": () => {
+        playingAiCalls += 1;
+        return {
+          status: 200,
+          body: {
+            choices: [{ message: { content: playingAiCalls === 1 ? "Bonjour" : "Hello again" } }],
+          },
+        };
+      },
+      [QUICK_TTS_URL]: { status: 200, body: QUICK_TTS_MP3 },
+    },
+  });
+  await playingApp.waitFor("id:quick-translate-source");
+  await playingApp.type("id:quick-translate-source", "Good morning");
+  await playingApp.keyboard.press("enter");
+  await playingApp.waitFor("id:quick-translate-card-card-1 >> id:quick-translate-back-translate");
+  await playingApp.press("id:quick-translate-card-card-1 >> id:quick-translate-back-translate");
+  await playingApp.waitFor(
+    "id:quick-translate-card-card-1 >> id:quick-translate-speak-back-translation",
+  );
+
+  await playingApp.press(
+    "id:quick-translate-card-card-1 >> id:quick-translate-speak-back-translation",
+  );
+  await playingApp.waitFor(
+    `id:quick-translate-card-card-1 >> role:button[${t("settings.tts.stop")}]`,
+  );
+  await playingApp.press(
+    "id:quick-translate-card-card-1 >> id:quick-translate-close-back-translation",
+  );
+  await playingApp.waitUntil(() => playingApp.audio().some((call) => call.command === "close"));
+  expect(playingApp.audio().some((call) => call.command === "close")).toBe(true);
+});
+
+test("back-translation: speech handles Auto stored language, player replacement, isolated errors, disabled TTS, and keeps forward speech on lower close", async () => {
+  // 1. Auto-detected source language is reused without re-detecting; replacing forward speech; closing lower leaves forward speech playing.
+  let translateCalls = 0;
+  const autoApp = await open(POPUP_HARNESS, {
+    ...viewport,
+    storage: {
+      ...seedAutoPair([false]),
+      ...enabledTtsStorage(),
+    },
+    network: {
+      [DETECT_URL]: { status: 200, body: { choices: [{ message: { content: "fr" } }] } },
+      [TRANSLATE_URL]: () => {
+        translateCalls += 1;
+        return {
+          status: 200,
+          body: {
+            choices: [{ message: { content: translateCalls === 1 ? "早上好" : "Bonjour encore" } }],
+          },
+        };
+      },
+      [QUICK_TTS_URL]: { status: 200, body: QUICK_TTS_MP3 },
+    },
+  });
+  await autoApp.waitFor("id:quick-translate-source");
+  await autoApp.type("id:quick-translate-source", "Bonjour");
+  await autoApp.keyboard.press("enter");
+  await autoApp.waitFor("id:quick-translate-card-card-1 >> id:quick-translate-back-translate");
+  await autoApp.press("id:quick-translate-card-card-1 >> id:quick-translate-back-translate");
+  await autoApp.waitFor(
+    "id:quick-translate-card-card-1 >> id:quick-translate-speak-back-translation",
+  );
+
+  // Start speaking forward result, then switch to lower speech -> single active player.
+  await autoApp.press("id:quick-translate-card-card-1 >> id:quick-translate-speak-result");
+  await autoApp.waitFor(`id:quick-translate-card-card-1 >> role:button[${t("settings.tts.stop")}]`);
+  await autoApp.press(
+    "id:quick-translate-card-card-1 >> id:quick-translate-speak-back-translation",
+  );
+  await autoApp.waitUntil(
+    () => autoApp.requests().filter((req) => req.url === GOOGLE_CLOUD_TTS_URL).length === 2,
+  );
+  const lowerReq = autoApp.requests().filter((req) => req.url === GOOGLE_CLOUD_TTS_URL)[1]!;
+  expect(JSON.parse(lowerReq.body ?? "").input.text).toBe("Bonjour encore");
+  expect(ttsVoice(lowerReq.body)).toEqual({ languageCode: "fr-FR", name: "fr-FR-Standard-F" });
+  expect(requestsTo(autoApp, DETECT_URL)).toHaveLength(1);
+  expect(
+    autoApp.shows(`id:quick-translate-card-card-1 >> role:button[${t("quickTranslate.speak")}]`),
+  ).toBe(true);
+
+  // Stop lower speech via Stop button.
+  await autoApp.press(
+    "id:quick-translate-card-card-1 >> id:quick-translate-speak-back-translation",
+  );
+  await autoApp.waitFor(
+    `id:quick-translate-card-card-1 >> role:button[${t("quickTranslate.speakBackTranslation")}]`,
+  );
+
+  // Closing the lower area while FORWARD result is speaking must keep forward speech playing!
+  const closesBefore = autoApp.audio().filter((call) => call.command === "close").length;
+  await autoApp.press("id:quick-translate-card-card-1 >> id:quick-translate-speak-result");
+  await autoApp.waitFor(`id:quick-translate-card-card-1 >> role:button[${t("settings.tts.stop")}]`);
+  await autoApp.press(
+    "id:quick-translate-card-card-1 >> id:quick-translate-close-back-translation",
+  );
+  await autoApp.waitUntil(
+    () => !autoApp.shows("id:quick-translate-card-card-1 >> id:quick-translate-back-translation"),
+  );
+  expect(autoApp.audio().filter((call) => call.command === "close").length).toBe(closesBefore);
+  expect(
+    autoApp.shows(`id:quick-translate-card-card-1 >> role:button[${t("settings.tts.stop")}]`),
+  ).toBe(true);
+
+  // 2. Disabled TTS disables lower speak button with localized tooltip/label.
+  let offCalls = 0;
+  const offApp = await open(POPUP_HARNESS, {
+    ...viewport,
+    storage: seedWithPresets([makePreset()], enabledTtsStorage(false)),
+    network: {
+      "POST https://api.openai.com/v1/chat/completions": () => {
+        offCalls += 1;
+        return {
+          status: 200,
+          body: { choices: [{ message: { content: offCalls === 1 ? "Bonjour" : "Hello back" } }] },
+        };
+      },
+    },
+  });
+  await offApp.waitFor("id:quick-translate-source");
+  await offApp.type("id:quick-translate-source", "Good morning");
+  await offApp.keyboard.press("enter");
+  await offApp.waitFor("id:quick-translate-card-card-1 >> id:quick-translate-back-translate");
+  await offApp.press("id:quick-translate-card-card-1 >> id:quick-translate-back-translate");
+  await offApp.waitFor(
+    "id:quick-translate-card-card-1 >> id:quick-translate-speak-back-translation",
+  );
+  expect(
+    offApp.enabled("id:quick-translate-card-card-1 >> id:quick-translate-speak-back-translation"),
+  ).toBe(false);
+
+  // 3. Lower TTS error stays scoped to lower area and clears on close.
+  let errCalls = 0;
+  const errApp = await open(POPUP_HARNESS, {
+    ...viewport,
+    storage: seedWithPresets([makePreset()], azureActiveStorage()),
+    network: {
+      "POST https://api.openai.com/v1/chat/completions": () => {
+        errCalls += 1;
+        return {
+          status: 200,
+          body: { choices: [{ message: { content: errCalls === 1 ? "Bonjour" : "Hello back" } }] },
+        };
+      },
+      ["POST " + AZURE_QUICK_TTS_URL]: { status: 401, body: "secret error" },
+    },
+  });
+  await errApp.waitFor("id:quick-translate-source");
+  await errApp.type("id:quick-translate-source", "Good morning");
+  await errApp.keyboard.press("enter");
+  await errApp.waitFor("id:quick-translate-card-card-1 >> id:quick-translate-back-translate");
+  await errApp.press("id:quick-translate-card-card-1 >> id:quick-translate-back-translate");
+  await errApp.waitFor(
+    "id:quick-translate-card-card-1 >> id:quick-translate-speak-back-translation",
+  );
+  await errApp.press("id:quick-translate-card-card-1 >> id:quick-translate-speak-back-translation");
+  await errApp.waitFor("id:quick-translate-speak-back-translation-error");
+  expect(errApp.texts()).toContain(t("settings.tts.failure.azureAuth"));
+  expect(errApp.shows("id:quick-translate-speak-result-error")).toBe(false);
+  expect(errApp.shows("id:quick-translate-speak-source-error")).toBe(false);
+
+  await errApp.press("id:quick-translate-card-card-1 >> id:quick-translate-close-back-translation");
+  await errApp.press("id:quick-translate-card-card-1 >> id:quick-translate-back-translate");
+  await errApp.waitFor(
+    "id:quick-translate-card-card-1 >> id:quick-translate-speak-back-translation",
+  );
+  expect(errApp.shows("id:quick-translate-speak-back-translation-error")).toBe(false);
+});
+
+test("back-translation: keyboard Tab and Enter/Space open, speak, copy, and close while returning focus to reply", async () => {
+  let aiCalls = 0;
+  const app = await open(POPUP_HARNESS, {
+    ...viewport,
+    storage: seedWithPresets([makePreset()], enabledTtsStorage()),
+    network: {
+      "POST https://api.openai.com/v1/chat/completions": () => {
+        aiCalls += 1;
+        return {
+          status: 200,
+          body: {
+            choices: [{ message: { content: aiCalls === 1 ? "Bonjour" : "Hello keyboard" } }],
+          },
+        };
+      },
+      [QUICK_TTS_URL]: { status: 200, delay: 1200, body: QUICK_TTS_MP3 },
+    },
+  });
+
+  await app.waitFor("id:quick-translate-source");
+  await app.type("id:quick-translate-source", "Good morning");
+  await app.keyboard.press("enter");
+  await app.waitFor("id:quick-translate-card-card-1 >> id:quick-translate-back-translate");
+
+  // Tab from source input past source actions, card header controls, and upper speak/copy to reply.
+  for (let step = 0; step < 11; step += 1) {
+    await app.keyboard.press("tab");
+  }
+  await app.keyboard.press("space");
+  await app.waitFor("id:quick-translate-card-card-1 >> id:quick-translate-speak-back-translation");
+  expect(app.requests().filter((r) => r.url.includes("chat/completions"))).toHaveLength(2);
+
+  // Tab past upper Retry (1) to lower Speak (2), activate with Space, then cancel loading with Space.
+  await app.keyboard.press("tab");
+  await app.keyboard.press("tab");
+  await app.keyboard.press("space");
+  await app.waitFor(`id:quick-translate-card-card-1 >> role:button[${t("common.cancel")}]`);
+  await app.keyboard.press("space");
+  await app.waitFor(
+    `id:quick-translate-card-card-1 >> role:button[${t("quickTranslate.speakBackTranslation")}]`,
+  );
+
+  // Tab to lower Copy, activate with Enter.
+  await app.keyboard.press("tab");
+  await app.keyboard.press("enter");
+  expect(app.clipboard()).toBe("Hello keyboard");
+  expect(app.shows(`role:button[${t("quickTranslate.backTranslationCopied")}]`)).toBe(true);
+
+  // Tab to lower Close, activate with Enter; focus returns to reply (Space reopens without request).
+  await app.keyboard.press("tab");
+  await app.keyboard.press("enter");
+  await app.waitUntil(
+    () => !app.shows("id:quick-translate-card-card-1 >> id:quick-translate-back-translation"),
+  );
+  await app.keyboard.press("space");
+  await app.waitFor("id:quick-translate-card-card-1 >> text:Hello keyboard");
+  expect(app.requests().filter((r) => r.url.includes("chat/completions"))).toHaveLength(2);
+});
+
+test("back-translation: renders zh-CN localization across states and actions", async () => {
+  let aiCalls = 0;
+  const app = await open(POPUP_HARNESS, {
+    ...viewport,
+    locale: "zh-CN",
+    storage: seedWithPresets([makePreset()], {
+      ...enabledTtsStorage(),
+      "settings.language": "zh-CN",
+    }),
+    network: {
+      "POST https://api.openai.com/v1/chat/completions": () => {
+        aiCalls += 1;
+        if (aiCalls === 1) {
+          return { status: 200, body: { choices: [{ message: { content: "Bonjour" } }] } };
+        }
+        if (aiCalls === 2) {
+          return { status: 500, body: { error: { message: "err" } } };
+        }
+        return { status: 200, delay: 700, body: { choices: [{ message: { content: "Hello" } }] } };
+      },
+    },
+  });
+
+  await app.waitFor("id:quick-translate-source");
+  await app.type("id:quick-translate-source", "Good morning");
+  await app.keyboard.press("enter");
+  await app.waitFor("id:quick-translate-card-card-1 >> id:quick-translate-back-translate");
+  expect(app.shows("role:button[回译]")).toBe(true);
+
+  await app.press("id:quick-translate-card-card-1 >> id:quick-translate-back-translate");
+  await app.waitFor("id:quick-translate-card-card-1 >> id:quick-translate-back-translation-error");
+  expect(app.shows("role:button[重试回译]")).toBe(true);
+  expect(app.shows("role:button[关闭回译]")).toBe(true);
+
+  await app.press("id:quick-translate-card-card-1 >> id:quick-translate-retry-back-translation");
+  await app.waitFor("id:quick-translate-card-card-1 >> text:正在回译…");
+  await app.waitFor("id:quick-translate-card-card-1 >> id:quick-translate-copy-back-translation");
+  expect(app.shows("role:button[朗读回译文]")).toBe(true);
+  expect(app.shows("role:button[复制回译文]")).toBe(true);
+
+  await app.press("id:quick-translate-card-card-1 >> id:quick-translate-copy-back-translation");
+  expect(app.shows("role:button[已复制回译文]")).toBe(true);
+});

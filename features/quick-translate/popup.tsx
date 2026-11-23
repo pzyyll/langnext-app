@@ -14,6 +14,7 @@ import {
   type InputRef,
   type PanEvent,
   type Placement,
+  type Signal,
   type ViewRef,
 } from "nsh";
 import { t } from "nsh/i18n";
@@ -272,6 +273,10 @@ interface PresetCardRowProps {
   onRemove: (cardId: string) => void;
   onRetry: (cardId: string) => void;
   onCopy: (cardId: string) => void;
+  onBackTranslate: (cardId: string) => void;
+  onCloseBackTranslation: (cardId: string) => void;
+  onRetryBackTranslation: (cardId: string) => void;
+  onCopyBackTranslation: (cardId: string) => void;
   speakState: Accessor<{
     disabled: boolean;
     tooltip?: string;
@@ -280,10 +285,19 @@ interface PresetCardRowProps {
   }>;
   speakError: Accessor<string | null>;
   onSpeak: () => void;
+  backTranslationSpeakState: Accessor<{
+    disabled: boolean;
+    tooltip?: string;
+    label: string;
+    icon: IconName;
+  }>;
+  backTranslationSpeakError: Accessor<string | null>;
+  onSpeakBackTranslation: () => void;
 }
 
 function PresetCardRow(props: PresetCardRowProps) {
   let gripNode: ViewRef | null = null;
+  let backTranslateNode: ViewRef | null = null;
   const presetById = (presetId: string) =>
     props.presets().find((item) => item.id === presetId) ?? null;
 
@@ -309,6 +323,15 @@ function PresetCardRow(props: PresetCardRowProps) {
   };
   const hasOutput = () => streaming() || result().status === "success" || outputText().length > 0;
   const hasBody = () => !props.card().collapsed && result().status !== "idle";
+  const canBackTranslate = () => {
+    const res = result();
+    return (
+      res.status === "success" &&
+      res.text.trim().length > 0 &&
+      res.sourceLanguage !== res.targetLanguage
+    );
+  };
+  const backTranslation = () => props.card().backTranslation;
 
   const presetName = () => resolvedPreset()?.name ?? t("quickTranslate.presetPlaceholder");
 
@@ -521,6 +544,21 @@ function PresetCardRow(props: PresetCardRowProps) {
                     class="size-3.5"
                   />
                 </Button>
+                <If when={canBackTranslate()}>
+                  <Button
+                    testID="quick-translate-back-translate"
+                    ref={(node) => {
+                      backTranslateNode = node;
+                    }}
+                    size="icon-xs"
+                    variant="ghost"
+                    tooltip={t("quickTranslate.backTranslate")}
+                    accessibilityLabel={t("quickTranslate.backTranslate")}
+                    onPress={() => props.onBackTranslate(props.card().id)}
+                  >
+                    <Icon name="mdi:reply-outline" tone="muted-foreground" class="size-3.5" />
+                  </Button>
+                </If>
               </View>
               <RetryIconButton
                 testID="quick-translate-retry"
@@ -547,6 +585,157 @@ function PresetCardRow(props: PresetCardRowProps) {
                 >
                   {props.card().copyError ?? ""}
                 </Text>
+              </View>
+            </If>
+            <If when={backTranslation().status !== "closed"}>
+              <View testID="quick-translate-back-translation" class="border-t border-border/60">
+                <If when={backTranslation().status === "loading"}>
+                  <View class="px-3 py-2.5">
+                    <Text
+                      testID="quick-translate-back-translation-status"
+                      class="text-xs text-muted-foreground"
+                    >
+                      {t("quickTranslate.backTranslating")}
+                    </Text>
+                  </View>
+                </If>
+                <If when={backTranslation().status === "success"}>
+                  <View class="min-w-0 px-3 py-2.5">
+                    <TranslationOutput
+                      testID="quick-translate-back-translation-text"
+                      text={(() => {
+                        const bt = backTranslation();
+                        return bt.status === "success" ? bt.text : "";
+                      })()}
+                      markdownEnabled={props.markdownEnabled}
+                      streaming={false}
+                    />
+                  </View>
+                </If>
+                <If when={backTranslation().status === "error"}>
+                  <View class="px-3 py-2.5">
+                    <Text
+                      testID="quick-translate-back-translation-error"
+                      role="alert"
+                      class="text-xs text-destructive"
+                    >
+                      {(() => {
+                        const bt = backTranslation();
+                        return bt.status === "error" ? bt.message : "";
+                      })()}
+                    </Text>
+                  </View>
+                </If>
+                <View class="flex-row items-center justify-between gap-2 border-t border-border/60 px-2 py-1.5">
+                  <View class="flex-row items-center gap-0.5">
+                    <If
+                      when={(() => {
+                        const bt = backTranslation();
+                        return bt.status === "success" && bt.text.trim().length > 0;
+                      })()}
+                    >
+                      <SpeakerButton
+                        testID="quick-translate-speak-back-translation"
+                        disabled={props.backTranslationSpeakState().disabled}
+                        tooltip={props.backTranslationSpeakState().tooltip}
+                        label={props.backTranslationSpeakState().label}
+                        icon={props.backTranslationSpeakState().icon}
+                        onPress={() => props.onSpeakBackTranslation()}
+                      />
+                      <Button
+                        testID="quick-translate-copy-back-translation"
+                        size="icon-xs"
+                        variant="ghost"
+                        tooltip={(() => {
+                          const bt = backTranslation();
+                          return bt.status === "success" && bt.copied
+                            ? t("quickTranslate.backTranslationCopied")
+                            : t("quickTranslate.copyBackTranslation");
+                        })()}
+                        accessibilityLabel={(() => {
+                          const bt = backTranslation();
+                          return bt.status === "success" && bt.copied
+                            ? t("quickTranslate.backTranslationCopied")
+                            : t("quickTranslate.copyBackTranslation");
+                        })()}
+                        onPress={() => props.onCopyBackTranslation(props.card().id)}
+                      >
+                        <Icon
+                          name={(() => {
+                            const bt = backTranslation();
+                            return bt.status === "success" && bt.copied
+                              ? "mdi:check"
+                              : "mdi:content-copy";
+                          })()}
+                          tone={(() => {
+                            const bt = backTranslation();
+                            return bt.status === "success" && bt.copied
+                              ? "success"
+                              : "muted-foreground";
+                          })()}
+                          class="size-3.5"
+                        />
+                      </Button>
+                    </If>
+                  </View>
+                  <View class="flex-row items-center gap-0.5">
+                    <If when={backTranslation().status === "error"}>
+                      <Button
+                        testID="quick-translate-retry-back-translation"
+                        size="icon-xs"
+                        variant="ghost"
+                        tooltip={t("quickTranslate.retryBackTranslation")}
+                        accessibilityLabel={t("quickTranslate.retryBackTranslation")}
+                        onPress={() => props.onRetryBackTranslation(props.card().id)}
+                      >
+                        <Icon name="mdi:refresh" tone="muted-foreground" class="size-3.5" />
+                      </Button>
+                    </If>
+                    <Button
+                      testID="quick-translate-close-back-translation"
+                      size="icon-xs"
+                      variant="ghost"
+                      tooltip={t("quickTranslate.closeBackTranslation")}
+                      accessibilityLabel={t("quickTranslate.closeBackTranslation")}
+                      onPress={() => {
+                        props.onCloseBackTranslation(props.card().id);
+                        queueMicrotask(() => backTranslateNode?.focus());
+                      }}
+                    >
+                      <Icon name="mdi:close" tone="muted-foreground" class="size-3.5" />
+                    </Button>
+                  </View>
+                </View>
+                <If when={props.backTranslationSpeakError() !== null}>
+                  <View class="px-3 pb-2.5">
+                    <Text
+                      testID="quick-translate-speak-back-translation-error"
+                      role="alert"
+                      class="text-xs text-destructive"
+                    >
+                      {props.backTranslationSpeakError() ?? ""}
+                    </Text>
+                  </View>
+                </If>
+                <If
+                  when={(() => {
+                    const bt = backTranslation();
+                    return bt.status === "success" && bt.copyError !== null;
+                  })()}
+                >
+                  <View class="px-3 pb-2.5">
+                    <Text
+                      testID="quick-translate-copy-back-translation-error"
+                      role="alert"
+                      class="text-xs text-destructive"
+                    >
+                      {(() => {
+                        const bt = backTranslation();
+                        return bt.status === "success" ? (bt.copyError ?? "") : "";
+                      })()}
+                    </Text>
+                  </View>
+                </If>
               </View>
             </If>
           </View>
@@ -615,14 +804,16 @@ export function QuickTranslatePopup(props: QuickTranslatePopupProps) {
     input.setSelection(end, end);
   });
 
-  const sourceSpeechError = signal<string | null>(null);
-  const resultSpeechErrors = signal<Readonly<Record<string, string>>>({});
-  const speechPhase = signal<"idle" | "loading" | "playing">("idle");
-  const speechOwner = signal<
+  type SpeechOwner =
     | { kind: "source"; text: string; selection: SourceLanguageId }
     | { kind: "result"; cardId: string; text: string; language: string }
-    | null
-  >(null);
+    | { kind: "back-translation"; cardId: string; text: string; language: string };
+
+  const sourceSpeechError = signal<string | null>(null);
+  const resultSpeechErrors = signal<Readonly<Record<string, string>>>({});
+  const backTranslationSpeechErrors = signal<Readonly<Record<string, string>>>({});
+  const speechPhase = signal<"idle" | "loading" | "playing">("idle");
+  const speechOwner = signal<SpeechOwner | null>(null);
   let speechToken = 0;
   let speechAbort: AbortController | null = null;
   let stopSpeech: (() => void) | null = null;
@@ -671,6 +862,39 @@ export function QuickTranslatePopup(props: QuickTranslatePopupProps) {
   });
 
   effect(() => {
+    const owner = speechOwner();
+    if (owner?.kind !== "back-translation" || speechPhase() === "idle") return;
+    const card = props.session.cards().find((item) => item.id === owner.cardId);
+    const current =
+      card !== undefined &&
+      !card.collapsed &&
+      card.result.status === "success" &&
+      card.backTranslation.status === "success"
+        ? `${card.backTranslation.text}\0${card.result.sourceLanguage}`
+        : "";
+    if (current !== `${owner.text}\0${owner.language}`) cancelSpeech();
+  });
+
+  effect(() => {
+    const cards = props.session.cards();
+    const errors = backTranslationSpeechErrors();
+    const keys = Object.keys(errors);
+    if (keys.length === 0) return;
+    const byId = new Map(cards.map((card) => [card.id, card]));
+    let changed = false;
+    const next: Record<string, string> = {};
+    for (const cardId of keys) {
+      const card = byId.get(cardId);
+      if (card !== undefined && !card.collapsed && card.backTranslation.status === "success") {
+        next[cardId] = errors[cardId]!;
+      } else {
+        changed = true;
+      }
+    }
+    if (changed) backTranslationSpeechErrors.set(next);
+  });
+
+  effect(() => {
     if (speechPhase() !== "idle" && credentialSignature() !== activeCredential) cancelSpeech();
   });
 
@@ -680,11 +904,15 @@ export function QuickTranslatePopup(props: QuickTranslatePopupProps) {
     }
   });
 
-  const setResultSpeechError = (cardId: string, message: string | null) => {
-    const next = { ...resultSpeechErrors() };
+  const setCardSpeechError = (
+    store: Signal<Readonly<Record<string, string>>>,
+    cardId: string,
+    message: string | null,
+  ) => {
+    const next = { ...store() };
     if (message === null) delete next[cardId];
     else next[cardId] = message;
-    resultSpeechErrors.set(next);
+    store.set(next);
   };
 
   const mountedSpeech = (token: number) => token === speechToken;
@@ -697,9 +925,7 @@ export function QuickTranslatePopup(props: QuickTranslatePopupProps) {
   };
 
   const runSpeech = async (input: {
-    owner:
-      | { kind: "source"; text: string; selection: SourceLanguageId }
-      | { kind: "result"; cardId: string; text: string; language: string };
+    owner: SpeechOwner;
     text: string;
     /** Null asks for an Automatic source detection before synthesis. */
     language: LanguageId | null;
@@ -806,17 +1032,43 @@ export function QuickTranslatePopup(props: QuickTranslatePopupProps) {
       },
       text: card.result.text,
       language: card.result.targetLanguage,
-      report: (message) => setResultSpeechError(cardId, message),
+      report: (message) => setCardSpeechError(resultSpeechErrors, cardId, message),
     });
   };
 
-  const speechControl = (target: "source" | { cardId: string }) => {
+  const speakBackTranslation = (cardId: string) => {
+    const card = props.session.cards().find((item) => item.id === cardId);
+    if (
+      card === undefined ||
+      card.collapsed ||
+      card.result.status !== "success" ||
+      card.backTranslation.status !== "success" ||
+      card.backTranslation.text.trim().length === 0
+    ) {
+      return;
+    }
+    void runSpeech({
+      owner: {
+        kind: "back-translation",
+        cardId,
+        text: card.backTranslation.text,
+        language: card.result.sourceLanguage,
+      },
+      text: card.backTranslation.text,
+      language: card.result.sourceLanguage,
+      report: (message) => setCardSpeechError(backTranslationSpeechErrors, cardId, message),
+    });
+  };
+
+  const speechControl = (
+    target: "source" | { kind: "result" | "back-translation"; cardId: string },
+  ) => {
     const owner = speechOwner();
     const mine =
       owner !== null &&
       (target === "source"
         ? owner.kind === "source"
-        : owner.kind === "result" && owner.cardId === target.cardId);
+        : owner.kind === target.kind && owner.cardId === target.cardId);
     const phase = mine ? speechPhase() : "idle";
     if (phase === "loading") {
       return {
@@ -836,10 +1088,14 @@ export function QuickTranslatePopup(props: QuickTranslatePopupProps) {
         busy: true,
       };
     }
+    const readyLabel =
+      target !== "source" && target.kind === "back-translation"
+        ? t("quickTranslate.speakBackTranslation")
+        : t("quickTranslate.speak");
     return {
       disabled: !speakEnabled(),
       tooltip: speakEnabled() ? undefined : t("quickTranslate.speakOff"),
-      label: speakEnabled() ? t("quickTranslate.speak") : t("quickTranslate.speakOff"),
+      label: speakEnabled() ? readyLabel : t("quickTranslate.speakOff"),
       icon: "mdi:volume-high" as const,
       busy: false,
     };
@@ -1203,8 +1459,12 @@ export function QuickTranslatePopup(props: QuickTranslatePopupProps) {
                     onRemove={(targetId) => props.session.handleRemoveCard(targetId)}
                     onRetry={(id) => props.session.handleRetryCard(id)}
                     onCopy={(id) => props.session.handleCopyCard(id)}
+                    onBackTranslate={(id) => props.session.handleBackTranslate(id)}
+                    onCloseBackTranslation={(id) => props.session.handleCloseBackTranslation(id)}
+                    onRetryBackTranslation={(id) => props.session.handleRetryBackTranslation(id)}
+                    onCopyBackTranslation={(id) => props.session.handleCopyBackTranslation(id)}
                     speakState={() => {
-                      const state = speechControl({ cardId: card().id });
+                      const state = speechControl({ kind: "result", cardId: card().id });
                       return {
                         disabled: state.disabled,
                         tooltip: state.tooltip,
@@ -1214,8 +1474,27 @@ export function QuickTranslatePopup(props: QuickTranslatePopupProps) {
                     }}
                     speakError={() => resultSpeechErrors()[card().id] ?? null}
                     onSpeak={() => {
-                      if (speechControl({ cardId: card().id }).busy) cancelSpeech();
+                      if (speechControl({ kind: "result", cardId: card().id }).busy) cancelSpeech();
                       else speakResult(card().id);
+                    }}
+                    backTranslationSpeakState={() => {
+                      const state = speechControl({ kind: "back-translation", cardId: card().id });
+                      return {
+                        disabled: state.disabled,
+                        tooltip: state.tooltip,
+                        label: state.label,
+                        icon: state.icon,
+                      };
+                    }}
+                    backTranslationSpeakError={() =>
+                      backTranslationSpeechErrors()[card().id] ?? null
+                    }
+                    onSpeakBackTranslation={() => {
+                      if (speechControl({ kind: "back-translation", cardId: card().id }).busy) {
+                        cancelSpeech();
+                      } else {
+                        speakBackTranslation(card().id);
+                      }
                     }}
                   />
                 </View>
