@@ -7,4 +7,5 @@ export const geminiPresentation: ProviderPresentation = {
   providerTypeId: "gemini",
   Settings: ConnectionFields,
   icon: geminiIcon,
+  markStyle: "brand",
 };

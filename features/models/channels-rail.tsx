@@ -39,7 +39,7 @@ const REORDER_SETTLE_MS = 180;
 /** Left master list of configured provider channels with selection and drag reordering. */
 export function ChannelsRail(props: ChannelsRailProps) {
   const providerLabel = (presetId: string) => getProviderTypeLabel(presetId) ?? presetId;
-  const providerMark = (presetId: string) => providerSettingsRegistry.find(presetId);
+  const providerPresentation = (presetId: string) => providerSettingsRegistry.find(presetId);
 
   const mutating = signal(false);
   const animating = signal(false);
@@ -292,9 +292,9 @@ export function ChannelsRail(props: ChannelsRailProps) {
                                   </If>
                                 </View>
                                 <View class="flex-row items-center gap-1">
-                                  <If when={providerMark(channel().presetId) !== null}>
+                                  <If when={providerPresentation(channel().presetId) !== null}>
                                     <ProviderMark
-                                      icon={providerMark(channel().presetId)!.icon}
+                                      presentation={providerPresentation(channel().presetId)!}
                                       class="size-3 shrink-0"
                                     />
                                   </If>

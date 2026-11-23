@@ -93,7 +93,7 @@ export function ChannelEditor(props: ChannelEditorProps) {
                 when={providerPresentation() !== null}
                 else={<Icon name="cube-outline" tone="muted-foreground" class="size-4 shrink-0" />}
               >
-                <ProviderMark icon={providerPresentation()!.icon} class="size-4 shrink-0" />
+                <ProviderMark presentation={providerPresentation()!} class="size-4 shrink-0" />
               </If>
             </View>
             <If
@@ -251,7 +251,10 @@ export function ChannelEditor(props: ChannelEditorProps) {
                 >
                   <View class="h-9 flex-row items-center gap-2 rounded-xl border border-border bg-muted px-3">
                     <If when={providerPresentation() !== null}>
-                      <ProviderMark icon={providerPresentation()!.icon} class="size-4 shrink-0" />
+                      <ProviderMark
+                        presentation={providerPresentation()!}
+                        class="size-4 shrink-0"
+                      />
                     </If>
                     <Text class="truncate text-sm font-medium text-foreground">
                       {providerLabel()}

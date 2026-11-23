@@ -7,4 +7,5 @@ export const deepseekPresentation: ProviderPresentation = {
   providerTypeId: "deepseek",
   Settings: ConnectionFields,
   icon: deepseekIcon,
+  markStyle: "brand",
 };

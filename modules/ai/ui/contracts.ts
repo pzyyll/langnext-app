@@ -32,9 +32,17 @@ export interface ProviderSettingsProps {
   onInsecureHttpChange: (checked: boolean) => void;
 }
 
+/**
+ * How a provider mark draws: its own brand colors, or a monochrome template the
+ * host tints with the foreground so it stays legible in both themes.
+ */
+export type ProviderMarkStyle = "brand" | "monochrome";
+
 /** One provider type's configuration view and brand mark. */
 export interface ProviderPresentation {
   providerTypeId: ProviderTypeId;
   Settings: (props: ProviderSettingsProps) => JSX.Element;
   icon: ImageAsset;
+  /** Defaults to `monochrome`; `brand` keeps the asset's own colors. */
+  markStyle?: ProviderMarkStyle;
 }

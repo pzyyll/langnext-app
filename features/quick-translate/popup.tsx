@@ -191,7 +191,7 @@ export function QuickTranslateFooter(props: { session: QuickTranslateSession }) 
 
 /** Visual engine indicator on the preset chip: DeepL mark, known AI provider mark, or brand dot. */
 function PresetLeadingMark(props: { preset: TranslationPreset | null }) {
-  const providerIcon = () => {
+  const providerMark = () => {
     const preset = props.preset;
     if (!preset || preset.engine.kind !== "ai") return null;
     const primaryModelId = preset.engine.modelIds[0];
@@ -200,7 +200,7 @@ function PresetLeadingMark(props: { preset: TranslationPreset | null }) {
     if (!model) return null;
     const channel = modelsStore.channels().find((item) => item.id === model.providerId);
     if (!channel || channel.presetId === "custom") return null;
-    return providerSettingsRegistry.find(channel.presetId)?.icon ?? null;
+    return providerSettingsRegistry.find(channel.presetId);
   };
 
   return (
@@ -211,10 +211,12 @@ function PresetLeadingMark(props: { preset: TranslationPreset | null }) {
           when={props.preset?.engine.kind === "google-cloud"}
           else={
             <If
-              when={providerIcon()}
+              when={providerMark()}
               else={<View class="size-1.5 shrink-0 rounded-full bg-brand" />}
             >
-              {(asset) => <ProviderMark icon={asset()} class="size-3 shrink-0" />}
+              {(presentation) => (
+                <ProviderMark presentation={presentation()} class="size-3 shrink-0" />
+              )}
             </If>
           }
         >

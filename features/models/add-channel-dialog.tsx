@@ -66,7 +66,7 @@ export function AddChannelDialog(props: AddChannelDialogProps) {
                 <If when={presentation() !== null}>
                   <Avatar
                     size="md"
-                    fallback={<ProviderMark icon={presentation()!.icon} class="size-4" />}
+                    fallback={<ProviderMark presentation={presentation()!} class="size-4" />}
                     accessibilityLabel=""
                   />
                 </If>

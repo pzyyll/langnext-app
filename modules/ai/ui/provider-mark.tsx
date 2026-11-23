@@ -1,21 +1,24 @@
-import { Image, token, type ImageAsset } from "nsh";
+import { Image, token } from "nsh";
+import type { ProviderPresentation } from "./contracts";
 
 interface ProviderMarkProps {
-  icon: ImageAsset;
+  presentation: ProviderPresentation;
   class?: string;
   accessibilityLabel?: string;
 }
 
-/** Monochrome provider mark rendered from a contributed asset. */
+/** A provider's mark, drawn in its own brand colors or tinted with the foreground. */
 export function ProviderMark(props: ProviderMarkProps) {
   return (
     <Image
-      src={props.icon}
+      src={props.presentation.icon}
       accessibilityLabel={props.accessibilityLabel}
       accessibilityElementsHidden={!props.accessibilityLabel}
       class={props.class ?? "size-4"}
-      // Runtime theme token tint keeps contributed monochrome marks legible in both themes.
-      style={{ tintColor: token("foreground") }}
+      // A monochrome mark is a template: the runtime theme token tint keeps it legible in both themes.
+      style={
+        props.presentation.markStyle === "brand" ? undefined : { tintColor: token("foreground") }
+      }
     />
   );
 }
