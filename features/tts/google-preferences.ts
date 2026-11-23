@@ -13,7 +13,7 @@ export type GoogleVoiceTierId = GoogleVoiceTier | GoogleLegacyVoiceTier;
 
 export type GoogleVoiceGenderPreference = "any" | "female" | "male";
 
-/** Voice and audio preferences for Google Cloud Text-to-Speech. */
+/** Voice and audio preferences for Google Cloud TTS. */
 export interface GoogleVoicePreferences {
   voiceTier: GoogleVoiceTierId;
   voiceGender: GoogleVoiceGenderPreference;

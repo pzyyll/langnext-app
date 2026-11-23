@@ -144,7 +144,7 @@ settings:
       baiduOperationInvalid: 请选择百度 OCR 模式。
       channelUnconfigured: 请先配置此渠道再启用。
   tts:
-    channel: Google Cloud Text-to-Speech
+    channel: Google Cloud TTS
     azure:
       channel: Azure Speech
       region: 区域
@@ -185,7 +185,7 @@ settings:
     failure:
       auth: 请检查 API Key、Cloud Text-to-Speech 权限和项目结算。
       azureAuth: 请检查语音资源密钥和区域。
-      quota: Google Cloud Text-to-Speech 已达到配额或速率限制。请重试。
+      quota: Google Cloud TTS 已达到配额或速率限制。请重试。
       azureRateLimited: Azure 正在限制请求。请稍后再试。
       playback: 无法播放示例。请重试。
     error:

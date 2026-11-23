@@ -1980,14 +1980,14 @@ test("tts settings: adds Google Cloud from the empty state and discards an unsav
   await app.press("id:settings-tts-empty-channel-google-cloud");
   await app.waitFor("id:settings-tts-detail-card");
   expect(app.shows("id:settings-tts-breadcrumb-root")).toBe(true);
-  expect(app.texts()).toContain("Google Cloud Text-to-Speech");
+  expect(app.texts()).toContain("Google Cloud TTS");
   expect(app.shows("id:settings-tts-card")).toBe(false);
 
   await app.type("id:settings-tts-api-key", "draft-key");
   await app.press("id:settings-tts-breadcrumb-root");
   await app.waitFor("id:settings-tts-card");
   expect(app.shows("id:settings-tts-detail-card")).toBe(false);
-  expect(app.count("text:Google Cloud Text-to-Speech")).toBe(1);
+  expect(app.count("text:Google Cloud TTS")).toBe(1);
   expect(app.texts()).toContain("Not configured");
   expect(app.enabled("id:settings-tts-toggle-google-cloud")).toBe(false);
   expect(app.shows("id:settings-tts-open-google-cloud")).toBe(true);
@@ -2195,7 +2195,7 @@ test("tts settings: localizes the empty state and the first-channel actions", as
 
   expect(app.texts()).toContain("暂未添加任何语音合成渠道");
   expect(app.texts()).toContain("可添加的渠道");
-  expect(app.shows("role:button[添加 Google Cloud Text-to-Speech]")).toBe(true);
+  expect(app.shows("role:button[添加 Google Cloud TTS]")).toBe(true);
   expect(app.shows("role:button[添加 Azure Speech]")).toBe(true);
 
   await app.press("id:settings-tts-empty-channel-google-cloud");
@@ -2446,7 +2446,7 @@ test("tts settings: configures Azure and enables it beside Google without a netw
   await app.waitFor("id:settings-nav-tts");
   await app.press("id:settings-nav-tts");
   await app.waitFor("id:settings-tts-row-azure");
-  const googleAt = app.texts().indexOf("Google Cloud Text-to-Speech");
+  const googleAt = app.texts().indexOf("Google Cloud TTS");
   const azureAt = app.texts().indexOf("Azure Speech");
   expect(googleAt).toBeGreaterThanOrEqual(0);
   expect(azureAt).toBeGreaterThan(googleAt);
@@ -2507,7 +2507,7 @@ test("tts settings: shows the saved Azure region and the channel priority", asyn
   expect(app.shows("id:settings-tts-role-google-cloud")).toBe(true);
   expect(app.shows("id:settings-tts-role-azure")).toBe(false);
   expect(app.enabled("id:settings-tts-toggle-azure")).toBe(true);
-  expect(app.texts()).not.toContain("Turn off Google Cloud Text-to-Speech");
+  expect(app.texts()).not.toContain("Turn off Google Cloud TTS");
   expect(app.texts()).not.toContain("azure-key");
   expect(app.texts()).not.toContain("google-key");
 

@@ -144,7 +144,7 @@ settings:
       baiduOperationInvalid: Choose a Baidu OCR mode.
       channelUnconfigured: Configure this channel before enabling it.
   tts:
-    channel: Google Cloud Text-to-Speech
+    channel: Google Cloud TTS
     azure:
       channel: Azure Speech
       region: Region
@@ -185,7 +185,7 @@ settings:
     failure:
       auth: Check the API key, Cloud Text-to-Speech access, and project billing.
       azureAuth: Check the Speech resource key and region.
-      quota: Google Cloud Text-to-Speech is rate limited. Try again.
+      quota: Google Cloud TTS is rate limited. Try again.
       azureRateLimited: Azure is limiting requests. Try again later.
       playback: Could not play the sample. Try again.
     error:
@@ -753,7 +753,7 @@ quickTranslate:
   speakTooLongAzure: Shorten the text. This app sends at most 5,000 bytes to Azure.
   speakInvalidText: This text contains characters Azure Speech cannot read.
   speakChooseSource: Choose a source language.
-  speakUnsupported: This language has no Google Cloud Text-to-Speech voice.
+  speakUnsupported: This language has no Google Cloud TTS voice.
   speakVoiceUnavailable: The saved voice for this language is no longer available. Choose another voice in Settings.
   speakVoiceNeedsSettings: No voice for this language is in the chosen Google voice family. Choose a voice in Settings.
   speakTooLong: Shorten the text. Google accepts at most 5,000 bytes.
