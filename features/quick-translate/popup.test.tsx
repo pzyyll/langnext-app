@@ -769,6 +769,33 @@ test("preset cards: hides the reorder grip while a single card is shown", async 
   );
 });
 
+test("preset cards: reveals the reorder grip only while its card header is hovered", async () => {
+  const app = await open(POPUP_HARNESS, {
+    ...viewport,
+    storage: seedWithSavedCards(
+      [makePreset(), makePreset({ id: "preset-2", name: "Preset Two" })],
+      [
+        { id: "card-1", presetId: "preset-1", templateId: null, collapsed: false },
+        { id: "card-2", presetId: "preset-2", templateId: null, collapsed: false },
+      ],
+    ),
+  });
+
+  const gripOpacity = (cardId: string) =>
+    app.viewStyle(`id:quick-translate-card-grip-${cardId}`)?.opacity;
+  await app.waitFor("id:quick-translate-card-grip-card-2");
+  expect(gripOpacity("card-1")).toBe(0);
+  expect(gripOpacity("card-2")).toBe(0);
+
+  // Hovering one card's header reveals that card's grip and leaves the others at rest.
+  await app.hover("id:quick-translate-card-header-card-1");
+  expect(gripOpacity("card-1")).toBe(1);
+  expect(gripOpacity("card-2")).toBe(0);
+  await app.hover("id:quick-translate-card-header-card-2");
+  expect(gripOpacity("card-1")).toBe(0);
+  expect(gripOpacity("card-2")).toBe(1);
+});
+
 test("preset cards: template switches reuse pending and completed queries for the current input", async () => {
   const preset = makePreset();
   const app = await open(POPUP_HARNESS, {

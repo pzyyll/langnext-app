@@ -17,6 +17,7 @@ import {
   type ViewRef,
 } from "nsh";
 import { t } from "nsh/i18n";
+import { motion } from "../../components/motion";
 import { Button, KeyboardButton } from "../../components/ui/button";
 import { Card } from "../../components/ui/card";
 import { LARGEST_FONT_STEP } from "../../components/ui/font-step";
@@ -322,7 +323,7 @@ function PresetCardRow(props: PresetCardRowProps) {
         pan={props.reorder.canDrag() ? { y: props.reorder.offset } : undefined}
         onPanStart={() => props.reorder.onStart()}
         onPanEnd={(event) => props.reorder.onEnd(event)}
-        class={`flex-row items-center justify-between gap-2 px-3 pt-2.5 ${hasBody() ? "pb-2" : "pb-2.5"}`}
+        class={`group flex-row items-center justify-between gap-2 px-3 pt-2.5 ${hasBody() ? "pb-2" : "pb-2.5"}`}
       >
         <View class="min-w-0 flex-1 flex-row items-center gap-1.5">
           <Select
@@ -366,38 +367,6 @@ function PresetCardRow(props: PresetCardRowProps) {
           </If>
         </View>
         <View class="shrink-0 flex-row items-center gap-0.5">
-          <Button
-            testID="quick-translate-collapse"
-            variant="ghost"
-            size="icon-xs"
-            tooltip={
-              props.card().collapsed
-                ? t("quickTranslate.expandCard")
-                : t("quickTranslate.collapseCard")
-            }
-            accessibilityLabel={
-              props.card().collapsed
-                ? t("quickTranslate.expandCard")
-                : t("quickTranslate.collapseCard")
-            }
-            onPress={() => props.onToggleCollapse(props.card().id)}
-          >
-            <Icon
-              name={props.card().collapsed ? "mdi:chevron-down" : "mdi:chevron-up"}
-              tone="muted-foreground"
-              class="size-3.5"
-            />
-          </Button>
-          <Button
-            testID="quick-translate-remove"
-            variant="ghost"
-            size="icon-xs"
-            tooltip={t("quickTranslate.removeCard")}
-            accessibilityLabel={t("quickTranslate.removeCard")}
-            onPress={() => props.onRemove(props.card().id)}
-          >
-            <Icon name="mdi:close" tone="muted-foreground" class="size-3.5" />
-          </Button>
           <If when={props.reorder.canReorder()}>
             <KeyboardButton
               testID={`quick-translate-card-grip-${props.card().id}`}
@@ -431,11 +400,47 @@ function PresetCardRow(props: PresetCardRowProps) {
                 gripNode = node;
                 props.reorder.onGripRef(node);
               }}
-              class="shrink-0 cursor-grab"
+              class={`shrink-0 cursor-grab ${motion.tooltip} ${
+                props.reorder.dragging()
+                  ? "opacity-100"
+                  : "opacity-0 group-hover:opacity-100 focus-visible:opacity-100"
+              }`}
             >
               <Icon name="grip-vertical" tone="muted-foreground" class="size-3.5" />
             </KeyboardButton>
           </If>
+          <Button
+            testID="quick-translate-collapse"
+            variant="ghost"
+            size="icon-xs"
+            tooltip={
+              props.card().collapsed
+                ? t("quickTranslate.expandCard")
+                : t("quickTranslate.collapseCard")
+            }
+            accessibilityLabel={
+              props.card().collapsed
+                ? t("quickTranslate.expandCard")
+                : t("quickTranslate.collapseCard")
+            }
+            onPress={() => props.onToggleCollapse(props.card().id)}
+          >
+            <Icon
+              name={props.card().collapsed ? "mdi:chevron-down" : "mdi:chevron-up"}
+              tone="muted-foreground"
+              class="size-3.5"
+            />
+          </Button>
+          <Button
+            testID="quick-translate-remove"
+            variant="ghost"
+            size="icon-xs"
+            tooltip={t("quickTranslate.removeCard")}
+            accessibilityLabel={t("quickTranslate.removeCard")}
+            onPress={() => props.onRemove(props.card().id)}
+          >
+            <Icon name="mdi:close" tone="muted-foreground" class="size-3.5" />
+          </Button>
         </View>
       </View>
 
