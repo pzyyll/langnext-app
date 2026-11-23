@@ -7,6 +7,7 @@ export type ButtonVariant =
   | "primary"
   | "secondary"
   | "outline"
+  | "dashed"
   | "ghost"
   | "brand-ghost"
   | "nav"
@@ -48,6 +49,8 @@ const VARIANT_CLASSES: Record<ButtonVariant, string> = {
     "border border-border bg-secondary hover:bg-accent active:bg-border focus-visible:ring-2 focus-visible:ring-ring",
   outline:
     "border border-input bg-background hover:bg-accent active:bg-border selected:bg-accent focus-visible:ring-2 focus-visible:ring-ring",
+  dashed:
+    "border border-dashed border-input bg-transparent hover:bg-accent/60 active:bg-accent selected:bg-accent focus-visible:ring-2 focus-visible:ring-ring",
   ghost:
     "hover:bg-accent active:bg-border selected:bg-accent focus-visible:ring-2 focus-visible:ring-ring",
   "brand-ghost":
@@ -65,6 +68,7 @@ const TEXT_COLOR_CLASSES: Record<ButtonVariant, string> = {
   primary: "font-medium text-primary-foreground",
   secondary: "font-medium text-secondary-foreground",
   outline: "font-medium text-foreground",
+  dashed: "font-medium text-muted-foreground",
   ghost: "font-medium text-foreground",
   "brand-ghost": "font-medium text-brand",
   nav: "min-w-0 flex-1 truncate font-normal text-foreground/80 group-hover:text-foreground group-selected:font-medium group-selected:text-accent-foreground",
