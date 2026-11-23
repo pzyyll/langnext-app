@@ -254,6 +254,7 @@ settings:
         yue-HK: Cantonese
   languageDetection:
     title: Language Detection
+    addChannel: Add Channel
     ai: AI
     google: Google
     googleSummary: Free Google Translate endpoint
@@ -269,6 +270,10 @@ settings:
     configureBeforeEnable: Configure this detector before enabling it.
     configureLabel: Configure %{name}
     enableLabel: Enable %{name}
+    removeLabel: Remove %{name}
+    removeTitle: Remove Channel
+    removeDescription: 'Remove channel "%{name}" and clear its saved configuration?'
+    removeConfirm: Remove
     reorder: Reorder %{name}
     reorderHint: Drag, or press the up and down arrow keys.
     moveUp: Move %{name} up

@@ -98,14 +98,15 @@ language before a prompt is rendered. Three detectors are available; enabled
 detectors run in priority order, and later ones act as backups. There is no
 local detector.
 
-- **Setup**: Open **Settings → Language Detection**, configure **AI** with a
-  model, configure **Google Cloud** with an API key, enable the detectors to use,
-  and set the **Native language** and the **Target language**. Detection stays
-  off until a detector is enabled.
+- **Setup**: Open **Settings → Language Detection**, select **Add Channel**
+  to add **AI** (select a model), **Google** (free endpoint, enabled on add), or
+  **Google Cloud** (save an API key), and set the **Native language** and the
+  **Target language**. Detection stays off until a detector is added and
+  enabled.
 - **AI**: One text model per AI detector. A sample goes to that model; an
   unusable answer falls through to the next enabled detector.
-- **Google**: Enable **Google** to use the free Google Translate endpoint. It
-  needs no key and no model configuration; a sample goes to Google Translate.
+- **Google**: Add **Google** to use the free Google Translate endpoint. It needs
+  no key and no model configuration; a sample goes to Google Translate.
 - **Google Cloud**: Open **Google Cloud**, paste an API key, and save it. The
   key is stored in its own storage entry, never in the detector record, and the
   same key is reused when the field is left blank. Detection calls the Cloud

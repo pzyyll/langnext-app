@@ -5,6 +5,7 @@ import {
   effect,
   Image,
   reduceMotion,
+  setAccessibilityFocus,
   signal,
   Text,
   View,
@@ -22,6 +23,7 @@ import { Avatar } from "../../components/ui/avatar";
 import { Badge } from "../../components/ui/badge";
 import { Button, KeyboardButton } from "../../components/ui/button";
 import { Card, SectionHeading } from "../../components/ui/card";
+import { AppDialog, ConfirmDialog } from "../../components/ui/dialog";
 import { Icon } from "../../components/ui/icon";
 import { Input } from "../../components/ui/input";
 import { Select, type SelectItem } from "../../components/ui/select";
@@ -179,21 +181,107 @@ function DetectionChannelIdentity(props: {
   );
 }
 
+function focusTarget(node: ViewRef | null | undefined) {
+  if (!node) return;
+  node.focus();
+  setAccessibilityFocus(node);
+}
+
+function AddDetectionChannelDialog(props: {
+  open: boolean;
+  availableKinds: readonly LanguageDetectorKind[];
+  busy: boolean;
+  onOpenChange: (open: boolean) => void;
+  onSelect: (kind: LanguageDetectorKind) => void;
+  onClose?: () => void;
+}) {
+  const cardRefs: Partial<Record<LanguageDetectorKind, ViewRef>> = {};
+  const firstKind = () => props.availableKinds[0];
+
+  return (
+    <AppDialog
+      testID="settings-detection-add-dialog"
+      open={props.open}
+      onOpenChange={(open) => {
+        if (!props.busy) props.onOpenChange(open);
+      }}
+      onOpen={() => {
+        const first = firstKind();
+        if (first !== undefined) focusTarget(cardRefs[first]);
+      }}
+      onClose={() => props.onClose?.()}
+      title={t("settings.languageDetection.addChannel")}
+      size="md"
+      closeOnEscape={!props.busy}
+      closeOnBackdropPress={!props.busy}
+      footer={
+        <Button
+          testID="settings-detection-add-cancel"
+          variant="outline"
+          size="sm"
+          label={t("common.cancel")}
+          disabled={props.busy}
+          onPress={() => props.onOpenChange(false)}
+        />
+      }
+    >
+      <View class="grid grid-cols-2 gap-3">
+        <Each of={props.availableKinds} key={(kind) => kind}>
+          {(kind) => {
+            const currentKind = kind();
+            cleanup(() => {
+              delete cardRefs[currentKind];
+            });
+            return (
+              <Button
+                testID={`settings-detection-option-${kind()}`}
+                ref={(node) => {
+                  cardRefs[kind()] = node;
+                }}
+                variant="outline"
+                size="card"
+                disabled={props.busy}
+                accessibilityLabel={t(`settings.languageDetection.${kind()}`)}
+                onPress={() => props.onSelect(kind())}
+                class="w-full"
+              >
+                <DetectionChannelAvatar kind={kind()} />
+                <Text class="min-w-0 flex-1 truncate text-sm font-medium text-foreground">
+                  {t(`settings.languageDetection.${kind()}`)}
+                </Text>
+              </Button>
+            );
+          }}
+        </Each>
+      </View>
+    </AppDialog>
+  );
+}
+
 interface DetectionChannelListProps {
   compact: boolean;
   credentialState: CredentialState;
+  busy: boolean;
+  listError: string | null;
+  onClearError: () => void;
+  onSetError: (message: string) => void;
+  onOpenAddDialog: () => void;
   onOpenChannel: (kind: LanguageDetectorKind) => void;
-  onRowRef: (kind: LanguageDetectorKind, node: ViewRef) => void;
-  onGripRef: (kind: LanguageDetectorKind, node: ViewRef) => void;
+  onAddButtonRef: (node: ViewRef | null) => void;
+  onRowRef: (kind: LanguageDetectorKind, node: ViewRef | null) => void;
+  onGripRef: (kind: LanguageDetectorKind, node: ViewRef | null) => void;
+  onRowFocusRef: (kind: LanguageDetectorKind, node: ViewRef | null) => void;
   onFocusGrip: (kind: LanguageDetectorKind) => void;
+  onFocusChannelFallback: (kind: LanguageDetectorKind) => void;
 }
 
 function DetectionChannelList(props: DetectionChannelListProps) {
   const entrance = createMotion({ enter: motion.pageEnter });
   const mutating = signal(false);
-  const listError = signal<string | null>(null);
   const dragging = signal<LanguageDetectorKind | null>(null);
   const animating = signal(false);
+  const pendingRemove = signal<LanguageDetectorKind | null>(null);
+  const removeError = signal<string | null>(null);
   // Per-detector drag offsets drive the rows natively; they return to 0 at rest.
   const offsets: Record<LanguageDetectorKind, AnimatedValue> = {
     ai: createAnimatedValue(0),
@@ -201,8 +289,14 @@ function DetectionChannelList(props: DetectionChannelListProps) {
     "google-cloud": createAnimatedValue(0),
   };
   const rowSlots: Partial<Record<LanguageDetectorKind, { top: number; height: number }>> = {};
+  const removeRefs: Partial<Record<LanguageDetectorKind, ViewRef>> = {};
+  let removeCancelNode: ViewRef | null = null;
+  let pendingRemoveCloseFocus: (() => void) | null = null;
 
   const order = () => languageDetectionStore.detectorOrder();
+  const availableKinds = () => languageDetectionStore.availableDetectors();
+  const canReorder = () => order().length > 1;
+  const isBusy = () => props.busy || mutating() || animating();
   const name = (kind: LanguageDetectorKind) => t(`settings.languageDetection.${kind}`);
 
   const rowLabel = (kind: LanguageDetectorKind): string => {
@@ -219,15 +313,67 @@ function DetectionChannelList(props: DetectionChannelListProps) {
   };
 
   const handleToggle = async (kind: LanguageDetectorKind, nextEnabled: boolean) => {
-    if (mutating()) return;
-    listError.set(null);
+    if (isBusy()) return;
+    props.onClearError();
     mutating.set(true);
     try {
       const result = await languageDetectionStore.setEnabled(kind, nextEnabled);
-      if (!result.ok) listError.set(result.message);
+      if (!result.ok) props.onSetError(result.message);
     } finally {
       mutating.set(false);
     }
+  };
+
+  const nextFocusTargetAfterRemove = (
+    previousOrder: readonly LanguageDetectorKind[],
+    removed: LanguageDetectorKind,
+  ): (() => void) => {
+    const index = previousOrder.indexOf(removed);
+    const remaining = previousOrder.filter((item) => item !== removed);
+    if (remaining.length === 0) return focusAddButton;
+    const target = remaining[Math.min(Math.max(index, 0), remaining.length - 1)]!;
+    return () => props.onFocusChannelFallback(target);
+  };
+
+  let addButtonRef: ViewRef | null = null;
+  const focusAddButton = () => focusTarget(addButtonRef);
+
+  const performRemove = async (kind: LanguageDetectorKind, fromConfirmDialog: boolean) => {
+    if (isBusy()) return false;
+    const previousOrder = order();
+    props.onClearError();
+    removeError.set(null);
+    mutating.set(true);
+    try {
+      const result = await languageDetectionStore.removeDetector(kind);
+      if (!result.ok) {
+        if (fromConfirmDialog) removeError.set(result.message);
+        else props.onSetError(result.message);
+        return false;
+      }
+      const nextFocus = nextFocusTargetAfterRemove(previousOrder, kind);
+      if (fromConfirmDialog) {
+        pendingRemoveCloseFocus = nextFocus;
+        pendingRemove.set(null);
+      } else {
+        queueMicrotask(nextFocus);
+      }
+      return true;
+    } finally {
+      mutating.set(false);
+    }
+  };
+
+  const handleRequestRemove = (kind: LanguageDetectorKind) => {
+    if (isBusy()) return;
+    props.onClearError();
+    removeError.set(null);
+    if (kind !== "google" && isDetectorConfigured(kind)) {
+      pendingRemoveCloseFocus = () => focusTarget(removeRefs[kind]);
+      pendingRemove.set(kind);
+      return;
+    }
+    void performRemove(kind, false);
   };
 
   const animateOffset = (kind: LanguageDetectorKind, to: number): Promise<unknown> => {
@@ -243,8 +389,8 @@ function DetectionChannelList(props: DetectionChannelListProps) {
   };
 
   const handleDragStart = (kind: LanguageDetectorKind) => {
-    if (mutating() || animating() || dragging() !== null) return;
-    listError.set(null);
+    if (isBusy() || !canReorder() || dragging() !== null) return;
+    props.onClearError();
     dragging.set(kind);
   };
 
@@ -304,7 +450,7 @@ function DetectionChannelList(props: DetectionChannelListProps) {
         return;
       }
       await Promise.all(nextOrder.map((row) => animateOffset(row, 0)));
-      listError.set(result.message);
+      props.onSetError(result.message);
     } finally {
       dragging.set(null);
       animating.set(false);
@@ -312,17 +458,17 @@ function DetectionChannelList(props: DetectionChannelListProps) {
   };
 
   const handleMoveBy = async (kind: LanguageDetectorKind, delta: number, refocus: boolean) => {
-    if (mutating() || animating() || dragging() !== null) return;
+    if (isBusy() || !canReorder() || dragging() !== null) return;
     const list = order();
     const index = list.indexOf(kind);
     const target = index + delta;
     if (index === -1 || target < 0 || target >= list.length) return;
-    listError.set(null);
+    props.onClearError();
     mutating.set(true);
     try {
       const result = await languageDetectionStore.moveDetectorTo(kind, target);
       if (!result.ok) {
-        listError.set(result.message);
+        props.onSetError(result.message);
         return;
       }
       if (refocus) queueMicrotask(() => props.onFocusGrip(kind));
@@ -353,150 +499,241 @@ function DetectionChannelList(props: DetectionChannelListProps) {
         </Text>
       </If>
 
-      <Card testID="settings-detection-card" class={props.compact ? "gap-1 p-2" : "gap-1 p-3"}>
-        <Each of={order()} key={(kind) => kind}>
-          {(kind, index) => {
-            const configured = () => isDetectorConfigured(kind());
-            const enabled = () => languageDetectionStore.isEnabled(kind());
+      <If when={order().length > 0}>
+        <Card testID="settings-detection-card" class={props.compact ? "gap-1 p-2" : "gap-1 p-3"}>
+          <Each of={order()} key={(kind) => kind}>
+            {(kind, index) => {
+              const currentKind = kind();
+              cleanup(() => {
+                delete rowSlots[currentKind];
+                delete removeRefs[currentKind];
+                offsets[currentKind].set(0);
+                props.onRowRef(currentKind, null);
+                props.onGripRef(currentKind, null);
+                props.onRowFocusRef(currentKind, null);
+              });
+              const configured = () => isDetectorConfigured(kind());
+              const enabled = () => languageDetectionStore.isEnabled(kind());
 
-            return (
-              <>
-                <If when={index() > 0}>
-                  <View class="mx-2 my-1 h-px bg-border" />
-                </If>
-                <View
-                  testID={`settings-detection-row-${kind()}`}
-                  pan={mutating() || animating() ? undefined : { y: offsets[kind()] }}
-                  onPanStart={() => handleDragStart(kind())}
-                  onPanEnd={(event) => void handleDragEnd(kind(), event)}
-                  onLayout={(event) => {
-                    rowSlots[kind()] = {
-                      top: event.bounds.origin.y,
-                      height: event.bounds.size.height,
-                    };
-                  }}
-                  style={{ translate: [0, offsets[kind()]] }}
-                  class={`flex-row items-center gap-1.5 rounded-lg pr-2 ${motion.navigationFeedback} ${
-                    dragging() === kind()
-                      ? "z-10 cursor-grabbing bg-card shadow-md"
-                      : "hover:bg-accent/60 active:bg-accent"
-                  }`}
-                >
-                  <If
-                    when={isDetectorOpenable(kind())}
-                    else={
-                      <View class="min-w-0 flex-1 flex-row items-center gap-2.5 rounded-lg py-2.5 pl-3 pr-2">
+              return (
+                <>
+                  <If when={index() > 0}>
+                    <View class="mx-2 my-1 h-px bg-border" />
+                  </If>
+                  <View
+                    testID={`settings-detection-row-${kind()}`}
+                    pan={isBusy() || !canReorder() ? undefined : { y: offsets[kind()] }}
+                    onPanStart={() => handleDragStart(kind())}
+                    onPanEnd={(event) => void handleDragEnd(kind(), event)}
+                    onLayout={(event) => {
+                      rowSlots[kind()] = {
+                        top: event.bounds.origin.y,
+                        height: event.bounds.size.height,
+                      };
+                    }}
+                    style={{ translate: [0, offsets[kind()]] }}
+                    class={`flex-row items-center gap-1.5 rounded-lg pr-2 ${motion.navigationFeedback} ${
+                      dragging() === kind()
+                        ? "z-10 cursor-grabbing bg-card shadow-md"
+                        : "hover:bg-accent/60 active:bg-accent"
+                    }`}
+                  >
+                    <If
+                      when={isDetectorOpenable(kind())}
+                      else={
+                        <View class="min-w-0 flex-1 flex-row items-center gap-2.5 rounded-lg py-2.5 pl-3 pr-2">
+                          <DetectionChannelIdentity
+                            kind={kind()}
+                            credentialState={props.credentialState}
+                          />
+                        </View>
+                      }
+                    >
+                      <Button
+                        testID={`settings-detection-channel-${kind()}`}
+                        ref={(node) => props.onRowRef(kind(), node)}
+                        variant="ghost"
+                        size="row"
+                        accessibilityLabel={rowLabel(kind())}
+                        onPress={() => {
+                          props.onClearError();
+                          props.onOpenChannel(kind());
+                        }}
+                        class="min-w-0 flex-1 py-2.5 pl-3 pr-2 hover:bg-transparent active:bg-transparent"
+                      >
                         <DetectionChannelIdentity
                           kind={kind()}
                           credentialState={props.credentialState}
                         />
-                      </View>
-                    }
-                  >
+                      </Button>
+                    </If>
+
+                    <If when={canReorder()}>
+                      <KeyboardButton
+                        testID={`settings-detection-grip-${kind()}`}
+                        variant="ghost"
+                        size="icon-sm"
+                        focusable={true}
+                        tooltip={t("settings.languageDetection.reorder", { name: name(kind()) })}
+                        accessibilityLabel={t("settings.languageDetection.reorder", {
+                          name: name(kind()),
+                        })}
+                        accessibilityHint={t("settings.languageDetection.reorderHint")}
+                        accessibilityActions={[
+                          {
+                            name: "moveUp",
+                            label: t("settings.languageDetection.moveUp", { name: name(kind()) }),
+                          },
+                          {
+                            name: "moveDown",
+                            label: t("settings.languageDetection.moveDown", { name: name(kind()) }),
+                          },
+                        ]}
+                        onAccessibilityAction={(event) =>
+                          handleAccessibilityMove(kind(), event.actionName)
+                        }
+                        onPress={() => props.onFocusGrip(kind())}
+                        captureKeys={["arrowup", "arrowdown"]}
+                        onKeyDown={(event) => handleGripKey(kind(), event)}
+                        ref={(node) => props.onGripRef(kind(), node)}
+                        class="shrink-0 cursor-grab"
+                      >
+                        <Icon name="grip-vertical" tone="muted-foreground" class="size-4" />
+                      </KeyboardButton>
+                    </If>
+
+                    <Switch
+                      testID={`settings-detection-toggle-${kind()}`}
+                      variant="inline"
+                      checked={enabled()}
+                      disabled={mutating() || props.busy || !configured()}
+                      accessibilityLabel={t("settings.languageDetection.enableLabel", {
+                        name: name(kind()),
+                      })}
+                      tooltip={
+                        !configured()
+                          ? t("settings.languageDetection.configureBeforeEnable")
+                          : undefined
+                      }
+                      onChange={(checked) => void handleToggle(kind(), checked)}
+                    />
+
                     <Button
-                      testID={`settings-detection-channel-${kind()}`}
-                      ref={(node) => props.onRowRef(kind(), node)}
-                      variant="ghost"
-                      size="row"
-                      accessibilityLabel={rowLabel(kind())}
-                      onPress={() => {
-                        listError.set(null);
-                        props.onOpenChannel(kind());
+                      testID={`settings-detection-remove-${kind()}`}
+                      ref={(node) => {
+                        removeRefs[kind()] = node;
+                        props.onRowFocusRef(kind(), node);
                       }}
-                      class="min-w-0 flex-1 py-2.5 pl-3 pr-2 hover:bg-transparent active:bg-transparent"
-                    >
-                      <DetectionChannelIdentity
-                        kind={kind()}
-                        credentialState={props.credentialState}
-                      />
-                    </Button>
-                  </If>
-
-                  <KeyboardButton
-                    testID={`settings-detection-grip-${kind()}`}
-                    variant="ghost"
-                    size="icon-sm"
-                    focusable={true}
-                    tooltip={t("settings.languageDetection.reorder", { name: name(kind()) })}
-                    accessibilityLabel={t("settings.languageDetection.reorder", {
-                      name: name(kind()),
-                    })}
-                    accessibilityHint={t("settings.languageDetection.reorderHint")}
-                    accessibilityActions={[
-                      {
-                        name: "moveUp",
-                        label: t("settings.languageDetection.moveUp", { name: name(kind()) }),
-                      },
-                      {
-                        name: "moveDown",
-                        label: t("settings.languageDetection.moveDown", { name: name(kind()) }),
-                      },
-                    ]}
-                    onAccessibilityAction={(event) =>
-                      handleAccessibilityMove(kind(), event.actionName)
-                    }
-                    onPress={() => props.onFocusGrip(kind())}
-                    captureKeys={["arrowup", "arrowdown"]}
-                    onKeyDown={(event) => handleGripKey(kind(), event)}
-                    ref={(node) => props.onGripRef(kind(), node)}
-                    class="shrink-0 cursor-grab"
-                  >
-                    <Icon name="grip-vertical" tone="muted-foreground" class="size-4" />
-                  </KeyboardButton>
-
-                  <Switch
-                    testID={`settings-detection-toggle-${kind()}`}
-                    variant="inline"
-                    checked={enabled()}
-                    disabled={mutating() || !configured()}
-                    accessibilityLabel={t("settings.languageDetection.enableLabel", {
-                      name: name(kind()),
-                    })}
-                    tooltip={
-                      !configured()
-                        ? t("settings.languageDetection.configureBeforeEnable")
-                        : undefined
-                    }
-                    onChange={(checked) => void handleToggle(kind(), checked)}
-                  />
-
-                  <If when={isDetectorOpenable(kind())} else={<View class="size-7 shrink-0" />}>
-                    <Button
-                      testID={`settings-detection-open-${kind()}`}
-                      variant="ghost"
+                      variant="destructive-ghost"
                       size="icon-sm"
-                      tooltip={t("settings.languageDetection.configureLabel", {
+                      disabled={isBusy()}
+                      tooltip={t("settings.languageDetection.removeLabel", { name: name(kind()) })}
+                      accessibilityLabel={t("settings.languageDetection.removeLabel", {
                         name: name(kind()),
                       })}
-                      accessibilityLabel={t("settings.languageDetection.configureLabel", {
-                        name: name(kind()),
-                      })}
-                      onPress={() => {
-                        listError.set(null);
-                        props.onOpenChannel(kind());
-                      }}
+                      onPress={() => handleRequestRemove(kind())}
                     >
-                      <Icon name="chevron-right" tone="muted-foreground" class="size-3.5" />
+                      <Icon name="delete" tone="muted-foreground" class="size-3.5" />
                     </Button>
-                  </If>
-                </View>
-              </>
-            );
-          }}
-        </Each>
-      </Card>
 
-      <If when={listError() !== null}>
+                    <If when={isDetectorOpenable(kind())} else={<View class="size-7 shrink-0" />}>
+                      <Button
+                        testID={`settings-detection-open-${kind()}`}
+                        variant="ghost"
+                        size="icon-sm"
+                        tooltip={t("settings.languageDetection.configureLabel", {
+                          name: name(kind()),
+                        })}
+                        accessibilityLabel={t("settings.languageDetection.configureLabel", {
+                          name: name(kind()),
+                        })}
+                        onPress={() => {
+                          props.onClearError();
+                          props.onOpenChannel(kind());
+                        }}
+                      >
+                        <Icon name="chevron-right" tone="muted-foreground" class="size-3.5" />
+                      </Button>
+                    </If>
+                  </View>
+                </>
+              );
+            }}
+          </Each>
+        </Card>
+      </If>
+
+      <If when={availableKinds().length > 0}>
+        <Button
+          testID="settings-detection-add"
+          ref={(node) => {
+            addButtonRef = node;
+            props.onAddButtonRef(node);
+          }}
+          variant="ghost"
+          size="md"
+          disabled={isBusy()}
+          accessibilityLabel={t("settings.languageDetection.addChannel")}
+          onPress={() => {
+            props.onClearError();
+            props.onOpenAddDialog();
+          }}
+          class="w-full"
+        >
+          <Icon name="plus" tone="foreground" class="size-4" />
+          <Text class="text-sm font-medium text-foreground">
+            {t("settings.languageDetection.addChannel")}
+          </Text>
+        </Button>
+      </If>
+
+      <If when={props.listError !== null}>
         <Text
           testID="settings-detection-list-error"
           role="alert"
           class="px-1 text-sm text-destructive"
         >
-          {listError()}
+          {props.listError}
         </Text>
       </If>
 
       <LanguagePreferencesCard compact={props.compact} />
+
+      <ConfirmDialog
+        testID="settings-detection-remove-dialog"
+        open={pendingRemove() !== null}
+        title={t("settings.languageDetection.removeTitle")}
+        description={
+          pendingRemove() !== null
+            ? t("settings.languageDetection.removeDescription", {
+                name: name(pendingRemove()!),
+              })
+            : ""
+        }
+        error={removeError()}
+        confirmLabel={t("settings.languageDetection.removeConfirm")}
+        confirmVariant="destructive"
+        busy={mutating()}
+        cancelRef={(node) => {
+          removeCancelNode = node;
+        }}
+        onOpen={() => {
+          focusTarget(removeCancelNode);
+        }}
+        onClose={() => {
+          removeError.set(null);
+          const run = pendingRemoveCloseFocus;
+          pendingRemoveCloseFocus = null;
+          run?.();
+        }}
+        onOpenChange={(open) => {
+          if (!open) pendingRemove.set(null);
+        }}
+        onConfirm={() => {
+          const target = pendingRemove();
+          if (target !== null) void performRemove(target, true);
+        }}
+      />
     </View>
   );
 }
@@ -842,8 +1079,14 @@ interface LanguageDetectionSectionProps {
 /** Settings section for prioritized detectors, their configuration pages, and language preferences. */
 export function LanguageDetectionSection(props: LanguageDetectionSectionProps) {
   const credentialState = signal<CredentialState>("unknown");
+  const addDialogOpen = signal(false);
+  const addingChannel = signal(false);
+  const listError = signal<string | null>(null);
   const rowRefs: Partial<Record<LanguageDetectorKind, ViewRef>> = {};
   const gripRefs: Partial<Record<LanguageDetectorKind, ViewRef>> = {};
+  const fallbackFocusRefs: Partial<Record<LanguageDetectorKind, ViewRef>> = {};
+  let addButtonNode: ViewRef | null = null;
+  let pendingDialogCloseFocus: (() => void) | null = null;
   let lastOpenedChannel: LanguageDetectorKind | null = null;
   let restoreFocus = false;
 
@@ -881,30 +1124,90 @@ export function LanguageDetectionSection(props: LanguageDetectionSectionProps) {
   const showingDetail = () =>
     props.selectedChannel !== null && isDetectorOpenable(props.selectedChannel);
 
-  return (
-    <If
-      when={!showingDetail()}
-      else={
-        <If
-          when={props.selectedChannel === "google-cloud"}
-          else={<AiChannelDetail compact={props.compact} onManageModels={props.onManageModels} />}
-        >
-          <GoogleCloudChannelDetail compact={props.compact} credentialState={credentialState()} />
-        </If>
+  const handleOpenAddDialog = () => {
+    pendingDialogCloseFocus = () => focusTarget(addButtonNode);
+    addDialogOpen.set(true);
+  };
+
+  const handleSelectAddKind = async (kind: LanguageDetectorKind) => {
+    if (addingChannel()) return;
+    listError.set(null);
+    addingChannel.set(true);
+    try {
+      const result = await languageDetectionStore.addDetector(kind);
+      if (!result.ok) {
+        addDialogOpen.set(false);
+        listError.set(result.message);
+        return;
       }
-    >
-      <DetectionChannelList
-        compact={props.compact}
-        credentialState={credentialState()}
-        onOpenChannel={(kind) => props.onSelectChannel(kind)}
-        onRowRef={(kind, node) => {
-          rowRefs[kind] = node;
+      pendingDialogCloseFocus = isDetectorOpenable(kind)
+        ? null
+        : () => focusTarget(rowRefs[kind] ?? fallbackFocusRefs[kind] ?? addButtonNode);
+      addDialogOpen.set(false);
+      if (isDetectorOpenable(kind)) {
+        props.onSelectChannel(kind);
+      }
+    } finally {
+      addingChannel.set(false);
+    }
+  };
+
+  return (
+    <>
+      <If
+        when={!showingDetail()}
+        else={
+          <If
+            when={props.selectedChannel === "google-cloud"}
+            else={<AiChannelDetail compact={props.compact} onManageModels={props.onManageModels} />}
+          >
+            <GoogleCloudChannelDetail compact={props.compact} credentialState={credentialState()} />
+          </If>
+        }
+      >
+        <DetectionChannelList
+          compact={props.compact}
+          credentialState={credentialState()}
+          busy={addingChannel()}
+          listError={listError()}
+          onClearError={() => listError.set(null)}
+          onSetError={(message) => listError.set(message)}
+          onOpenAddDialog={handleOpenAddDialog}
+          onOpenChannel={(kind) => props.onSelectChannel(kind)}
+          onAddButtonRef={(node) => {
+            addButtonNode = node;
+          }}
+          onRowRef={(kind, node) => {
+            if (node) rowRefs[kind] = node;
+            else delete rowRefs[kind];
+          }}
+          onGripRef={(kind, node) => {
+            if (node) gripRefs[kind] = node;
+            else delete gripRefs[kind];
+          }}
+          onRowFocusRef={(kind, node) => {
+            if (node) fallbackFocusRefs[kind] = node;
+            else delete fallbackFocusRefs[kind];
+          }}
+          onFocusGrip={(kind) => gripRefs[kind]?.focus()}
+          onFocusChannelFallback={(kind) =>
+            focusTarget(rowRefs[kind] ?? fallbackFocusRefs[kind] ?? addButtonNode)
+          }
+        />
+      </If>
+
+      <AddDetectionChannelDialog
+        open={addDialogOpen()}
+        availableKinds={languageDetectionStore.availableDetectors()}
+        busy={addingChannel()}
+        onOpenChange={(open) => addDialogOpen.set(open)}
+        onSelect={(kind) => void handleSelectAddKind(kind)}
+        onClose={() => {
+          const run = pendingDialogCloseFocus;
+          pendingDialogCloseFocus = null;
+          run?.();
         }}
-        onGripRef={(kind, node) => {
-          gripRefs[kind] = node;
-        }}
-        onFocusGrip={(kind) => gripRefs[kind]?.focus()}
       />
-    </If>
+    </>
   );
 }

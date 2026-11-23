@@ -1248,7 +1248,7 @@ function seedAutoPair(collapsed: readonly boolean[], mode = "live"): Record<stri
         cards,
       }),
       [LANGUAGE_DETECTION_STORAGE_KEY]: JSON.stringify({
-        version: 3,
+        version: 4,
         order: ["ai", "google", "google-cloud"],
         enabled: { ai: true, google: false, "google-cloud": false },
         ai: { modelId: "det-1" },
@@ -1656,7 +1656,7 @@ function seedDeepLCards(options: DeepLSeedOptions = {}): Record<string, string> 
       }),
       [deepLCredentialStorageKey(DEEPL_KEY_REF)]: "deepl-key:fx",
       [LANGUAGE_DETECTION_STORAGE_KEY]: JSON.stringify({
-        version: 3,
+        version: 4,
         order: ["ai", "google", "google-cloud"],
         enabled: {
           ai: (options.detectionMode ?? "ai") === "ai",
@@ -2528,7 +2528,7 @@ function seedGoogleCards(options: GoogleCardSeedOptions = {}): Record<string, st
       [googleCloudCredentialStorageKey(GOOGLE_KEY_REF)]: "google-key-1",
       [deepLCredentialStorageKey("deepl-ref-1")]: "deepl-key:fx",
       [LANGUAGE_DETECTION_STORAGE_KEY]: JSON.stringify({
-        version: 3,
+        version: 4,
         order: ["ai", "google", "google-cloud"],
         enabled: {
           ai: (options.detectionMode ?? "ai") === "ai",

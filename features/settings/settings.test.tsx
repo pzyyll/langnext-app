@@ -73,7 +73,7 @@ const LANGUAGE_DETECTION_HELP = {
   },
 };
 
-/** One saved v3 language detection record; each detector keeps its own enabled state and priority. */
+/** One saved v4 language detection record; each detector keeps its own enabled state and priority. */
 function detectionRecord(options: {
   order?: readonly ("ai" | "google" | "google-cloud")[];
   enabled?: Partial<Record<"ai" | "google" | "google-cloud", boolean>>;
@@ -89,7 +89,7 @@ function detectionRecord(options: {
       ? null
       : { credentialRef: options.credentialRef };
   return JSON.stringify({
-    version: 3,
+    version: 4,
     order: options.order ?? ["ai", "google", "google-cloud"],
     enabled: {
       ai: options.enabled?.ai ?? ai !== null,
@@ -490,7 +490,7 @@ test("double copy: shows Windows-only opt-in off by default, hides outside Windo
   expect(startupFail.texts()).toContain("active=false|reads=0");
 });
 
-test("language detection: lists detectors, configures AI on its detail page, and returns via breadcrumb", async () => {
+test("language detection: starts with the ghost add button, adds channels via picker, and configures AI", async () => {
   const seed = makeSeedStorage({
     channels: [makeChannel({ id: "ch-openai", displayName: "OpenAI Main", enabled: true })],
     models: [
@@ -503,29 +503,43 @@ test("language detection: lists detectors, configures AI on its detail page, and
   await app.press("id:nav-settings");
   await app.waitFor("id:settings-nav-language-detection");
   await app.press("id:settings-nav-language-detection");
-  await app.waitFor("id:settings-detection-card");
+  await app.waitFor("id:settings-detection-add");
 
-  expect(app.shows("id:settings-detection-channel-ai")).toBe(true);
-  expect(app.shows("id:settings-detection-row-google")).toBe(true);
-  expect(app.shows("id:settings-detection-row-google-cloud")).toBe(true);
+  // Default state shows only the ghost add button (no pre-populated channel card).
+  expect(app.shows("id:settings-detection-card")).toBe(false);
+  expect(app.shows("id:settings-detection-row-ai")).toBe(false);
+  expect(app.shows("id:settings-detection-row-google")).toBe(false);
+  expect(app.shows("id:settings-detection-row-google-cloud")).toBe(false);
   expect(app.shows("id:settings-detection-priority-info")).toBe(true);
+  // Escape dismisses the picker cleanly without writing.
+  await app.press("id:settings-detection-add");
+  await app.waitFor("id:settings-detection-option-ai");
+  await app.keyboard.press("escape");
+  await app.waitUntil(() => !app.shows("id:settings-detection-add-dialog"));
+  expect(app.shows("id:settings-detection-card")).toBe(false);
+  expect(app.storage()[LANGUAGE_DETECTION_STORAGE_KEY]).toBeUndefined();
+
   expect(app.texts()).not.toContain(DETECTION_PRIORITY_HINT.en);
   await app.hover("id:settings-detection-priority-info");
   await app.waitUntil(() => app.texts().includes(DETECTION_PRIORITY_HINT.en));
-  expect(app.enabled("id:settings-detection-toggle-ai")).toBe(false);
-  expect(app.enabled("id:settings-detection-toggle-google")).toBe(true);
-  expect(app.enabled("id:settings-detection-toggle-google-cloud")).toBe(false);
-  expect(app.texts()).toContain("AI");
-  expect(app.texts()).toContain("Google");
-  expect(app.texts()).toContain("Google Cloud");
-  expect(app.texts()).toContain("Not configured");
-  expect(app.texts()).toContain("Free Google Translate endpoint");
   expect(app.storage()[LANGUAGE_DETECTION_STORAGE_KEY]).toBeUndefined();
 
-  await app.hover("id:settings-detection-toggle-ai");
-  await app.waitUntil(() => app.texts().includes("Configure this detector before enabling it."));
+  // Opening and canceling the picker also leaves the list empty without writing.
+  await app.press("id:settings-detection-add");
+  await app.waitFor("id:settings-detection-add-dialog");
+  expect(app.shows("id:settings-detection-option-ai")).toBe(true);
+  expect(app.shows("id:settings-detection-option-google")).toBe(true);
+  expect(app.shows("id:settings-detection-option-google-cloud")).toBe(true);
+  await app.press("id:settings-detection-add-cancel");
+  await app.waitUntil(() => !app.shows("id:settings-detection-add-dialog"));
+  expect(app.shows("id:settings-detection-card")).toBe(false);
+  expect(app.storage()[LANGUAGE_DETECTION_STORAGE_KEY]).toBeUndefined();
 
-  await app.press("id:settings-detection-channel-ai");
+  // Selecting AI adds it to the list and navigates straight to its configuration page.
+  await app.press("id:settings-detection-add");
+  await app.waitFor("id:settings-detection-add-dialog");
+  await app.press("id:settings-detection-option-ai");
+  await app.waitUntil(() => !app.shows("id:settings-detection-add-dialog"));
   await app.waitFor("id:settings-detection-detail-card");
   expect(app.shows("id:settings-detection-breadcrumb")).toBe(true);
   expect(app.shows("id:settings-detection-breadcrumb-root")).toBe(true);
@@ -533,6 +547,19 @@ test("language detection: lists detectors, configures AI on its detail page, and
   expect(app.shows("id:settings-detection-priority-info")).toBe(false);
   expect(app.enabled("id:settings-detection-save")).toBe(false);
 
+  // Returning without saving still keeps the added AI channel in the list as Not configured.
+  await app.press("id:settings-detection-breadcrumb-root");
+  await app.waitFor("id:settings-detection-card");
+  expect(app.shows("id:settings-detection-channel-ai")).toBe(true);
+  expect(app.shows("id:settings-detection-grip-ai")).toBe(false);
+  expect(app.enabled("id:settings-detection-toggle-ai")).toBe(false);
+  expect(app.texts()).toContain("Not configured");
+  await app.hover("id:settings-detection-toggle-ai");
+  await app.waitUntil(() => app.texts().includes("Configure this detector before enabling it."));
+
+  // Reopen AI from the list and save a model.
+  await app.press("id:settings-detection-channel-ai");
+  await app.waitFor("id:settings-detection-detail-card");
   await app.press("id:settings-detection-model");
   await app.waitFor("role:option[OpenAI Main · gpt-4.1-mini]");
   await app.press("role:option[OpenAI Main · gpt-4.1-mini]");
@@ -540,10 +567,10 @@ test("language detection: lists detectors, configures AI on its detail page, and
   expect(app.enabled("id:settings-detection-save")).toBe(true);
 
   await app.press("id:settings-detection-save");
-  await app.waitUntil(() => Boolean(app.storage()[LANGUAGE_DETECTION_STORAGE_KEY]));
+  await app.waitUntil(() => JSON.parse(app.storage()[LANGUAGE_DETECTION_STORAGE_KEY]!).ai !== null);
   expect(JSON.parse(app.storage()[LANGUAGE_DETECTION_STORAGE_KEY]!)).toEqual({
-    version: 3,
-    order: ["ai", "google", "google-cloud"],
+    version: 4,
+    order: ["ai"],
     enabled: { ai: true, google: false, "google-cloud": false },
     ai: { modelId: "m-1" },
     googleCloud: null,
@@ -560,12 +587,22 @@ test("language detection: lists detectors, configures AI on its detail page, and
   expect(app.texts()).toContain("OpenAI Main · gpt-4.1-mini");
   expect(app.enabled("id:settings-detection-toggle-ai")).toBe(true);
 
-  await app.press("id:settings-detection-toggle-google");
-  await app.waitUntil(
-    () => JSON.parse(app.storage()[LANGUAGE_DETECTION_STORAGE_KEY]!).enabled.google === true,
-  );
+  // Adding the free Google channel appends and enables it without opening a detail page.
+  await app.press("id:settings-detection-add");
+  await app.waitFor("id:settings-detection-add-dialog");
+  expect(app.shows("id:settings-detection-option-ai")).toBe(false);
+  expect(app.shows("id:settings-detection-option-google")).toBe(true);
+  expect(app.shows("id:settings-detection-option-google-cloud")).toBe(true);
+  await app.press("id:settings-detection-option-google");
+  await app.waitUntil(() => !app.shows("id:settings-detection-add-dialog"));
+  await app.waitFor("id:settings-detection-row-google");
+  expect(app.shows("id:settings-detection-detail-card")).toBe(false);
+  expect(app.shows("id:settings-detection-channel-google")).toBe(false);
   expect(app.shows("id:settings-detection-role-google")).toBe(true);
   expect(app.texts()).toContain("Backup");
+  expect(app.texts()).toContain("Free Google Translate endpoint");
+  expect(app.shows("id:settings-detection-grip-ai")).toBe(true);
+  expect(app.shows("id:settings-detection-grip-google")).toBe(true);
 
   await app.press("id:settings-nav-general");
   await app.waitFor("id:settings-general-card");
@@ -587,6 +624,7 @@ test("language detection: lists detectors, configures AI on its detail page, and
   await reopened.press("id:language-zh-CN");
   await reopened.press("id:settings-nav-language-detection");
   await reopened.waitFor("id:settings-detection-card");
+  expect(reopened.texts()).toContain("添加渠道");
   expect(reopened.texts()).not.toContain(DETECTION_PRIORITY_HINT.zh);
   await reopened.hover("id:settings-detection-priority-info");
   await reopened.waitUntil(() => reopened.texts().includes(DETECTION_PRIORITY_HINT.zh));
@@ -597,19 +635,17 @@ test("language detection: lists detectors, configures AI on its detail page, and
   expect(reopened.texts()).toContain("模型");
 });
 
-test("language detection: configures a Google Cloud API key on its own page", async () => {
+test("language detection: adds Google Cloud, hides add button when full, and removes channels", async () => {
   const app = await open(APP_ENTRY, { ...viewport, storage: { "settings.language": "en" } });
   await app.press("id:nav-settings");
   await app.press("id:settings-nav-language-detection");
-  await app.waitFor("id:settings-detection-card");
+  await app.waitFor("id:settings-detection-add");
 
-  expect(app.shows("id:settings-detection-channel-google")).toBe(false);
-  expect(app.shows("id:settings-detection-toggle-google-cloud")).toBe(true);
-  expect(app.texts()).toContain("Google Cloud");
-  expect(app.texts()).toContain("Free Google Translate endpoint");
-  expect(app.storage()[LANGUAGE_DETECTION_STORAGE_KEY]).toBeUndefined();
-
-  await app.press("id:settings-detection-channel-google-cloud");
+  // Add Google Cloud via picker and configure its API key on the detail page.
+  await app.press("id:settings-detection-add");
+  await app.waitFor("id:settings-detection-add-dialog");
+  await app.press("id:settings-detection-option-google-cloud");
+  await app.waitUntil(() => !app.shows("id:settings-detection-add-dialog"));
   await app.waitFor("id:settings-detection-detail-card");
   expect(app.shows("id:settings-detection-breadcrumb")).toBe(true);
   expect(app.texts()).toContain("API Key");
@@ -619,7 +655,9 @@ test("language detection: configures a Google Cloud API key on its own page", as
   await app.type("id:settings-detection-google-cloud-api-key", "synthetic-cloud-key");
   expect(app.enabled("id:settings-detection-save")).toBe(true);
   await app.press("id:settings-detection-save");
-  await app.waitUntil(() => Boolean(app.storage()[LANGUAGE_DETECTION_STORAGE_KEY]));
+  await app.waitUntil(
+    () => JSON.parse(app.storage()[LANGUAGE_DETECTION_STORAGE_KEY]!).googleCloud !== null,
+  );
 
   const saved = JSON.parse(app.storage()[LANGUAGE_DETECTION_STORAGE_KEY]!) as {
     version: number;
@@ -627,8 +665,8 @@ test("language detection: configures a Google Cloud API key on its own page", as
     enabled: Record<string, boolean>;
     googleCloud: { credentialRef: string } | null;
   };
-  expect(saved.version).toBe(3);
-  expect(saved.order).toEqual(["ai", "google", "google-cloud"]);
+  expect(saved.version).toBe(4);
+  expect(saved.order).toEqual(["google-cloud"]);
   expect(saved.enabled).toEqual({ ai: false, google: false, "google-cloud": true });
   expect(saved.googleCloud).not.toBeNull();
   expect(JSON.stringify(saved).includes("synthetic-cloud-key")).toBe(false);
@@ -666,6 +704,50 @@ test("language detection: configures a Google Cloud API key on its own page", as
     googleCloud: { credentialRef: string };
   };
   expect(resaved.googleCloud.credentialRef).toBe(credentialRef);
+
+  // Add the remaining two channels; once all 3 are added, the add button hides.
+  await reopened.press("id:settings-detection-breadcrumb-root");
+  await reopened.waitFor("id:settings-detection-add");
+  await reopened.press("id:settings-detection-add");
+  await reopened.waitFor("id:settings-detection-add-dialog");
+  await reopened.press("id:settings-detection-option-google");
+  await reopened.waitUntil(() => !reopened.shows("id:settings-detection-add-dialog"));
+  expect(reopened.shows("id:settings-detection-add")).toBe(true);
+
+  await reopened.press("id:settings-detection-add");
+  await reopened.waitFor("id:settings-detection-add-dialog");
+  await reopened.press("id:settings-detection-option-ai");
+  await reopened.waitUntil(() => !reopened.shows("id:settings-detection-add-dialog"));
+  await reopened.press("id:settings-detection-breadcrumb-root");
+  await reopened.waitFor("id:settings-detection-card");
+  expect(reopened.shows("id:settings-detection-add")).toBe(false);
+
+  // Unconfigured AI and free Google remove directly without confirmation.
+  await reopened.press("id:settings-detection-remove-ai");
+  await reopened.waitUntil(() => !reopened.shows("id:settings-detection-row-ai"));
+  expect(reopened.shows("id:settings-detection-remove-dialog")).toBe(false);
+  expect(reopened.shows("id:settings-detection-add")).toBe(true);
+
+  await reopened.press("id:settings-detection-remove-google");
+  await reopened.waitUntil(() => !reopened.shows("id:settings-detection-row-google"));
+  expect(reopened.shows("id:settings-detection-remove-dialog")).toBe(false);
+
+  // Configured Google Cloud confirms before removing and cleans up its stored key.
+  await reopened.press("id:settings-detection-remove-google-cloud");
+  await reopened.waitFor("id:settings-detection-remove-dialog");
+  await reopened.press("role:button[Cancel]");
+  await reopened.waitUntil(() => !reopened.shows("id:settings-detection-remove-dialog"));
+  expect(reopened.shows("id:settings-detection-row-google-cloud")).toBe(true);
+
+  await reopened.press("id:settings-detection-remove-google-cloud");
+  await reopened.waitFor("id:settings-detection-remove-dialog");
+  await reopened.press("role:button[Remove]");
+  await reopened.waitUntil(() => !reopened.shows("id:settings-detection-row-google-cloud"));
+  expect(reopened.shows("id:settings-detection-card")).toBe(false);
+  expect(reopened.shows("id:settings-detection-add")).toBe(true);
+  expect(
+    reopened.storage()[googleCloudDetectionCredentialStorageKey(credentialRef)],
+  ).toBeUndefined();
 });
 
 test("language detection: applies preference changes immediately and rejects identical languages", async () => {
@@ -699,7 +781,7 @@ test("language detection: applies preference changes immediately and rejects ide
       "en",
   );
   expect(JSON.parse(app.storage()[LANGUAGE_DETECTION_STORAGE_KEY]!)).toMatchObject({
-    version: 3,
+    version: 4,
     nativeLanguage: "zh",
     preferredTranslationLanguage: "en",
   });
@@ -842,7 +924,17 @@ test("language detection: reorders detectors and toggles enable state while pres
 
 test("language detection: the grip reorders detectors with the arrow keys and keeps the focus", async () => {
   // A Linux host delivers raw keys to the focused view, as a desktop does.
-  const app = await open(APP_ENTRY, { ...viewport, platform: "linux" });
+  const app = await open(APP_ENTRY, {
+    ...viewport,
+    platform: "linux",
+    storage: {
+      "settings.language": "en",
+      [LANGUAGE_DETECTION_STORAGE_KEY]: detectionRecord({
+        order: ["ai", "google"],
+        enabled: { ai: false, google: true },
+      }),
+    },
+  });
   await app.press("id:nav-settings");
   await app.press("id:settings-nav-language-detection");
   await app.waitFor("id:settings-detection-card");
@@ -900,21 +992,51 @@ test("language detection: keeps previous order and enabled state on a failed lis
     "ai",
     "google-cloud",
   ]);
+
+  // A failed add write surfaces an error and stays on the list without opening detail.
+  const failingAdd = await open(APP_ENTRY, {
+    ...viewport,
+    storage: { "settings.language": "en" },
+    modules: {
+      nsh: {
+        "Storage.setItem": async (key: string) => {
+          if (key === LANGUAGE_DETECTION_STORAGE_KEY) throw new Error("Simulated write failure");
+        },
+      },
+    },
+  });
+  await failingAdd.press("id:nav-settings");
+  await failingAdd.press("id:settings-nav-language-detection");
+  await failingAdd.waitFor("id:settings-detection-add");
+  await failingAdd.press("id:settings-detection-add");
+  await failingAdd.waitFor("id:settings-detection-add-dialog");
+  await failingAdd.press("id:settings-detection-option-ai");
+  await failingAdd.waitUntil(() => !failingAdd.shows("id:settings-detection-add-dialog"));
+  await failingAdd.waitFor("id:settings-detection-list-error");
+  expect(failingAdd.shows("id:settings-detection-detail-card")).toBe(false);
+  expect(failingAdd.shows("id:settings-detection-card")).toBe(false);
+  expect(failingAdd.storage()[LANGUAGE_DETECTION_STORAGE_KEY]).toBeUndefined();
 });
 
 test("language detection: localizes detector labels and preference help in both languages", async () => {
   const app = await open(APP_ENTRY, { ...viewport, storage: { "settings.language": "en" } });
   await app.press("id:nav-settings");
   await app.press("id:settings-nav-language-detection");
-  await app.waitFor("id:settings-detection-card");
+  await app.waitFor("id:settings-detection-add");
   expect(app.texts()).toContain("Language Detection");
-  expect(app.texts()).toContain("AI");
-  expect(app.texts()).toContain("Google");
-  expect(app.texts()).toContain("Not configured");
-  expect(app.texts()).toContain("Free Google Translate endpoint");
+  expect(app.texts()).toContain("Add Channel");
   expect(app.texts()).toContain("Automatic detection preferences");
   expect(app.texts()).toContain("Native language");
   expect(app.texts()).toContain("Target language");
+
+  await app.press("id:settings-detection-add");
+  await app.waitFor("id:settings-detection-add-dialog");
+  expect(app.texts()).toContain("AI");
+  expect(app.texts()).toContain("Google");
+  expect(app.texts()).toContain("Google Cloud");
+  await app.press("id:settings-detection-option-google");
+  await app.waitUntil(() => !app.shows("id:settings-detection-add-dialog"));
+  expect(app.texts()).toContain("Free Google Translate endpoint");
 
   expect(app.texts()).not.toContain(LANGUAGE_DETECTION_HELP.en.native);
   await app.hover("id:settings-detection-native-language-label");
@@ -927,7 +1049,7 @@ test("language detection: localizes detector labels and preference help in both 
   await app.press("id:settings-nav-language-detection");
   await app.waitFor("id:settings-detection-card");
   expect(app.texts()).toContain("语言检测");
-  expect(app.texts()).toContain("未配置");
+  expect(app.texts()).toContain("添加渠道");
   expect(app.texts()).toContain("免费的 Google 翻译接口");
   expect(app.texts()).toContain("自动检测语言偏好");
   expect(app.texts()).toContain("母语");

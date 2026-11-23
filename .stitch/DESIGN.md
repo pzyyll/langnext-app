@@ -131,3 +131,16 @@ Recorded before editing the Presets and Quick Translate TSX. Every entry reuses 
 | Option and action hover or press; rail selection; enabled switch     | `motion.pressScale`, `motion.navigationFeedback`, and `motion.switchThumb` from the existing controls. Reduced motion removes transitions and scale; focus stays visible.                           |
 | Draft and saved editor, key placeholder, validation, save and delete | Existing editor swap, field feedback, and save toast (`motion.toastTransition`, `motion.toastStack`). Form layout and errors do not animate. Reduced motion removes toast movement.                 |
 | Card picker and translation result                                   | Existing Select popup transition and loading/result states. Loading is replaced by the complete result or inline error. No streaming, progress animation, gesture, sound, or new layout transition. |
+
+### Language Detection channels
+
+Recorded before editing the Language Detection TSX. Every entry reuses an existing token from `components/motion.ts` or native row drag timing; the change adds no decorative motion.
+
+| State change                                                      | Tool and reduced motion                                                                                                                                                         |
+| ----------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| List and detail entrance                                          | Existing `motion.pageEnter` (`opacity: [0, 1]`, 200ms easeOut). Instant with reduced motion.                                                                                    |
+| Ghost add button, row press, remove button, chevron, picker cards | Existing `motion.pressScale` (0.95 active scale, 150ms easeOut) and `motion.navigationFeedback` (color wash, 150ms easeOut). Reduced motion removes scale and transitions.      |
+| Add channel dialog and remove confirmation dialog                 | Existing `AppDialog` with `motion.dialogAnimation` (`"fade"`). Instant with reduced motion; focus moves into the dialog on open and returns to the trigger or new row on close. |
+| Channel added or removed in list                                  | Immediate insertion or removal in `DetectionChannelList` without extra row entrance animation; focus moves to the added control or next logical target.                         |
+| Enable switch and drag reorder (2+ channels)                      | Existing `motion.switchThumb` (150ms easeOut) and `REORDER_SETTLE_MS` (180ms easeOut) pan settle. Reduced motion sets values immediately.                                       |
+| Detail validation, save confirmation                              | Inline error and save toast (`motion.toastTransition`, `motion.toastStack`). Reduced motion removes toast movement.                                                             |

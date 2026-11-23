@@ -3,10 +3,10 @@ import { t } from "nsh/i18n";
 import { createLogger } from "../../services/log";
 import { isLanguageId, type LanguageId } from "../presets/languages";
 
-export const LANGUAGE_DETECTION_STORAGE_KEY = "settings.languageDetection.v3";
+export const LANGUAGE_DETECTION_STORAGE_KEY = "settings.languageDetection.v4";
 export const LANGUAGE_GOOGLE_CLOUD_CREDENTIAL_KEY_PREFIX =
   "settings.languageDetection.googleCloud.";
-const STORAGE_VERSION = 3;
+const STORAGE_VERSION = 4;
 
 const log = createLogger("language-detection/settings");
 
@@ -90,7 +90,7 @@ interface LanguageDetectionSavedSettings {
 }
 
 const EMPTY_SETTINGS: LanguageDetectionSavedSettings = {
-  order: [...LANGUAGE_DETECTOR_KINDS],
+  order: [],
   enabled: { ai: false, google: false, "google-cloud": false },
   ai: null,
   googleCloud: null,
@@ -100,8 +100,10 @@ const EMPTY_SETTINGS: LanguageDetectionSavedSettings = {
 
 export interface LanguageDetectionSettingsStore {
   load(): Promise<void>;
-  /** Detectors in top-to-bottom priority order. */
+  /** Added detectors in top-to-bottom priority order. */
   detectorOrder(): readonly LanguageDetectorKind[];
+  /** Detectors not yet added to the priority list, in catalog order. */
+  availableDetectors(): readonly LanguageDetectorKind[];
   /** Whether one detector is enabled. */
   isEnabled(kind: LanguageDetectorKind): boolean;
   /** The saved AI configuration, independent of enabled state. */
@@ -115,6 +117,10 @@ export interface LanguageDetectionSettingsStore {
   /** The saved Automatic-target language preferences. */
   preferences(): LanguageDetectionPreferences;
   loadError(): LanguageDetectionLoadError | null;
+  /** Adds a detector to the list. The free Google detector enables right away. */
+  addDetector(kind: LanguageDetectorKind): Promise<LanguageDetectionActionResult>;
+  /** Removes a detector from the list and clears any saved binding or credential. */
+  removeDetector(kind: LanguageDetectorKind): Promise<LanguageDetectionActionResult>;
   saveAiModel(modelId: string): Promise<LanguageDetectionSaveResult>;
   /** Saves a Google Cloud API key; `null` reuses the saved readable key. */
   saveGoogleCloudKey(apiKey: string | null): Promise<LanguageGoogleCloudSaveResult>;
@@ -210,6 +216,13 @@ function copiedWith(
   return copySettings({ ...settings, ...patch });
 }
 
+function ensureInOrder(
+  order: readonly LanguageDetectorKind[],
+  kind: LanguageDetectorKind,
+): LanguageDetectorKind[] {
+  return order.includes(kind) ? [...order] : [...order, kind];
+}
+
 /** A missing or null entry means "not saved"; `undefined` means the entry is malformed. */
 function parseAiBinding(value: unknown): LanguageAiBinding | null | undefined {
   if (value === null || value === undefined) return null;
@@ -227,7 +240,7 @@ function parseGoogleCloudBinding(value: unknown): LanguageGoogleCloudBinding | n
 }
 
 function parseOrder(value: unknown): LanguageDetectorKind[] | null {
-  if (!Array.isArray(value) || value.length !== LANGUAGE_DETECTOR_KINDS.length) return null;
+  if (!Array.isArray(value) || value.length > LANGUAGE_DETECTOR_KINDS.length) return null;
   const seen = new Set<LanguageDetectorKind>();
   const order: LanguageDetectorKind[] = [];
   for (const item of value) {
@@ -235,7 +248,7 @@ function parseOrder(value: unknown): LanguageDetectorKind[] | null {
     seen.add(item);
     order.push(item);
   }
-  return seen.size === LANGUAGE_DETECTOR_KINDS.length ? order : null;
+  return order;
 }
 
 function parseEnabledMap(value: unknown): Record<LanguageDetectorKind, boolean> | null {
@@ -284,6 +297,17 @@ function parseStoredSettings(raw: string): ParsedStorage {
     return { ok: false, key: "storage_malformed" };
   }
   if ((enabled.ai && ai === null) || (enabled["google-cloud"] && googleCloud === null)) {
+    return { ok: false, key: "storage_malformed" };
+  }
+  for (const kind of LANGUAGE_DETECTOR_KINDS) {
+    if (enabled[kind] && !order.includes(kind)) {
+      return { ok: false, key: "storage_malformed" };
+    }
+  }
+  if (
+    (ai !== null && !order.includes("ai")) ||
+    (googleCloud !== null && !order.includes("google-cloud"))
+  ) {
     return { ok: false, key: "storage_malformed" };
   }
 
@@ -423,6 +447,10 @@ export function createLanguageDetectionSettingsStore(
       loadErrorSignal.set(null);
     },
     detectorOrder: () => [...settingsSignal().order],
+    availableDetectors: () => {
+      const added = new Set(settingsSignal().order);
+      return LANGUAGE_DETECTOR_KINDS.filter((kind) => !added.has(kind));
+    },
     isEnabled: (kind) => settingsSignal().enabled[kind],
     savedAiBinding: () => {
       const ai = settingsSignal().ai;
@@ -450,12 +478,42 @@ export function createLanguageDetectionSettingsStore(
     },
     loadError: () => loadErrorSignal(),
     readGoogleCloudCredential: (credentialRef) => readStoredGoogleCloudKey(credentialRef),
+    addDetector: async (kind) =>
+      enqueueWrite(async () => {
+        const current = settingsSignal();
+        if (current.order.includes(kind)) return { ok: true };
+        return persistSnapshot(
+          copiedWith(current, {
+            order: ensureInOrder(current.order, kind),
+            enabled: kind === "google" ? { ...current.enabled, google: true } : current.enabled,
+          }),
+        );
+      }),
+    removeDetector: async (kind) =>
+      enqueueWrite(async () => {
+        const current = settingsSignal();
+        if (!current.order.includes(kind)) return { ok: true };
+        const previousGoogleCloud = kind === "google-cloud" ? current.googleCloud : null;
+        const written = await persistSnapshot(
+          copiedWith(current, {
+            order: current.order.filter((item) => item !== kind),
+            enabled: { ...current.enabled, [kind]: false },
+            ai: kind === "ai" ? null : current.ai,
+            googleCloud: kind === "google-cloud" ? null : current.googleCloud,
+          }),
+        );
+        if (written.ok && previousGoogleCloud !== null) {
+          await removeCredentialQuietly(previousGoogleCloud.credentialRef);
+        }
+        return written;
+      }),
     saveAiModel: async (modelId) => {
       if (!isNonblankModelId(modelId)) return failure("model_id_blank");
       return enqueueWrite(async () => {
         const current = settingsSignal();
         const written = await persistSnapshot(
           copiedWith(current, {
+            order: ensureInOrder(current.order, "ai"),
             enabled: { ...current.enabled, ai: current.ai === null ? true : current.enabled.ai },
             ai: { kind: "ai", modelId },
           }),
@@ -470,12 +528,15 @@ export function createLanguageDetectionSettingsStore(
       return enqueueWrite(async () => {
         const current = settingsSignal();
         const saved = current.googleCloud;
+        const nextOrder = ensureInOrder(current.order, "google-cloud");
 
         if (trimmed === null) {
           if (saved === null) return failure("google_cloud_key_required");
           const stored = await readStoredGoogleCloudKey(saved.credentialRef);
           if (stored === null) return failure("google_cloud_key_required");
-          const written = await persistSnapshot(copiedWith(current, { googleCloud: saved }));
+          const written = await persistSnapshot(
+            copiedWith(current, { order: nextOrder, googleCloud: saved }),
+          );
           return written.ok ? { ok: true, binding: { ...saved } } : written;
         }
 
@@ -488,6 +549,7 @@ export function createLanguageDetectionSettingsStore(
         }
         const written = await persistSnapshot(
           copiedWith(current, {
+            order: nextOrder,
             enabled: {
               ...current.enabled,
               "google-cloud": saved === null ? true : current.enabled["google-cloud"],
@@ -506,7 +568,7 @@ export function createLanguageDetectionSettingsStore(
     setEnabled: async (kind, nextEnabled) =>
       enqueueWrite(async () => {
         const current = settingsSignal();
-        if (nextEnabled && !isConfiguredIn(current, kind)) {
+        if (nextEnabled && (!current.order.includes(kind) || !isConfiguredIn(current, kind))) {
           return failure("detector_unconfigured");
         }
         if (current.enabled[kind] === nextEnabled) return { ok: true };

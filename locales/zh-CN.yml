@@ -254,6 +254,7 @@ settings:
         yue-HK: 粤语
   languageDetection:
     title: 语言检测
+    addChannel: 添加渠道
     ai: AI
     google: Google
     googleSummary: 免费的 Google 翻译接口
@@ -269,6 +270,10 @@ settings:
     configureBeforeEnable: 请先配置此检测器再启用。
     configureLabel: 配置 %{name}
     enableLabel: 启用 %{name}
+    removeLabel: 移除 %{name}
+    removeTitle: 移除渠道
+    removeDescription: 移除渠道“%{name}”并清除已保存的配置？
+    removeConfirm: 移除
     reorder: 调整「%{name}」的顺序
     reorderHint: 拖动，或按上下方向键。
     moveUp: 上移 %{name}
