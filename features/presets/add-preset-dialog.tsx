@@ -41,7 +41,7 @@ export function AddPresetDialog(props: AddPresetDialogProps) {
         />
       }
     >
-      <View class="flex-col gap-3">
+      <View class="grid grid-cols-2 gap-3">
         <Button
           testID="preset-type-ai"
           ref={(node) => {
