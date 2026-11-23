@@ -490,13 +490,14 @@ export async function renameChannel(id: string, nextName: string): Promise<Provi
   });
 }
 
-export async function moveChannel(id: string, direction: "up" | "down"): Promise<void> {
+/** Moves a channel to a slot of the current order and persists that order. */
+export async function moveChannelTo(id: string, target: number): Promise<void> {
   return withWriteLock(async () => {
     const list = sortChannels(channelsSignal());
     const index = list.findIndex((ch) => ch.id === id);
     if (index === -1) return;
-    const targetIndex = direction === "up" ? index - 1 : index + 1;
-    if (targetIndex < 0 || targetIndex >= list.length) return;
+    const targetIndex = Math.min(Math.max(target, 0), list.length - 1);
+    if (targetIndex === index) return;
 
     const reordered = [...list];
     const [moved] = reordered.splice(index, 1);

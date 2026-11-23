@@ -211,9 +211,14 @@ test("reorders channels and deletes a channel with its models and credentials", 
   await app.press("id:channel-item-ch-claude");
   expect(app.texts()).toContain("Claude Team");
 
-  await app.press("label:Move Claude Team up");
+  // Dragging the second channel above the first persists the new order.
+  await app.drag("id:channel-row-ch-claude", { x: 0, y: -80 });
+  await app.waitUntil(
+    () =>
+      (JSON.parse(app.storage()[PROVIDERS_STORAGE_KEY]!) as ProviderChannel[])[0]!.id ===
+      "ch-claude",
+  );
   const reordered = JSON.parse(app.storage()[PROVIDERS_STORAGE_KEY]!) as ProviderChannel[];
-  expect(reordered[0]!.id).toBe("ch-claude");
   expect(reordered[1]!.id).toBe("ch-openai");
 
   await app.press("id:delete-channel-button");
@@ -225,6 +230,55 @@ test("reorders channels and deletes a channel with its models and credentials", 
   expect(remaining).toHaveLength(1);
   expect(remaining[0]!.id).toBe("ch-openai");
   expect(app.storage()[credentialStorageKey("ch-claude")]).toBeUndefined();
+});
+
+test("reorders channels with the grip arrow keys and keeps the focus", async () => {
+  // A Linux host delivers raw keys to the focused view, as a desktop does.
+  const app = await open(APP_ENTRY, {
+    ...viewport,
+    platform: "linux",
+    storage: seededStorage(),
+  });
+
+  await app.press("id:channel-grip-ch-claude");
+  await app.keyboard.press("arrowup");
+  await app.waitUntil(
+    () =>
+      (JSON.parse(app.storage()[PROVIDERS_STORAGE_KEY]!) as ProviderChannel[])[0]!.id ===
+      "ch-claude",
+  );
+
+  // The grip keeps the focus across the reorder, so the next key moves it back.
+  await app.keyboard.press("arrowdown");
+  await app.waitUntil(
+    () =>
+      (JSON.parse(app.storage()[PROVIDERS_STORAGE_KEY]!) as ProviderChannel[])[0]!.id ===
+      "ch-openai",
+  );
+});
+
+test("keeps the previous channel order when the reorder write fails", async () => {
+  const failing = await open(APP_ENTRY, {
+    ...viewport,
+    platform: "linux",
+    storage: seededStorage(),
+    modules: {
+      nsh: {
+        "Storage.setItem": async (key: string) => {
+          if (key === PROVIDERS_STORAGE_KEY) throw new Error("Simulated write failure");
+        },
+      },
+    },
+  });
+  await failing.waitFor("id:channel-item-ch-claude");
+
+  await failing.press("id:channel-grip-ch-claude");
+  await failing.keyboard.press("arrowup");
+  await failing.waitFor("id:channels-reorder-error");
+
+  const stored = JSON.parse(failing.storage()[PROVIDERS_STORAGE_KEY]!) as ProviderChannel[];
+  expect(stored[0]!.id).toBe("ch-openai");
+  expect(stored[1]!.id).toBe("ch-claude");
 });
 
 test("tests connection and syncs remote models while preserving overrides and manual entries", async () => {

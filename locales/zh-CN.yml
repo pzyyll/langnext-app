@@ -341,6 +341,9 @@ models:
     empty: 尚未配置渠道
     loading: 加载中…
     itemLabel: "%{name}（%{provider}，%{status}）"
+    reorder: 调整「%{name}」的顺序
+    reorderHint: 拖动，或按上下方向键。
+    reorderFailed: 无法调整渠道顺序
     moveUp: 上移 %{name}
     moveDown: 下移 %{name}
     resizeLabel: 调整渠道栏宽度

@@ -1,8 +1,19 @@
-import { Scroll, Text, View, type ViewRef } from "nsh";
+import {
+  createAnimatedValue,
+  reduceMotion,
+  Scroll,
+  signal,
+  Text,
+  View,
+  type AnimatedValue,
+  type KeyEvent,
+  type PanEvent,
+  type ViewRef,
+} from "nsh";
 import { t } from "nsh/i18n";
 import { motion } from "../../components/motion";
 import { Badge } from "../../components/ui/badge";
-import { Button } from "../../components/ui/button";
+import { Button, KeyboardButton } from "../../components/ui/button";
 import { Icon } from "../../components/ui/icon";
 import { getProviderTypeLabel } from "../../modules/ai/ui/labels";
 import { ProviderMark } from "../../modules/ai/ui/provider-mark";
@@ -15,17 +26,153 @@ interface ChannelsRailProps {
   loading: boolean;
   error: string | null;
   onSelect: (id: string) => void;
-  onMove: (id: string, direction: "up" | "down") => void;
+  onMoveTo: (id: string, targetIndex: number) => Promise<void>;
   onAdd: () => void;
   onRetry: () => void;
   addButtonRef?: (node: ViewRef) => void;
   onChannelItemRef?: (id: string, node: ViewRef) => void;
 }
 
-/** Left master list of configured provider channels with selection and reordering. */
+/** Time a reordered row takes to settle into its new slot. */
+const REORDER_SETTLE_MS = 180;
+
+/** Left master list of configured provider channels with selection and drag reordering. */
 export function ChannelsRail(props: ChannelsRailProps) {
   const providerLabel = (presetId: string) => getProviderTypeLabel(presetId) ?? presetId;
   const providerMark = (presetId: string) => providerSettingsRegistry.find(presetId);
+
+  const mutating = signal(false);
+  const animating = signal(false);
+  const dragging = signal<string | null>(null);
+  const listError = signal<string | null>(null);
+  // Per-channel drag offsets drive the rows natively; they return to 0 at rest.
+  const offsets = new Map<string, AnimatedValue>();
+  const rowSlots = new Map<string, { top: number; height: number }>();
+  const gripNodes = new Map<string, ViewRef>();
+
+  const order = () => props.channels.map((channel) => channel.id);
+
+  const offsetOf = (id: string): AnimatedValue => {
+    const existing = offsets.get(id);
+    if (existing !== undefined) return existing;
+    const created = createAnimatedValue(0);
+    offsets.set(id, created);
+    return created;
+  };
+
+  const animateOffset = (id: string, to: number): Promise<unknown> => {
+    if (reduceMotion()) {
+      offsetOf(id).set(to);
+      return Promise.resolve();
+    }
+    return offsetOf(id).timing(to, { duration: REORDER_SETTLE_MS, easing: "easeOut" });
+  };
+
+  const resetOffsets = () => {
+    for (const offset of offsets.values()) offset.set(0);
+  };
+
+  const reportMoveError = (error: unknown) => {
+    listError.set(error instanceof Error ? error.message : t("models.channels.reorderFailed"));
+  };
+
+  const handleDragStart = (id: string) => {
+    if (mutating() || animating() || dragging() !== null) return;
+    listError.set(null);
+    dragging.set(id);
+  };
+
+  /** The channel whose measured slot center is nearest the dragged row's center. */
+  const nearestSlot = (id: string, offsetY: number): number | null => {
+    const slot = rowSlots.get(id);
+    if (slot === undefined) return null;
+    const center = slot.top + slot.height / 2 + offsetY;
+    let target: number | null = null;
+    let nearest = Number.POSITIVE_INFINITY;
+    order().forEach((other, position) => {
+      const otherSlot = rowSlots.get(other);
+      if (otherSlot === undefined) return;
+      const distance = Math.abs(otherSlot.top + otherSlot.height / 2 - center);
+      if (distance < nearest) {
+        nearest = distance;
+        target = position;
+      }
+    });
+    return target;
+  };
+
+  /** Slides every row into the slot the reordered list gives it, and returns that list. */
+  const settleIntoSlots = async (id: string, target: number) => {
+    const list = order();
+    const nextOrder = [...list];
+    nextOrder.splice(list.indexOf(id), 1);
+    nextOrder.splice(target, 0, id);
+    const moves: Promise<unknown>[] = [];
+    nextOrder.forEach((row, position) => {
+      const from = rowSlots.get(row);
+      const to = rowSlots.get(list[position]!);
+      if (from === undefined || to === undefined || from.top === to.top) return;
+      moves.push(animateOffset(row, to.top - from.top));
+    });
+    await Promise.all(moves);
+    return nextOrder;
+  };
+
+  const handleDragEnd = async (id: string, event: PanEvent) => {
+    if (dragging() !== id) {
+      await animateOffset(id, 0);
+      return;
+    }
+    animating.set(true);
+    try {
+      const index = order().indexOf(id);
+      const target = nearestSlot(id, event.value?.y ?? event.translation.y);
+      if (event.cancelled || index === -1 || target === null || target === index) {
+        await animateOffset(id, 0);
+        return;
+      }
+      const nextOrder = await settleIntoSlots(id, target);
+      try {
+        await props.onMoveTo(id, target);
+      } catch (error) {
+        await Promise.all(nextOrder.map((row) => animateOffset(row, 0)));
+        reportMoveError(error);
+        return;
+      }
+      resetOffsets();
+    } finally {
+      dragging.set(null);
+      animating.set(false);
+    }
+  };
+
+  const handleMoveBy = async (id: string, delta: number, refocus: boolean) => {
+    if (mutating() || animating() || dragging() !== null) return;
+    const list = order();
+    const index = list.indexOf(id);
+    const target = index + delta;
+    if (index === -1 || target < 0 || target >= list.length) return;
+    listError.set(null);
+    mutating.set(true);
+    try {
+      await props.onMoveTo(id, target);
+      if (refocus) queueMicrotask(() => gripNodes.get(id)?.focus());
+    } catch (error) {
+      reportMoveError(error);
+    } finally {
+      mutating.set(false);
+    }
+  };
+
+  const handleGripKey = (id: string, event: KeyEvent) => {
+    if (event.key === "ArrowUp") void handleMoveBy(id, -1, true);
+    else if (event.key === "ArrowDown") void handleMoveBy(id, 1, true);
+  };
+
+  const handleAccessibilityMove = (id: string, actionName: string) => {
+    if (actionName === "moveUp") void handleMoveBy(id, -1, false);
+    else if (actionName === "moveDown") void handleMoveBy(id, 1, false);
+  };
 
   return (
     <View testID="channels-rail" class="min-w-0 flex-1 bg-background">
@@ -65,21 +212,34 @@ export function ChannelsRail(props: ChannelsRailProps) {
                 >
                   <View class="gap-1 px-2 pb-2">
                     <Each of={props.channels} key={(channel) => channel.id}>
-                      {(channel, index) => {
-                        const isSelected = () => props.selectedId === channel().id;
+                      {(channel) => {
+                        const id = () => channel().id;
+                        const isSelected = () => props.selectedId === id();
                         return (
                           <View
-                            class={`flex-row items-center gap-1 rounded-lg border pr-1 ${motion.navigationFeedback}`}
-                            classList={{
-                              "border-border bg-accent": isSelected(),
-                              "border-transparent hover:bg-accent/50 active:bg-accent":
-                                !isSelected(),
+                            testID={`channel-row-${id()}`}
+                            pan={mutating() || animating() ? undefined : { y: offsetOf(id()) }}
+                            onPanStart={() => handleDragStart(id())}
+                            onPanEnd={(event) => void handleDragEnd(id(), event)}
+                            onLayout={(event) => {
+                              rowSlots.set(id(), {
+                                top: event.bounds.origin.y,
+                                height: event.bounds.size.height,
+                              });
                             }}
+                            style={{ translate: [0, offsetOf(id())] }}
+                            class={`flex-row items-center gap-1 rounded-lg border pr-1 ${motion.navigationFeedback} ${
+                              dragging() === id()
+                                ? "z-10 cursor-grabbing border-border bg-accent shadow-md"
+                                : isSelected()
+                                  ? "border-border bg-accent"
+                                  : "border-transparent hover:bg-accent/50 active:bg-accent"
+                            }`}
                           >
                             <Button
-                              testID={`channel-item-${channel().id}`}
+                              testID={`channel-item-${id()}`}
                               ref={(node) => {
-                                props.onChannelItemRef?.(channel().id, node);
+                                props.onChannelItemRef?.(id(), node);
                               }}
                               variant="ghost"
                               size="row"
@@ -91,7 +251,7 @@ export function ChannelsRail(props: ChannelsRailProps) {
                                   ? t("models.channel.enabled")
                                   : t("models.filter.disabled"),
                               })}
-                              onPress={() => props.onSelect(channel().id)}
+                              onPress={() => props.onSelect(id())}
                               class="min-w-0 flex-1 hover:bg-transparent active:bg-transparent"
                             >
                               <View class="w-4 shrink-0 items-center justify-center">
@@ -140,44 +300,61 @@ export function ChannelsRail(props: ChannelsRailProps) {
                               </View>
                             </Button>
 
-                            <If when={isSelected() && props.channels.length > 1}>
-                              <View class="shrink-0 flex-row items-center gap-0.5">
-                                <Button
-                                  size="icon-sm"
-                                  variant="ghost"
-                                  tooltip={t("models.channels.moveUp", {
-                                    name: channel().displayName,
-                                  })}
-                                  accessibilityLabel={t("models.channels.moveUp", {
-                                    name: channel().displayName,
-                                  })}
-                                  disabled={index() === 0}
-                                  onPress={() => props.onMove(channel().id, "up")}
-                                  class="size-6"
-                                >
-                                  <Icon name="arrow-up" tone="muted-foreground" class="size-3" />
-                                </Button>
-                                <Button
-                                  size="icon-sm"
-                                  variant="ghost"
-                                  tooltip={t("models.channels.moveDown", {
-                                    name: channel().displayName,
-                                  })}
-                                  accessibilityLabel={t("models.channels.moveDown", {
-                                    name: channel().displayName,
-                                  })}
-                                  disabled={index() === props.channels.length - 1}
-                                  onPress={() => props.onMove(channel().id, "down")}
-                                  class="size-6"
-                                >
-                                  <Icon name="arrow-down" tone="muted-foreground" class="size-3" />
-                                </Button>
-                              </View>
+                            <If when={props.channels.length > 1}>
+                              <KeyboardButton
+                                testID={`channel-grip-${id()}`}
+                                variant="ghost"
+                                size="icon-xs"
+                                focusable={true}
+                                tooltip={t("models.channels.reorder", {
+                                  name: channel().displayName,
+                                })}
+                                accessibilityLabel={t("models.channels.reorder", {
+                                  name: channel().displayName,
+                                })}
+                                accessibilityHint={t("models.channels.reorderHint")}
+                                accessibilityActions={[
+                                  {
+                                    name: "moveUp",
+                                    label: t("models.channels.moveUp", {
+                                      name: channel().displayName,
+                                    }),
+                                  },
+                                  {
+                                    name: "moveDown",
+                                    label: t("models.channels.moveDown", {
+                                      name: channel().displayName,
+                                    }),
+                                  },
+                                ]}
+                                onAccessibilityAction={(event) =>
+                                  handleAccessibilityMove(id(), event.actionName)
+                                }
+                                onPress={() => gripNodes.get(id())?.focus()}
+                                captureKeys={["arrowup", "arrowdown"]}
+                                onKeyDown={(event) => handleGripKey(id(), event)}
+                                ref={(node) => {
+                                  gripNodes.set(id(), node);
+                                }}
+                                class="shrink-0 cursor-grab"
+                              >
+                                <Icon name="grip-vertical" tone="muted-foreground" class="size-4" />
+                              </KeyboardButton>
                             </If>
                           </View>
                         );
                       }}
                     </Each>
+
+                    <If when={listError() !== null}>
+                      <Text
+                        testID="channels-reorder-error"
+                        role="alert"
+                        class="pt-1 text-xs text-destructive"
+                      >
+                        {listError()}
+                      </Text>
+                    </If>
                   </View>
                 </If>
               }

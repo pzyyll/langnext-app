@@ -341,6 +341,9 @@ models:
     empty: No channels configured
     loading: Loading…
     itemLabel: "%{name} (%{provider}, %{status})"
+    reorder: Reorder %{name}
+    reorderHint: Drag, or press the up and down arrow keys.
+    reorderFailed: Could not reorder channels
     moveUp: Move %{name} up
     moveDown: Move %{name} down
     resizeLabel: Resize channels panel

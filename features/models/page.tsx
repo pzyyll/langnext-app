@@ -13,7 +13,7 @@ import { ChannelEditor } from "./editor/channel-editor";
 import {
   loadModelsState,
   modelsStore,
-  moveChannel,
+  moveChannelTo,
   selectChannel,
   setEnabledFilter,
 } from "./store";
@@ -139,7 +139,7 @@ export function ModelsPage(props: ModelsPageProps) {
             loading={modelsStore.channelsLoading()}
             error={modelsStore.channelsError()}
             onSelect={handleSelectChannel}
-            onMove={(id, dir) => void moveChannel(id, dir)}
+            onMoveTo={(id, targetIndex) => moveChannelTo(id, targetIndex)}
             onAdd={() => handleOpenAddChannel("rail")}
             onRetry={() => void loadModelsState()}
             addButtonRef={(node) => {
