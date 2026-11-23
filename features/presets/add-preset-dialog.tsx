@@ -1,8 +1,9 @@
-import { setAccessibilityFocus, Text, View, type ViewRef } from "nsh";
+import { Image, setAccessibilityFocus, Text, View, type ViewRef } from "nsh";
 import { t } from "nsh/i18n";
 import { Button } from "../../components/ui/button";
 import { AppDialog } from "../../components/ui/dialog";
 import { Icon } from "../../components/ui/icon";
+import googleCloudIcon from "../../assets/icons/google-cloud.svg";
 import type { PresetEngine } from "./types";
 
 interface AddPresetDialogProps {
@@ -40,7 +41,7 @@ export function AddPresetDialog(props: AddPresetDialogProps) {
         />
       }
     >
-      <View class="grid grid-cols-2 gap-3">
+      <View class="flex-col gap-3">
         <Button
           testID="preset-type-ai"
           ref={(node) => {
@@ -68,6 +69,23 @@ export function AddPresetDialog(props: AddPresetDialogProps) {
           <Icon name="deepl" tone="foreground" class="size-4" />
           <Text class="min-w-0 flex-1 truncate text-sm font-medium text-foreground">
             {t("presets.engine.deepl")}
+          </Text>
+        </Button>
+        <Button
+          testID="preset-type-google-cloud"
+          variant="outline"
+          size="card"
+          accessibilityLabel={t("presets.engine.googleCloud")}
+          onPress={() => props.onSelect("google-cloud")}
+          class="w-full"
+        >
+          <Image
+            src={googleCloudIcon}
+            accessibilityElementsHidden={true}
+            class="size-4 overflow-hidden"
+          />
+          <Text class="min-w-0 flex-1 truncate text-sm font-medium text-foreground">
+            {t("presets.engine.googleCloud")}
           </Text>
         </Button>
       </View>

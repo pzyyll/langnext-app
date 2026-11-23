@@ -75,6 +75,7 @@ export function PresetsPage(props: PresetsPageProps) {
 
   let nameInputRef: InputRef | null = null;
   let deeplKeyInputRef: InputRef | null = null;
+  let googleCloudKeyInputRef: InputRef | null = null;
   let primaryModelRef: ViewRef | null = null;
   const fallbackRefs = new Map<number, ViewRef>();
   let temperatureInputRef: InputRef | null = null;
@@ -127,6 +128,9 @@ export function PresetsPage(props: PresetsPageProps) {
           break;
         case "deeplKey":
           focusNode(deeplKeyInputRef);
+          break;
+        case "googleCloudKey":
+          focusNode(googleCloudKeyInputRef);
           break;
         case "template":
           focusNode(templateFieldRefs.get(target.templateId)?.[target.field]);
@@ -189,6 +193,13 @@ export function PresetsPage(props: PresetsPageProps) {
   };
   const modelChoices = () => readAvailableModelChoices();
   const modelsError = () => modelsStore.channelsError();
+  const draftEngineSummary = () => {
+    const draft = draftSignal();
+    if (!draft) return "";
+    if (draft.engineKind === "deepl") return t("presets.engine.deepl");
+    if (draft.engineKind === "google-cloud") return t("presets.engine.googleCloud");
+    return summarizePresetModels(draft.primaryModelId ? [draft.primaryModelId] : []);
+  };
 
   const clearErrors = () => {
     errorMessageSignal.set(null);
@@ -221,6 +232,10 @@ export function PresetsPage(props: PresetsPageProps) {
     }
     if (field === "deeplKey") {
       queueMicrotask(() => deeplKeyInputRef?.focus());
+      return;
+    }
+    if (field === "googleCloudKey") {
+      queueMicrotask(() => googleCloudKeyInputRef?.focus());
       return;
     }
     if (
@@ -554,13 +569,7 @@ export function PresetsPage(props: PresetsPageProps) {
                                   <Badge tone="warning" label={t("presets.editor.unsaved")} />
                                 </View>
                                 <Text class="truncate text-xs text-muted-foreground">
-                                  {draftSignal()?.engineKind === "deepl"
-                                    ? t("presets.engine.deepl")
-                                    : summarizePresetModels(
-                                        draftSignal()?.primaryModelId
-                                          ? [draftSignal()!.primaryModelId!]
-                                          : [],
-                                      )}
+                                  {draftEngineSummary()}
                                 </Text>
                               </View>
                             </View>
@@ -743,6 +752,9 @@ export function PresetsPage(props: PresetsPageProps) {
                   }}
                   onDeepLKeyRef={(node) => {
                     deeplKeyInputRef = node;
+                  }}
+                  onGoogleCloudKeyRef={(node) => {
+                    googleCloudKeyInputRef = node;
                   }}
                   onPrimaryModelRef={(node) => {
                     primaryModelRef = node;

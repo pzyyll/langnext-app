@@ -511,6 +511,9 @@ presets:
     engineTypeLocked: A saved preset keeps its engine type.
     deeplKeyRequired: Enter a DeepL API key.
     deeplKeyInvalid: Enter a DeepL API key without spaces.
+    googleCloudKeyRequired: Enter a Google Cloud API key.
+    googleCloudKeyInvalid: Enter a Google Cloud API key without spaces.
+    googleCloudKeyUnreadable: Could not read the Google Cloud API key. Add or replace it in Presets.
     primaryModelRequired: Select a primary model.
     modelUnavailable: Selected model is not available.
     modelDuplicate: Models in the primary and fallback chain must be unique.
@@ -560,6 +563,7 @@ presets:
   engine:
     ai: AI Translation
     deepl: DeepL API
+    googleCloud: Google Cloud Translation
   deepl:
     keyLabel: API key
     keyPlaceholder: Paste your DeepL API key
@@ -573,6 +577,11 @@ presets:
       characters: characters
       resets: Resets %{date}
       keyUsage: "Key: %{count} characters"
+  googleCloud:
+    keyLabel: API key
+    keyPlaceholder: Paste your Google Cloud API key
+    keyStored: A key is stored. Enter a new key to replace it.
+    storageNotice: The key is stored locally without encryption. Google Cloud usage may incur charges.
   language:
     autoTarget: Automatic
   languages:
@@ -745,3 +754,15 @@ deepl:
     server: DeepL is unavailable right now.
     invalidResponse: DeepL returned an unreadable response.
     unsupportedLanguage: DeepL does not support this language.
+googleCloud:
+  error:
+    missingKey: Add a Google Cloud Translation API key in Presets.
+    blankInput: Enter text to translate.
+    unsupportedLanguage: Google Cloud Translation does not support this language.
+    tooLarge: This text is too long for Google Cloud Translation.
+    auth: Google Cloud Translation rejected access. Check the API key, enabled API, billing, and quota.
+    rejected: Google Cloud Translation rejected the request.
+    rateLimited: Google Cloud Translation is rate limiting requests. Try again shortly.
+    quota: This Google Cloud Translation quota is used up.
+    server: Google Cloud Translation is unavailable right now.
+    invalidResponse: Google Cloud Translation returned an unreadable response.

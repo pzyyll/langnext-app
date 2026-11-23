@@ -37,6 +37,11 @@ export type FetchLike = (
 export interface CreateJsonHttpClientOptions {
   /** Replaces the global `fetch`; it is never called while constructing a client. */
   fetchImpl?: FetchLike;
+  /**
+   * Opt-in classifier for buffered non-2xx responses. The client reads the error body under the
+   * request deadline, then uses the returned error, or the default status mapping for null.
+   */
+  classifyErrorResponse?: (status: number, body: unknown) => ProviderProtocolError | null;
 }
 
 function cancelling(error: unknown): boolean {
@@ -89,6 +94,7 @@ async function requestJson(
   target: ResolvedRequestTarget,
   body: string | undefined,
   options: JsonHttpOptions,
+  classifyErrorResponse?: (status: number, body: unknown) => ProviderProtocolError | null,
 ): Promise<Record<string, unknown>> {
   const externalSignal = options.signal;
   const timeoutMs = options.timeoutMs ?? DEFAULT_HTTP_TIMEOUT_MS;
@@ -162,7 +168,36 @@ async function requestJson(
     }
 
     if (!response.ok) {
-      throw statusError(response.status);
+      // Only an opted-in caller reads the error body, so other clients keep the status mapping.
+      if (!classifyErrorResponse || typeof response.text !== "function") {
+        throw statusError(response.status);
+      }
+      let rawError: string;
+      try {
+        const textPromise = response.text();
+        textPromise.catch(() => {});
+        rawError = String(await Promise.race([textPromise, ...racePromises]));
+      } catch (error) {
+        if (timedOut || isTimeoutError(error)) {
+          throw new ProviderProtocolError("timeout", t("protocol.error.timeout"));
+        }
+        if (cancelling(error) || externalSignal?.aborted) {
+          throw new ProviderProtocolError("cancelled", t("protocol.error.cancelled"));
+        }
+        throw statusError(response.status);
+      }
+      if (externalSignal?.aborted) {
+        throw new ProviderProtocolError("cancelled", t("protocol.error.cancelled"));
+      }
+      let errorBody: unknown = null;
+      try {
+        errorBody = JSON.parse(rawError);
+      } catch {
+        errorBody = null;
+      }
+      const classified =
+        errorBody === null ? null : classifyErrorResponse(response.status, errorBody);
+      throw classified ?? statusError(response.status);
     }
 
     let parsed: unknown;
@@ -195,12 +230,19 @@ async function requestJson(
 export function createJsonHttpClient(options: CreateJsonHttpClientOptions = {}): JsonHttpClient {
   const fetchImpl: FetchLike = options.fetchImpl ?? ((url, init) => fetch(url, init));
   return {
-    getJson: (target, callOptions) => requestJson(fetchImpl, target, undefined, callOptions ?? {}),
+    getJson: (target, callOptions) =>
+      requestJson(fetchImpl, target, undefined, callOptions ?? {}, options.classifyErrorResponse),
     postJson: (target, body, callOptions) =>
-      requestJson(fetchImpl, target, JSON.stringify(body), {
-        ...callOptions,
-        redirect: callOptions?.redirect ?? "error",
-      }),
+      requestJson(
+        fetchImpl,
+        target,
+        JSON.stringify(body),
+        {
+          ...callOptions,
+          redirect: callOptions?.redirect ?? "error",
+        },
+        options.classifyErrorResponse,
+      ),
     postEventStream: (target, body, callOptions) =>
       requestEventStream(fetchImpl, target, JSON.stringify(body), {
         ...callOptions,

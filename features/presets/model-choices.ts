@@ -173,5 +173,8 @@ export function summarizePreset(preset: Pick<TranslationPreset, "engine">): stri
   if (preset.engine.kind === "deepl") {
     return t("presets.engine.deepl");
   }
+  if (preset.engine.kind === "google-cloud") {
+    return t("presets.engine.googleCloud");
+  }
   return summarizePresetModels(preset.engine.modelIds);
 }

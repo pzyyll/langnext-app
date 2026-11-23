@@ -19,6 +19,10 @@ export interface PresetDraft {
   deepLApiKey: string;
   /** True when the saved preset references a stored key; only a placeholder is shown. */
   deepLApiKeyStored: boolean;
+  /** Replacement or new Google Cloud key typed in the editor; empty keeps a stored key. */
+  googleCloudApiKey: string;
+  /** True when the saved preset references a stored key; only a placeholder is shown. */
+  googleCloudApiKeyStored: boolean;
 }
 
 /** Creates a blank new preset draft with one localized Default prompt template. */
@@ -45,6 +49,8 @@ export function createEmptyDraft(engineKind: PresetEngine["kind"] = "ai"): Prese
     defaultTemplateId,
     deepLApiKey: "",
     deepLApiKeyStored: false,
+    googleCloudApiKey: "",
+    googleCloudApiKeyStored: false,
   };
 }
 
@@ -65,6 +71,8 @@ export function createDraftFromPreset(preset: TranslationPreset): PresetDraft {
     defaultTemplateId: ai?.defaultTemplateId ?? "",
     deepLApiKey: "",
     deepLApiKeyStored: preset.engine.kind === "deepl",
+    googleCloudApiKey: "",
+    googleCloudApiKeyStored: preset.engine.kind === "google-cloud",
   };
 }
 
@@ -91,6 +99,8 @@ export function isDraftDirty(current: PresetDraft, baseline: PresetDraft): boole
     current.defaultTemplateId !== baseline.defaultTemplateId ||
     current.deepLApiKey !== baseline.deepLApiKey ||
     current.deepLApiKeyStored !== baseline.deepLApiKeyStored ||
+    current.googleCloudApiKey !== baseline.googleCloudApiKey ||
+    current.googleCloudApiKeyStored !== baseline.googleCloudApiKeyStored ||
     current.fallbackModelIds.length !== baseline.fallbackModelIds.length ||
     current.templates.length !== baseline.templates.length
   ) {
@@ -127,6 +137,15 @@ export function draftToSaveInput(draft: PresetDraft): SavePresetInput {
       name: draft.name,
       enabled: draft.enabled,
       engine: { kind: "deepl", apiKey: draft.deepLApiKey },
+    };
+  }
+
+  if (draft.engineKind === "google-cloud") {
+    return {
+      id: draft.sourceId,
+      name: draft.name,
+      enabled: draft.enabled,
+      engine: { kind: "google-cloud", apiKey: draft.googleCloudApiKey },
     };
   }
 

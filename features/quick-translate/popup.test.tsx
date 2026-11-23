@@ -5,7 +5,11 @@ import { LANGUAGE_DETECTION_STORAGE_KEY } from "../language-detection/settings";
 import { makeChannel, makeModel, makeSeedStorage } from "../models/__tests__/fixtures";
 import { credentialStorageKey, MODELS_STORAGE_KEY, PROVIDERS_STORAGE_KEY } from "../models/store";
 import { getLanguageLabel, getTargetLanguageLabel } from "../presets/languages";
-import { deepLCredentialStorageKey, PRESETS_STORAGE_KEY } from "../presets/store";
+import {
+  deepLCredentialStorageKey,
+  googleCloudCredentialStorageKey,
+  PRESETS_STORAGE_KEY,
+} from "../presets/store";
 import type { TranslationPreset } from "../presets/types";
 import { QUICK_TRANSLATE_PREFERENCES_KEY } from "./preferences";
 import { GOOGLE_CLOUD_TTS_URL } from "../tts/google-cloud";
@@ -2447,4 +2451,275 @@ test("quick tts: a Google preference change during synthesis drops the obsolete 
   expect(app.texts()).not.toContain("Could not play the audio. Try again.");
   const saved = JSON.parse(app.storage()[TTS_STORAGE_KEY]!).googleCloud.preferences;
   expect(saved.speakingRate).toBe(1.5);
+});
+
+const GOOGLE_TRANSLATE_URL = "POST https://translation.googleapis.com/language/translate/v2";
+const GOOGLE_KEY_REF = "google-ref-1";
+
+function makeGoogleCloudPreset(overrides: Partial<TranslationPreset> = {}): TranslationPreset {
+  return {
+    id: "preset-google",
+    name: "Google Card",
+    enabled: true,
+    createdAt: "2026-11-19T00:00:00.000Z",
+    updatedAt: "2026-11-19T00:00:00.000Z",
+    engine: { kind: "google-cloud", credentialRef: GOOGLE_KEY_REF },
+    ...overrides,
+  };
+}
+
+interface GoogleCardSeedOptions {
+  sourceLanguage?: "auto" | "en";
+  targetLanguage?: "auto" | "ja" | "de" | "zh";
+  detectionMode?: "ai" | "off";
+  cards?: readonly ("google" | "deepl")[];
+  aiModels?: boolean;
+  /** A stale saved template override that a Google card must ignore. */
+  googleTemplateId?: string | null;
+  extra?: Record<string, string>;
+}
+
+/** Seeds Google Cloud and DeepL cards with the stored keys and an optional AI detector. */
+function seedGoogleCards(options: GoogleCardSeedOptions = {}): Record<string, string> {
+  const detectChannel = makeChannel({
+    id: "ch-detect",
+    presetId: "openai",
+    adapterId: "openai-compatible",
+    baseUrl: "https://detect.example.com/v1",
+    displayName: "Detector",
+    enabled: true,
+    sortOrder: 0,
+  });
+  const detector = makeModel({
+    id: "det-1",
+    providerId: "ch-detect",
+    modelKey: "detect-mini",
+    enabled: true,
+  });
+  const googlePreset = makeGoogleCloudPreset();
+  const deeplPreset = makeDeepLPreset();
+  const cards = (options.cards ?? ["google", "deepl"]).map((kind, index) => ({
+    id: `card-${index + 1}`,
+    presetId: kind === "google" ? googlePreset.id : deeplPreset.id,
+    templateId: kind === "google" ? (options.googleTemplateId ?? null) : null,
+    collapsed: false,
+  }));
+  const storage = makeSeedStorage({
+    ...(options.aiModels === false ? {} : { channels: [detectChannel], models: [detector] }),
+    extra: {
+      [PRESETS_STORAGE_KEY]: JSON.stringify({
+        version: 1,
+        items: [googlePreset, deeplPreset],
+      }),
+      [QUICK_TRANSLATE_PREFERENCES_KEY]: JSON.stringify({
+        version: 1,
+        doubleCopyEnabled: false,
+        autoTranslate: false,
+        sourceLanguage: options.sourceLanguage ?? "auto",
+        targetLanguage: options.targetLanguage ?? "ja",
+        cards,
+      }),
+      [googleCloudCredentialStorageKey(GOOGLE_KEY_REF)]: "google-key-1",
+      [deepLCredentialStorageKey("deepl-ref-1")]: "deepl-key:fx",
+      [LANGUAGE_DETECTION_STORAGE_KEY]: JSON.stringify({
+        version: 2,
+        order: ["ai", "google"],
+        enabled: { ai: (options.detectionMode ?? "ai") === "ai", google: false },
+        ai: { modelId: "det-1" },
+        nativeLanguage: "zh",
+        preferredTranslationLanguage: "en",
+      }),
+      ...options.extra,
+    },
+  });
+  if (options.aiModels === false) {
+    delete storage[MODELS_STORAGE_KEY];
+    delete storage[PROVIDERS_STORAGE_KEY];
+  }
+  return storage;
+}
+
+function googleCardNetwork(detectorAnswer = "fr") {
+  return {
+    [DETECT_URL]: {
+      status: 200,
+      body: { choices: [{ message: { content: detectorAnswer } }] },
+    },
+    [GOOGLE_TRANSLATE_URL]: {
+      status: 200,
+      body: { data: { translations: [{ translatedText: "谷歌译文" }] } },
+    },
+    [DEEPL_URL]: {
+      status: 200,
+      body: { translations: [{ detected_source_language: "FR", text: "DeepL 译文" }] },
+    },
+  };
+}
+
+test("Google Cloud card: one detection run serves a Google and a DeepL card the same pair", async () => {
+  const app = await open(POPUP_HARNESS, {
+    ...viewport,
+    storage: seedGoogleCards({ targetLanguage: "ja", googleTemplateId: "tpl-stale" }),
+    network: googleCardNetwork(),
+  });
+
+  await app.waitFor("id:quick-translate-card-card-2");
+  // The template selector stays an AI-only control, even with a stale override.
+  expect(app.shows("id:quick-translate-card-card-1 >> id:quick-translate-template")).toBe(false);
+  expect(app.shows("id:quick-translate-card-card-2 >> id:quick-translate-template")).toBe(false);
+  expect(app.shows("id:quick-translate-card-card-1 >> id:quick-translate-preset-mark-google")).toBe(
+    true,
+  );
+
+  await app.type("id:quick-translate-source", "Bonjour");
+  await app.keyboard.press("enter");
+  await app.waitUntil(
+    () =>
+      requestsTo(app, GOOGLE_TRANSLATE_URL).length === 1 && requestsTo(app, DEEPL_URL).length === 1,
+  );
+  await app.waitFor("id:quick-translate-card-card-1 >> id:quick-translate-result-text");
+
+  expect(requestsTo(app, DETECT_URL)).toHaveLength(1);
+  expect(app.texts()).toContain("谷歌译文");
+  expect(app.texts()).toContain("DeepL 译文");
+
+  const googleRequest = requestsTo(app, GOOGLE_TRANSLATE_URL)[0]!;
+  expect(googleRequest.headers?.["x-goog-api-key"]).toBe("google-key-1");
+  expect(JSON.parse(googleRequest.body!)).toEqual({
+    q: ["Bonjour"],
+    source: "fr",
+    target: "ja",
+    format: "text",
+  });
+
+  const deeplBody = JSON.parse(requestsTo(app, DEEPL_URL)[0]!.body!) as {
+    source_lang: string;
+    target_lang: string;
+  };
+  expect(deeplBody.source_lang).toBe("FR");
+  expect(deeplBody.target_lang).toBe("JA");
+});
+
+test("Google Cloud card: an explicit pair needs no detector or AI models", async () => {
+  const app = await open(POPUP_HARNESS, {
+    ...viewport,
+    storage: seedGoogleCards({
+      cards: ["google"],
+      sourceLanguage: "en",
+      targetLanguage: "de",
+      detectionMode: "off",
+      aiModels: false,
+    }),
+    network: {
+      [GOOGLE_TRANSLATE_URL]: {
+        status: 200,
+        body: { data: { translations: [{ translatedText: "Guten Morgen" }] } },
+      },
+    },
+  });
+
+  await app.waitFor("id:quick-translate-card-card-1");
+  await app.type("id:quick-translate-source", "Good morning");
+  await app.keyboard.press("enter");
+  await app.waitFor("id:quick-translate-card-card-1 >> id:quick-translate-result-text");
+
+  expect(app.texts()).toContain("Guten Morgen");
+  expect(requestsTo(app, DETECT_URL)).toHaveLength(0);
+  expect(requestsTo(app, TRANSLATE_URL)).toHaveLength(0);
+  expect(JSON.parse(requestsTo(app, GOOGLE_TRANSLATE_URL)[0]!.body!)).toMatchObject({
+    source: "en",
+    target: "de",
+  });
+});
+
+test("Google Cloud card: a rejected request fails only its card and retry follows the card action", async () => {
+  let googleCalls = 0;
+  const app = await open(POPUP_HARNESS, {
+    ...viewport,
+    storage: seedGoogleCards({
+      sourceLanguage: "en",
+      targetLanguage: "ja",
+      detectionMode: "off",
+    }),
+    network: {
+      [GOOGLE_TRANSLATE_URL]: () => {
+        googleCalls += 1;
+        return googleCalls === 1
+          ? { status: 503, body: { error: { code: 503, message: "backend unavailable" } } }
+          : {
+              status: 200,
+              body: { data: { translations: [{ translatedText: "再試行" }] } },
+            };
+      },
+      [DEEPL_URL]: {
+        status: 200,
+        body: { translations: [{ detected_source_language: "EN", text: "DeepL 译文" }] },
+      },
+    },
+  });
+
+  await app.waitFor("id:quick-translate-card-card-2");
+  await app.type("id:quick-translate-source", "Good morning");
+  await app.keyboard.press("enter");
+  await app.waitFor("id:quick-translate-card-card-1 >> id:quick-translate-error");
+
+  expect(app.texts()).toContain(t("googleCloud.error.server"));
+  expect(app.texts()).not.toContain("backend unavailable");
+  expect(app.texts()).toContain("DeepL 译文");
+
+  await app.press("id:quick-translate-card-card-1 >> id:quick-translate-retry");
+  await app.waitUntil(() => app.texts().includes("再試行"));
+  expect(requestsTo(app, GOOGLE_TRANSLATE_URL)).toHaveLength(2);
+  expect(requestsTo(app, DEEPL_URL)).toHaveLength(1);
+});
+
+test("Google Cloud card: a late result cannot replace a newer result or repopulate a closed popup", async () => {
+  const outOfOrder = await open(POPUP_HARNESS, {
+    ...viewport,
+    storage: seedGoogleCards({
+      cards: ["google"],
+      sourceLanguage: "en",
+      targetLanguage: "ja",
+      detectionMode: "off",
+      extra: { [POPUP_HARNESS_MODE_KEY]: "out-of-order" },
+    }),
+  });
+
+  await outOfOrder.waitFor("id:quick-translate-source");
+  await outOfOrder.type("id:quick-translate-source", "First");
+  await outOfOrder.keyboard.press("enter");
+  await outOfOrder.type("id:quick-translate-source", " Second");
+  await outOfOrder.waitUntil(() =>
+    outOfOrder.texts().some((line) => line.includes("aborts=aborted-1")),
+  );
+  await outOfOrder.keyboard.press("enter");
+  await outOfOrder.press("id:harness-resolve-second");
+  await outOfOrder.waitUntil(() => outOfOrder.texts().includes("Result 2"));
+  await outOfOrder.press("id:harness-resolve-first");
+  expect(outOfOrder.texts()).toContain("Result 2");
+  expect(outOfOrder.texts()).not.toContain("Result 1");
+
+  const lateClose = await open(POPUP_HARNESS, {
+    ...viewport,
+    clock: {},
+    storage: seedGoogleCards({
+      cards: ["google"],
+      sourceLanguage: "en",
+      targetLanguage: "ja",
+      detectionMode: "off",
+      extra: { [POPUP_HARNESS_MODE_KEY]: "late-after-close" },
+    }),
+  });
+  await lateClose.waitFor("id:quick-translate-source");
+  await lateClose.type("id:quick-translate-source", "Closing draft");
+  await lateClose.keyboard.press("enter");
+  await lateClose.press("id:harness-toggle-open");
+  await lateClose.press("id:harness-resolve-late");
+  lateClose.clock!.runFor(1000);
+  expect(lateClose.texts()).not.toContain("Stale Late Result");
+
+  await lateClose.press("id:harness-toggle-open");
+  await lateClose.waitFor("id:quick-translate-source");
+  expect(lateClose.value("id:quick-translate-source")).toBe("");
+  expect(lateClose.shows("id:quick-translate-copy")).toBe(false);
 });

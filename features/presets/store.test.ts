@@ -1,8 +1,11 @@
 import { expect, test } from "nsh/test";
+import { t } from "nsh/i18n";
 import {
   createPresetsStore,
   DEEPL_CREDENTIAL_KEY_PREFIX,
   deepLCredentialStorageKey,
+  GOOGLE_CLOUD_CREDENTIAL_KEY_PREFIX,
+  googleCloudCredentialStorageKey,
   PRESETS_STORAGE_KEY,
 } from "./store";
 import type {
@@ -86,6 +89,20 @@ function makeDeepLInput(overrides: Partial<SavePresetInput> = {}): SavePresetInp
 
 function deeplRef(preset: TranslationPreset): string {
   if (preset.engine.kind !== "deepl") throw new Error("expected a DeepL preset");
+  return preset.engine.credentialRef;
+}
+
+function makeGoogleCloudInput(overrides: Partial<SavePresetInput> = {}): SavePresetInput {
+  return {
+    name: "Google Cloud Preset",
+    enabled: true,
+    engine: { kind: "google-cloud", apiKey: "google-key" },
+    ...overrides,
+  };
+}
+
+function googleCloudRef(preset: TranslationPreset): string {
+  if (preset.engine.kind !== "google-cloud") throw new Error("expected a Google Cloud preset");
   return preset.engine.credentialRef;
 }
 
@@ -720,4 +737,176 @@ test("preset recovery: skips invalid entries and preserves them when modifying v
   expect(reopened.status()).toEqual({ kind: "ready", skippedCount: 2 });
   expect(reopened.records()).toEqual([added]);
   expect(JSON.parse(mem.backing[PRESETS_STORAGE_KEY]!).items).toEqual([legacy, malformed, added]);
+});
+
+test("presets store: Google Cloud records an engine without AI models or the secret", async () => {
+  const mem = createMemoryStorage();
+  // Saving Google Cloud must not read the Models snapshot at all.
+  const store = createPresetsStore(mem.storage, () => {
+    throw new Error("Models must not be read for a Google Cloud preset");
+  });
+  await store.load();
+
+  const saved = await store.save(makeGoogleCloudInput({ name: "  Google Cloud  " }));
+  expect(saved.name).toBe("Google Cloud");
+  expect(saved.engine.kind).toBe("google-cloud");
+  expect(Object.keys(saved).sort()).toEqual([
+    "createdAt",
+    "enabled",
+    "engine",
+    "id",
+    "name",
+    "updatedAt",
+  ]);
+  const ref = googleCloudRef(saved);
+  expect(ref.length).toBeGreaterThan(0);
+  expect(mem.backing[googleCloudCredentialStorageKey(ref)]).toBe("google-key");
+
+  const raw = mem.backing[PRESETS_STORAGE_KEY]!;
+  expect(raw).not.toContain("google-key");
+  expect(raw).not.toContain("apiKey");
+  expect(raw).not.toContain("modelIds");
+  expect(raw).not.toContain("templates");
+  expect(raw).not.toContain("project");
+  expect(JSON.parse(raw).items[0]).toEqual(saved);
+
+  expect(await store.readGoogleCloudCredential(saved.id)).toBe("google-key");
+  expect(await store.readGoogleCloudCredential("missing-id")).toBeNull();
+
+  const reloaded = createPresetsStore(mem.storage, () => []);
+  await reloaded.load();
+  expect(reloaded.status()).toEqual({ kind: "ready", skippedCount: 0 });
+  expect(reloaded.records()).toEqual([saved]);
+  expect(await reloaded.readGoogleCloudCredential(saved.id)).toBe("google-key");
+});
+
+test("presets store: Google Cloud validates keys, trims them, and locks the engine type", async () => {
+  const mem = createMemoryStorage();
+  const store = createPresetsStore(mem.storage, () => [{ id: "m-1" }]);
+  await store.load();
+
+  await expect(
+    store.save(makeGoogleCloudInput({ engine: { kind: "google-cloud" } })),
+  ).rejects.toMatchObject({
+    key: "google_cloud_key_required",
+    field: "googleCloudKey",
+  });
+  await expect(
+    store.save(makeGoogleCloudInput({ engine: { kind: "google-cloud", apiKey: "   " } })),
+  ).rejects.toMatchObject({
+    key: "google_cloud_key_required",
+    field: "googleCloudKey",
+  });
+  await expect(
+    store.save(makeGoogleCloudInput({ engine: { kind: "google-cloud", apiKey: "google key" } })),
+  ).rejects.toMatchObject({ key: "google_cloud_key_invalid", field: "googleCloudKey" });
+
+  const saved = await store.save(
+    makeGoogleCloudInput({ engine: { kind: "google-cloud", apiKey: "  google-key-1  " } }),
+  );
+  expect(mem.backing[googleCloudCredentialStorageKey(googleCloudRef(saved))]).toBe("google-key-1");
+
+  // Key reads are engine-scoped: AI, DeepL, and unknown IDs return null.
+  const ai = await store.save(makeBaseInput());
+  const deepl = await store.save(makeDeepLInput());
+  expect(await store.readGoogleCloudCredential(ai.id)).toBeNull();
+  expect(await store.readGoogleCloudCredential(deepl.id)).toBeNull();
+
+  // A saved preset keeps its engine type in both directions.
+  await expect(
+    store.save({
+      ...makeGoogleCloudInput({ id: saved.id }),
+      engine: { kind: "deepl", apiKey: "k:fx" },
+    }),
+  ).rejects.toMatchObject({ key: "engine_type_locked" });
+  await expect(
+    store.save({ ...makeBaseInput({ id: ai.id }), engine: makeGoogleCloudInput().engine }),
+  ).rejects.toMatchObject({ key: "engine_type_locked" });
+});
+
+test("presets store: Google Cloud keeps, replaces, and removes keys with the record", async () => {
+  const mem = createMemoryStorage();
+  const store = createPresetsStore(mem.storage, () => []);
+  await store.load();
+
+  const saved = await store.save(
+    makeGoogleCloudInput({ engine: { kind: "google-cloud", apiKey: "first-google-key" } }),
+  );
+  const firstRef = googleCloudRef(saved);
+  const firstKey = googleCloudCredentialStorageKey(firstRef);
+
+  // A blank input on edit keeps the stored key and reference.
+  const kept = await store.save(
+    makeGoogleCloudInput({
+      id: saved.id,
+      name: "Renamed",
+      engine: { kind: "google-cloud", apiKey: "   " },
+    }),
+  );
+  expect(googleCloudRef(kept)).toBe(firstRef);
+  expect(mem.backing[firstKey]).toBe("first-google-key");
+
+  // Replacement writes a new reference first and removes the old key after the commit.
+  const replaced = await store.save(
+    makeGoogleCloudInput({
+      id: saved.id,
+      engine: { kind: "google-cloud", apiKey: "second-google-key" },
+    }),
+  );
+  const secondRef = googleCloudRef(replaced);
+  expect(secondRef).not.toBe(firstRef);
+  expect(mem.backing[googleCloudCredentialStorageKey(secondRef)]).toBe("second-google-key");
+  expect(mem.backing[firstKey]).toBeUndefined();
+
+  // A failed key write leaves the existing record and key untouched.
+  mem.setSetError(new Error("ERR_NSH_QUOTA_EXCEEDED"), (key) =>
+    key.startsWith(GOOGLE_CLOUD_CREDENTIAL_KEY_PREFIX),
+  );
+  await expect(
+    store.save(
+      makeGoogleCloudInput({
+        id: replaced.id,
+        engine: { kind: "google-cloud", apiKey: "third-google-key" },
+      }),
+    ),
+  ).rejects.toMatchObject({ key: "storage_write_failed" });
+  expect(store.records()).toEqual([replaced]);
+  expect(await store.readGoogleCloudCredential(replaced.id)).toBe("second-google-key");
+
+  // A failed record write removes the unused new key and keeps the old record usable.
+  mem.setSetError(new Error("ERR_DISK_LOCKED"), (key) => key === PRESETS_STORAGE_KEY);
+  await expect(
+    store.save(
+      makeGoogleCloudInput({
+        id: replaced.id,
+        engine: { kind: "google-cloud", apiKey: "fourth-google-key" },
+      }),
+    ),
+  ).rejects.toMatchObject({ key: "storage_write_failed" });
+  expect(store.records()).toEqual([replaced]);
+  expect(await store.readGoogleCloudCredential(replaced.id)).toBe("second-google-key");
+  expect(
+    Object.keys(mem.backing).filter((key) => key.startsWith(GOOGLE_CLOUD_CREDENTIAL_KEY_PREFIX)),
+  ).toEqual([googleCloudCredentialStorageKey(secondRef)]);
+
+  // A failed key read reports localized copy without the storage exception text.
+  mem.setSetError(null);
+  mem.setGetError(new Error("ERR_SECRET_READ_FAILED"));
+  let readError: unknown = null;
+  try {
+    await store.readGoogleCloudCredential(replaced.id);
+  } catch (error) {
+    readError = error;
+  }
+  expect(readError).toMatchObject({
+    key: "storage_read_failed",
+    message: t("presets.error.googleCloudKeyUnreadable"),
+  });
+  expect((readError as Error).message).not.toContain("ERR_SECRET_READ_FAILED");
+  mem.setGetError(null);
+
+  // Delete removes the referenced key.
+  await store.remove(replaced.id);
+  expect(store.records()).toEqual([]);
+  expect(mem.backing[googleCloudCredentialStorageKey(secondRef)]).toBeUndefined();
 });

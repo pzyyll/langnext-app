@@ -5,7 +5,7 @@ import { aiRegistry } from "../../modules/ai/runtime/registry";
 import { initializeAiModules } from "../../app/ai-setup";
 import { makeChannel, makeModel, makeSeedStorage } from "../models/__tests__/fixtures";
 import type { SavedModelRequestResolution } from "../models/store";
-import { PRESETS_STORAGE_KEY } from "../presets/store";
+import { googleCloudCredentialStorageKey, PRESETS_STORAGE_KEY } from "../presets/store";
 import { getLanguageLabel } from "../presets/languages";
 import type { AiPresetEngine, TranslationPreset } from "../presets/types";
 import {
@@ -618,6 +618,113 @@ function makeDeepLPreset(overrides: Partial<TranslationPreset> = {}): Translatio
     ...overrides,
   };
 }
+
+function makeGoogleCloudPreset(overrides: Partial<TranslationPreset> = {}): TranslationPreset {
+  return {
+    id: "preset-google",
+    name: "Google Cloud Preset",
+    enabled: true,
+    createdAt: "2026-11-19T00:00:00.000Z",
+    updatedAt: "2026-11-19T00:00:00.000Z",
+    engine: { kind: "google-cloud", credentialRef: "google-ref-1" },
+    ...overrides,
+  };
+}
+
+const GOOGLE_TRANSLATE_REQUEST = "POST https://translation.googleapis.com/language/translate/v2";
+
+test("Google Cloud preset: uses the stored key and supplied pair without AI work or streaming", async () => {
+  const seed = makeSeedStorage({
+    extra: {
+      [PRESETS_STORAGE_KEY]: JSON.stringify({
+        version: 1,
+        items: [makeGoogleCloudPreset()],
+      }),
+      [googleCloudCredentialStorageKey("google-ref-1")]: "test-google-key",
+    },
+  });
+
+  const app = await open("./__tests__/translate-app.tsx", {
+    platform: "windows",
+    storage: seed,
+    network: {
+      [GOOGLE_TRANSLATE_REQUEST]: {
+        status: 200,
+        body: { data: { translations: [{ translatedText: "你好 {{target_language}}" }] } },
+      },
+    },
+  });
+
+  await app.waitUntil(() => app.texts()[0] !== "running");
+  expect(app.texts()[0]).toBe("done");
+  expect(JSON.parse(app.texts()[1]!)).toEqual({
+    ok: true,
+    text: "你好 {{target_language}}",
+    modelId: null,
+    templateId: null,
+  });
+
+  const requests = app.requests();
+  expect(requests).toHaveLength(1);
+  expect(requests[0]!.url).toBe("https://translation.googleapis.com/language/translate/v2");
+  expect(requests[0]!.headers?.["x-goog-api-key"]).toBe("test-google-key");
+  expect(JSON.parse(requests[0]!.body!)).toEqual({
+    q: ["Hello {{target_language}}"],
+    source: "en",
+    target: "zh-CN",
+    format: "text",
+  });
+});
+
+test("Google Cloud preset: reports a missing key and can cancel a pending key read", async () => {
+  let calls = 0;
+  const translate = async () => {
+    calls += 1;
+    return "unexpected";
+  };
+
+  const missing = await translateWithPreset(
+    {
+      preset: makeGoogleCloudPreset(),
+      sourceText: "Hello",
+      sourceLanguage: "en",
+      targetLanguage: "zh",
+    },
+    { readGoogleCloudCredential: async () => null, googleCloudTranslate: translate },
+  );
+  expect(missing).toEqual({
+    ok: false,
+    cancelled: false,
+    error: t("googleCloud.error.missingKey"),
+  });
+
+  let releaseKey!: (key: string | null) => void;
+  const keyRead = new Promise<string | null>((resolve) => {
+    releaseKey = resolve;
+  });
+  const controller = new AbortController();
+  const call = translateWithPreset(
+    {
+      preset: makeGoogleCloudPreset(),
+      sourceText: "Hello",
+      sourceLanguage: "en",
+      targetLanguage: "zh",
+    },
+    {
+      signal: controller.signal,
+      readGoogleCloudCredential: () => keyRead,
+      googleCloudTranslate: translate,
+    },
+  );
+  controller.abort();
+  releaseKey("test-google-key");
+  expect(await call).toEqual({
+    ok: false,
+    cancelled: true,
+    error: t("protocol.error.cancelled"),
+  });
+  expect(calls).toBe(0);
+});
 
 test("DeepL preset: uses the supplied pair and stored key without AI work or streaming", async () => {
   const calls: Array<{
