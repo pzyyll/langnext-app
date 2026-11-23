@@ -235,15 +235,15 @@ function AddChannelHeaderButton(props: {
     <Button
       testID={props.testID}
       ref={(node) => props.onRef(node)}
-      variant="outline"
+      variant="primary"
       size="sm"
       disabled={props.disabled}
       accessibilityLabel={props.label}
       onPress={() => props.onPress()}
       class="shrink-0"
     >
-      <Icon name="plus" tone="foreground" class="size-3.5" />
-      <Text class="text-sm font-medium text-foreground">{props.label}</Text>
+      <Icon name="plus" tone="primary-foreground" class="size-3.5" />
+      <Text class="text-sm font-medium text-primary-foreground">{props.label}</Text>
     </Button>
   );
 }
