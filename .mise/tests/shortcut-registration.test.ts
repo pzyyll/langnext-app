@@ -62,7 +62,7 @@ test("Windows records and registers independent translation shortcuts", async ()
       "id:settings-translation-shortcuts-card >> id:settings-screenshot-translate-shortcut-row",
     ),
   ).toBe(true);
-  expect(app.texts()).toContain("Alt+Shift+S");
+  expect(app.texts()).toContain("Alt+S");
 
   const screenshot = "id:settings-screenshot-translate-shortcut";
   await app.waitUntil(() => app.enabled(`${screenshot}-record`));

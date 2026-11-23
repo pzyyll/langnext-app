@@ -331,7 +331,7 @@ test("settings ui: renders cleanly at the minimum viewport in dark mode with red
     ),
   ).toBe(true);
   expect(app.texts()).toContain("截图翻译");
-  expect(app.texts()).toContain("Alt+Shift+S");
+  expect(app.texts()).toContain("Alt+S");
   expect(app.shows("id:settings-screenshot-translate-shortcut-reset")).toBe(false);
   expect(app.shows("id:settings-quick-translate-shortcut-reset")).toBe(false);
   expect(app.shows("id:settings-double-copy-switch")).toBe(true);
