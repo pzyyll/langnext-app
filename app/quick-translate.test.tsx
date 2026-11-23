@@ -1989,7 +1989,8 @@ const QUICK_TTS_AUDIO = {
 function ttsWindowStorage(extra: Record<string, string> = {}) {
   return ocrSeed({
     [TTS_STORAGE_KEY]: JSON.stringify({
-      version: 2,
+      version: 3,
+      order: ["google-cloud"],
       googleCloud: {
         enabled: true,
         credentialRef: "tts-ref",

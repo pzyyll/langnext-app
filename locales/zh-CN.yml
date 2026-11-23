@@ -155,8 +155,16 @@ settings:
     savedKey: "\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022"
     keyUnreadable: 无法读取已保存的 API Key。请重新填写。
     breadcrumbLabel: 语音合成导航
+    addChannel: 添加渠道
     configureLabel: 配置 %{name}
     enableLabel: 启用 %{name}
+    removeLabel: 移除 %{name}
+    removeTitle: 移除渠道
+    removeDescription: 移除渠道“%{name}”并清除已保存的配置？
+    removeConfirm: 移除
+    emptyTitle: 暂未添加任何语音合成渠道
+    emptyChannels: 可添加的渠道
+    emptyAdd: 添加 %{name}
     itemLabel: "%{name}（%{status}）"
     reorder: 调整「%{name}」的顺序
     reorderHint: 拖动，或按上下方向键。

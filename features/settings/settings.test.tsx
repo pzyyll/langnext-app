@@ -27,7 +27,7 @@ function ttsRecord(options: {
 }): string {
   const google = options.googleCloud ?? null;
   return JSON.stringify({
-    version: 2,
+    version: 3,
     order: options.order ?? ["google-cloud", "azure"],
     googleCloud:
       google === null
@@ -1954,7 +1954,7 @@ test("ocr settings: renders cleanly at minimum viewport in dark mode with reduce
   await app.waitFor("id:settings-ocr-card");
 });
 
-test("tts settings: opens the Google Cloud channel and discards an unsaved key", async () => {
+test("tts settings: adds Google Cloud from the empty state and discards an unsaved key", async () => {
   const app = await open(APP_ENTRY, {
     ...viewport,
     storage: { "settings.language": "en" },
@@ -1963,21 +1963,18 @@ test("tts settings: opens the Google Cloud channel and discards an unsaved key",
   await app.press("id:nav-settings");
   await app.waitFor("id:settings-nav-tts");
   await app.press("id:settings-nav-tts");
-  await app.waitFor("id:settings-tts-card");
+  await app.waitFor("id:settings-tts-empty");
 
   expect(app.texts()).toContain("Text-to-Speech");
-  expect(app.texts()).toContain("Google Cloud Text-to-Speech");
-  expect(app.count("text:Google Cloud Text-to-Speech")).toBe(1);
-  expect(app.texts()).toContain("Not configured");
-  expect(app.enabled("id:settings-tts-toggle-google-cloud")).toBe(false);
-  expect(app.shows("id:settings-tts-open-google-cloud")).toBe(true);
-  await app.hover("id:settings-tts-toggle-google-cloud");
-  await app.waitUntil(() => app.texts().includes("Configure this channel before enabling it."));
+  expect(app.texts()).toContain("No speech channels yet");
+  expect(app.texts()).toContain("Available channels");
+  expect(app.shows("id:settings-tts-empty-channel-google-cloud")).toBe(true);
+  expect(app.shows("id:settings-tts-empty-channel-azure")).toBe(true);
+  expect(app.storage()[TTS_STORAGE_KEY]).toBeUndefined();
 
-  await app.press("id:settings-tts-channel-google-cloud");
+  await app.press("id:settings-tts-empty-channel-google-cloud");
   await app.waitFor("id:settings-tts-detail-card");
   expect(app.shows("id:settings-tts-breadcrumb-root")).toBe(true);
-  expect(app.texts()).toContain("Text-to-Speech");
   expect(app.texts()).toContain("Google Cloud Text-to-Speech");
   expect(app.shows("id:settings-tts-card")).toBe(false);
 
@@ -1985,7 +1982,13 @@ test("tts settings: opens the Google Cloud channel and discards an unsaved key",
   await app.press("id:settings-tts-breadcrumb-root");
   await app.waitFor("id:settings-tts-card");
   expect(app.shows("id:settings-tts-detail-card")).toBe(false);
-  expect(app.storage()[TTS_STORAGE_KEY]).toBeUndefined();
+  expect(app.count("text:Google Cloud Text-to-Speech")).toBe(1);
+  expect(app.texts()).toContain("Not configured");
+  expect(app.enabled("id:settings-tts-toggle-google-cloud")).toBe(false);
+  expect(app.shows("id:settings-tts-open-google-cloud")).toBe(true);
+  expect(JSON.parse(app.storage()[TTS_STORAGE_KEY]!).order).toEqual(["google-cloud"]);
+  await app.hover("id:settings-tts-toggle-google-cloud");
+  await app.waitUntil(() => app.texts().includes("Configure this channel before enabling it."));
 
   await app.press("id:settings-tts-open-google-cloud");
   await app.waitFor("id:settings-tts-detail-card");
@@ -1994,7 +1997,7 @@ test("tts settings: opens the Google Cloud channel and discards an unsaved key",
   await app.press("id:settings-nav-tts");
   await app.waitFor("id:settings-tts-card");
   expect(app.value("id:settings-tts-api-key")).toBeNull();
-  expect(app.storage()[TTS_STORAGE_KEY]).toBeUndefined();
+  expect(JSON.parse(app.storage()[TTS_STORAGE_KEY]!).googleCloud).toBeNull();
   expect(app.requests().some((request) => String(request.url).includes("texttospeech"))).toBe(
     false,
   );
@@ -2007,7 +2010,8 @@ test("tts settings: keeps a saved channel off until enabled and preserves the sw
   });
   await app.press("id:nav-settings");
   await app.press("id:settings-nav-tts");
-  await app.press("id:settings-tts-open-google-cloud");
+  await app.waitFor("id:settings-tts-empty");
+  await app.press("id:settings-tts-empty-channel-google-cloud");
   await app.waitFor("id:settings-tts-detail-card");
   expect(app.enabled("id:settings-tts-save")).toBe(false);
   expect(app.texts()).not.toContain("The key is stored on this device and is not encrypted.");
@@ -2020,7 +2024,7 @@ test("tts settings: keeps a saved channel off until enabled and preserves the sw
     version: number;
     googleCloud: { enabled: boolean; credentialRef: string };
   };
-  expect(saved.version).toBe(2);
+  expect(saved.version).toBe(3);
   expect(saved.googleCloud.enabled).toBe(false);
   expect(JSON.stringify(saved).includes("synthetic-tts-key")).toBe(false);
   expect(
@@ -2081,6 +2085,117 @@ test("tts settings: keeps a saved channel off until enabled and preserves the sw
   await reopened.press("id:settings-tts-channel-google-cloud");
   await reopened.waitFor("id:settings-tts-detail-card");
   expect(reopened.value("id:settings-tts-api-key")).toBe("");
+});
+
+test("tts settings: adds channels directly from the empty state", async () => {
+  const azureApp = await open(APP_ENTRY, {
+    ...viewport,
+    storage: { "settings.language": "en" },
+  });
+  await azureApp.press("id:nav-settings");
+  await azureApp.press("id:settings-nav-tts");
+  await azureApp.waitFor("id:settings-tts-empty");
+  expect(azureApp.shows("id:settings-tts-add")).toBe(true);
+  await azureApp.press("id:settings-tts-empty-channel-azure");
+  await azureApp.waitFor("id:settings-tts-detail-card");
+  expect(azureApp.shows("id:settings-tts-region")).toBe(true);
+  expect(JSON.parse(azureApp.storage()[TTS_STORAGE_KEY]!).order).toEqual(["azure"]);
+
+  const googleApp = await open(APP_ENTRY, {
+    ...viewport,
+    storage: { "settings.language": "en" },
+  });
+  await googleApp.press("id:nav-settings");
+  await googleApp.press("id:settings-nav-tts");
+  await googleApp.waitFor("id:settings-tts-empty");
+  await googleApp.press("id:settings-tts-empty-channel-google-cloud");
+  await googleApp.waitFor("id:settings-tts-detail-card");
+  expect(googleApp.shows("id:settings-tts-api-key")).toBe(true);
+  expect(JSON.parse(googleApp.storage()[TTS_STORAGE_KEY]!).order).toEqual(["google-cloud"]);
+
+  // The header picker offers only the channel that is still available.
+  await googleApp.press("id:settings-tts-breadcrumb-root");
+  await googleApp.waitFor("id:settings-tts-card");
+  await googleApp.press("id:settings-tts-add");
+  await googleApp.waitFor("id:settings-tts-add-dialog");
+  expect(googleApp.shows("id:settings-tts-option-google-cloud")).toBe(false);
+  expect(googleApp.shows("id:settings-tts-option-azure")).toBe(true);
+  await googleApp.press("id:settings-tts-add-cancel");
+  await googleApp.waitUntil(() => !googleApp.shows("id:settings-tts-add-dialog"));
+});
+
+test("tts settings: removes channels and clears their saved keys", async () => {
+  const storage = {
+    "settings.language": "en",
+    [TTS_STORAGE_KEY]: ttsRecord({
+      order: ["google-cloud", "azure"],
+      googleCloud: { enabled: true, credentialRef: "google-ref" },
+      azure: { enabled: true, credentialRef: "azure-ref", region: "eastus" },
+    }),
+    [ttsCredentialStorageKey("google-ref")]: JSON.stringify({ apiKey: "google-key" }),
+    [ttsCredentialStorageKey("azure-ref")]: JSON.stringify({ apiKey: "azure-key" }),
+  };
+  const app = await open(APP_ENTRY, { ...viewport, storage });
+  await app.press("id:nav-settings");
+  await app.press("id:settings-nav-tts");
+  await app.waitFor("id:settings-tts-card");
+
+  // A configured channel confirms before removing.
+  await app.press("id:settings-tts-remove-google-cloud");
+  await app.waitFor("id:settings-tts-remove-dialog");
+  await app.press("role:button[Cancel]");
+  await app.waitUntil(() => !app.shows("id:settings-tts-remove-dialog"));
+  expect(app.shows("id:settings-tts-row-google-cloud")).toBe(true);
+
+  await app.press("id:settings-tts-remove-google-cloud");
+  await app.waitFor("id:settings-tts-remove-dialog");
+  await app.press("role:button[Remove]");
+  await app.waitUntil(() => !app.shows("id:settings-tts-row-google-cloud"));
+  expect(app.storage()[ttsCredentialStorageKey("google-ref")]).toBeUndefined();
+  expect(JSON.parse(app.storage()[TTS_STORAGE_KEY]!).googleCloud).toBeNull();
+  expect(app.shows("id:settings-tts-add")).toBe(true);
+
+  await app.press("id:settings-tts-remove-azure");
+  await app.waitFor("id:settings-tts-remove-dialog");
+  await app.press("role:button[Remove]");
+  await app.waitUntil(() => !app.shows("id:settings-tts-card"));
+  expect(app.shows("id:settings-tts-empty")).toBe(true);
+  expect(app.storage()[ttsCredentialStorageKey("azure-ref")]).toBeUndefined();
+  expect(JSON.parse(app.storage()[TTS_STORAGE_KEY]!).order).toEqual([]);
+});
+
+test("tts settings: an unconfigured channel removes without confirmation", async () => {
+  const app = await open(APP_ENTRY, {
+    ...viewport,
+    storage: {
+      "settings.language": "en",
+      [TTS_STORAGE_KEY]: ttsRecord({ order: ["google-cloud", "azure"] }),
+    },
+  });
+  await app.press("id:nav-settings");
+  await app.press("id:settings-nav-tts");
+  await app.waitFor("id:settings-tts-card");
+  await app.press("id:settings-tts-remove-azure");
+  await app.waitUntil(() => !app.shows("id:settings-tts-row-azure"));
+  expect(app.shows("id:settings-tts-remove-dialog")).toBe(false);
+  expect(JSON.parse(app.storage()[TTS_STORAGE_KEY]!).order).toEqual(["google-cloud"]);
+  expect(app.shows("id:settings-tts-grip-google-cloud")).toBe(false);
+});
+
+test("tts settings: localizes the empty state and the first-channel actions", async () => {
+  const app = await open(APP_ENTRY, { ...viewport, storage: { "settings.language": "zh-CN" } });
+  await app.press("id:nav-settings");
+  await app.press("id:settings-nav-tts");
+  await app.waitFor("id:settings-tts-empty");
+
+  expect(app.texts()).toContain("暂未添加任何语音合成渠道");
+  expect(app.texts()).toContain("可添加的渠道");
+  expect(app.shows("role:button[添加 Google Cloud Text-to-Speech]")).toBe(true);
+  expect(app.shows("role:button[添加 Azure Speech]")).toBe(true);
+
+  await app.press("id:settings-tts-empty-channel-google-cloud");
+  await app.waitFor("id:settings-tts-detail-card");
+  expect(app.texts()).toContain("语音合成");
 });
 
 test("tts settings: a missing key can be turned off", async () => {
@@ -2457,7 +2572,14 @@ test("tts settings: reorders channels and keeps the saved key of a disabled one"
 
 test("tts settings: the grip reorders channels with the arrow keys and keeps the focus", async () => {
   // A Linux host delivers raw keys to the focused view, as a desktop does.
-  const app = await open(APP_ENTRY, { ...viewport, platform: "linux" });
+  const app = await open(APP_ENTRY, {
+    ...viewport,
+    platform: "linux",
+    storage: {
+      "settings.language": "en",
+      [TTS_STORAGE_KEY]: ttsRecord({ order: ["google-cloud", "azure"] }),
+    },
+  });
   await app.press("id:nav-settings");
   await app.press("id:settings-nav-tts");
   await app.waitFor("id:settings-tts-card");

@@ -12,6 +12,7 @@ import { buildTooltip } from "../../components/ui/tooltip";
 import { canOpenLogsFolder, openLogsFolder } from "../../platform/logs";
 import { languageDetectionStore, type LanguageDetectorKind } from "../language-detection/settings";
 import { ocrSettingsStore, type OcrServiceKind } from "../ocr/settings";
+import { ttsSettingsStore } from "../tts/settings";
 import { appearance, appearanceError, selectAppearance, type Appearance } from "./appearance";
 import { language, languageError, selectLanguage, type LanguagePreference } from "./language";
 import { LanguageDetectionSection } from "./language-detection-section";
@@ -261,11 +262,14 @@ export function SettingsPage(props: {
   const selectedTtsChannel = signal<TtsChannelId | null>(null);
   const detectionAddBusy = signal(false);
   const ocrAddBusy = signal(false);
+  const ttsAddBusy = signal(false);
   const sectionDialogOpen = signal(false);
   let detectionAddButtonNode: ViewRef | null = null;
   let ocrAddButtonNode: ViewRef | null = null;
+  let ttsAddButtonNode: ViewRef | null = null;
   let openDetectionAddDialog: (() => void) | null = null;
   let openOcrAddDialog: (() => void) | null = null;
+  let openTtsAddDialog: (() => void) | null = null;
 
   const headerBreadcrumb = (): HeaderBreadcrumb | null => {
     const ocrChannel = selectedOcrChannel();
@@ -339,6 +343,10 @@ export function SettingsPage(props: {
     selectedSection() === "ocr" &&
     !showingBreadcrumb() &&
     ocrSettingsStore.availableChannels().length > 0;
+  const showTtsAddButton = () =>
+    selectedSection() === "tts" &&
+    !showingBreadcrumb() &&
+    ttsSettingsStore.availableChannels().length > 0;
   const headerPaddingClass = () =>
     compact()
       ? showingBreadcrumb()
@@ -492,6 +500,17 @@ export function SettingsPage(props: {
                   onPress={() => openOcrAddDialog?.()}
                 />
               </If>
+              <If when={showTtsAddButton()}>
+                <AddChannelHeaderButton
+                  testID="settings-tts-add"
+                  label={t("settings.tts.addChannel")}
+                  disabled={ttsAddBusy()}
+                  onRef={(node) => {
+                    ttsAddButtonNode = node;
+                  }}
+                  onPress={() => openTtsAddDialog?.()}
+                />
+              </If>
             </View>
           </View>
           <Scroll class="min-h-0 flex-1">
@@ -551,6 +570,15 @@ export function SettingsPage(props: {
                   compact={compact()}
                   selectedChannel={selectedTtsChannel()}
                   onSelectChannel={(channel) => selectedTtsChannel.set(channel)}
+                  getAddButtonRef={() => ttsAddButtonNode}
+                  onRegisterAddTrigger={(open) => {
+                    openTtsAddDialog = open;
+                    return () => {
+                      if (openTtsAddDialog === open) openTtsAddDialog = null;
+                    };
+                  }}
+                  onAddBusyChange={(busy) => ttsAddBusy.set(busy)}
+                  onDialogOpenChange={(open) => sectionDialogOpen.set(open)}
                 />
               </If>
             </View>

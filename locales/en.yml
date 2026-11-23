@@ -155,8 +155,16 @@ settings:
     savedKey: "\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022"
     keyUnreadable: The saved API key could not be read. Enter it again.
     breadcrumbLabel: Text-to-speech navigation
+    addChannel: Add Channel
     configureLabel: Configure %{name}
     enableLabel: Enable %{name}
+    removeLabel: Remove %{name}
+    removeTitle: Remove Channel
+    removeDescription: 'Remove channel "%{name}" and clear its saved configuration?'
+    removeConfirm: Remove
+    emptyTitle: No speech channels yet
+    emptyChannels: Available channels
+    emptyAdd: Add %{name}
     itemLabel: "%{name} (%{status})"
     reorder: Reorder %{name}
     reorderHint: Drag, or press the up and down arrow keys.

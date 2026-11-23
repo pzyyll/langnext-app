@@ -1986,7 +1986,8 @@ const QUICK_TTS_MP3 = {
 function enabledTtsStorage(enabled = true): Record<string, string> {
   return {
     [TTS_STORAGE_KEY]: JSON.stringify({
-      version: 2,
+      version: 3,
+      order: ["google-cloud"],
       googleCloud: {
         enabled,
         credentialRef: "tts-ref",
@@ -2052,7 +2053,8 @@ const AZURE_QUICK_TTS_URL = "https://eastus.tts.speech.microsoft.com/cognitivese
 function azureActiveStorage(): Record<string, string> {
   return {
     [TTS_STORAGE_KEY]: JSON.stringify({
-      version: 2,
+      version: 3,
+      order: ["google-cloud", "azure"],
       googleCloud: {
         enabled: false,
         credentialRef: "google-ref",
@@ -2367,7 +2369,8 @@ test("quick tts: a later speaker replaces a delayed request, and Stop closes pla
 function googleTtsStorage(): Record<string, string> {
   return {
     [TTS_STORAGE_KEY]: JSON.stringify({
-      version: 2,
+      version: 3,
+      order: ["google-cloud"],
       googleCloud: {
         enabled: true,
         credentialRef: "tts-ref",
