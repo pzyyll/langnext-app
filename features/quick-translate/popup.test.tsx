@@ -589,7 +589,7 @@ test("preset cards: runs duplicate preset cards independently with template over
   await app.waitFor("role:option[Formal]");
   await app.press("role:option[Formal]");
 
-  // Manual Add + template selection sends 0 requests.
+  // Adding a card and selecting a template with no input sends no requests.
   expect(app.texts().some((line) => line.includes("calls=0|"))).toBe(true);
 
   await app.type("id:quick-translate-source", "Hello world");
@@ -649,6 +649,69 @@ test("preset cards: runs duplicate preset cards independently with template over
   await app.press("id:harness-resolve-fifth");
   await app.waitFor("id:quick-translate-card-card-1 >> id:quick-translate-result-text");
   expect(app.texts()).toContain("Card 1 Expanded Result");
+});
+
+test("preset cards: template switches reuse pending and completed queries for the current input", async () => {
+  const preset = makePreset();
+  const app = await open(POPUP_HARNESS, {
+    ...viewport,
+    storage: seedWithPresets(
+      [
+        {
+          ...preset,
+          engine: {
+            ...aiEngine(preset),
+            templates: [
+              ...aiTemplates(preset),
+              {
+                id: "tpl-2",
+                name: "Formal",
+                systemTemplate: "Translate in a formal style.",
+                userTemplate: "{{text}}",
+              },
+            ],
+          },
+        },
+      ],
+      { [POPUP_HARNESS_MODE_KEY]: "out-of-order" },
+    ),
+  });
+  const callCountIs = (count: number) =>
+    app.texts().some((line) => line.includes(`calls=${count}|`));
+  const selectTemplate = async (name: string) => {
+    await app.press("id:quick-translate-template");
+    await app.waitFor(`role:option[${name}]`);
+    await app.press(`role:option[${name}]`);
+  };
+
+  await app.waitFor("id:quick-translate-template");
+  await app.type("id:quick-translate-source", "Hello world");
+  await selectTemplate("Formal");
+  await app.waitUntil(() => callCountIs(1));
+  await selectTemplate("Default");
+  await app.waitUntil(() => callCountIs(2));
+  await selectTemplate("Formal");
+  await app.waitFor("id:quick-translate-status");
+  expect(callCountIs(2)).toBe(true);
+
+  // The hidden template can finish without replacing the selected template's output.
+  await app.press("id:harness-resolve-second");
+  expect(app.shows("id:quick-translate-status")).toBe(true);
+  expect(app.texts()).not.toContain("Result 2");
+  await app.press("id:harness-resolve-first");
+  await app.waitFor("text:Result 1");
+  await selectTemplate("Default");
+  await app.waitFor("text:Result 2");
+  await selectTemplate("Formal");
+  await app.waitFor("text:Result 1");
+  expect(callCountIs(2)).toBe(true);
+
+  await app.clear("id:quick-translate-source");
+  await app.type("id:quick-translate-source", "New input");
+  await selectTemplate("Default");
+  await app.waitUntil(() => callCountIs(3));
+  expect(app.shows("id:quick-translate-status")).toBe(true);
+  expect(app.texts()).not.toContain("Result 2");
 });
 
 test("preset cards: automatic mode schedules eligible cards on shared input and runs only targeted card on add or template override", async () => {
@@ -722,6 +785,17 @@ test("preset cards: automatic mode schedules eligible cards on shared input and 
   await autoApp.press("role:option[Concise]");
   await autoApp.waitFor("id:quick-translate-card-card-1 >> id:quick-translate-copy");
   expect(autoApp.requests()).toHaveLength(3);
+
+  // Switching before the typing debounce queries card 1 now, without repeating it later.
+  await autoApp.type("id:quick-translate-source", "!");
+  await autoApp.press("id:quick-translate-card-card-1 >> id:quick-translate-template");
+  await autoApp.waitFor("role:option[Default]");
+  await autoApp.press("role:option[Default]");
+  await autoApp.waitFor("id:quick-translate-card-card-1 >> id:quick-translate-copy");
+  expect(autoApp.requests()).toHaveLength(4);
+  await autoApp.clock!.runFor(500);
+  await autoApp.waitFor("id:quick-translate-card-card-2 >> id:quick-translate-copy");
+  expect(autoApp.requests()).toHaveLength(5);
 });
 
 test("preset cards: collapsed cards stay idle in automatic mode and translate when expanded", async () => {

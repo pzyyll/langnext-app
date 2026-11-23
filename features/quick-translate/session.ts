@@ -70,12 +70,17 @@ export interface CardViewItem {
   copyError: string | null;
 }
 
-interface CardRuntime {
+interface CardQuery {
+  result: CardResultState;
   abort: AbortController | null;
-  copyResetTimer: ReturnType<typeof setTimeout> | null;
   streamFlushTimer: ReturnType<typeof setTimeout> | null;
-  requestSeq: number;
-  activeRequestId: number;
+}
+
+interface CardRuntime {
+  context: { preset: TranslationPreset; text: string; languageKey: string } | null;
+  queries: Map<string | null, CardQuery>;
+  selectedQuery: CardQuery | null;
+  copyResetTimer: ReturnType<typeof setTimeout> | null;
 }
 
 /** One action's immutable source text and language selections. */
@@ -84,6 +89,7 @@ interface ActionLanguages {
   sourceLanguage: SourceLanguageId;
   targetLanguage: TargetLanguageId;
   detection: LanguageDetectionSnapshot;
+  languageKey: string;
 }
 
 export interface QuickTranslateSessionOptions {
@@ -140,11 +146,10 @@ export interface QuickTranslateSession {
 
 function createCardRuntime(): CardRuntime {
   return {
-    abort: null,
+    context: null,
+    queries: new Map(),
+    selectedQuery: null,
     copyResetTimer: null,
-    streamFlushTimer: null,
-    requestSeq: 0,
-    activeRequestId: 0,
   };
 }
 
@@ -194,12 +199,24 @@ export function createQuickTranslateSession(
   let lastHandledDeliverySeq = 0;
   const cardRuntimes = new Map<string, CardRuntime>();
 
-  const captureActionLanguages = (): ActionLanguages => ({
-    text: options.sourceText(),
-    sourceLanguage: sourceLanguage(),
-    targetLanguage: targetLanguage(),
-    detection: languageDetectionStore.snapshot(),
-  });
+  const captureActionLanguages = (): ActionLanguages => {
+    const source = sourceLanguage();
+    const target = targetLanguage();
+    const detection = languageDetectionStore.snapshot();
+    return {
+      text: options.sourceText(),
+      sourceLanguage: source,
+      targetLanguage: target,
+      detection,
+      languageKey: JSON.stringify([
+        source,
+        target,
+        source === AUTO_LANGUAGE ? detection.detectors : null,
+        target === AUTO_LANGUAGE ? detection.nativeLanguage : null,
+        target === AUTO_LANGUAGE ? detection.preferredTranslationLanguage : null,
+      ]),
+    };
+  };
 
   // An automatic target cannot resolve without a native language, so fail before any detector request.
   const resolveActionLanguages = async (
@@ -240,35 +257,35 @@ export function createQuickTranslateSession(
     }
   };
 
-  const cancelRuntime = (runtime: CardRuntime) => {
+  const clearCopyTimer = (runtime: CardRuntime) => {
     if (runtime.copyResetTimer !== null) {
       clearTimeout(runtime.copyResetTimer);
       runtime.copyResetTimer = null;
     }
-    if (runtime.streamFlushTimer !== null) {
-      clearTimeout(runtime.streamFlushTimer);
-      runtime.streamFlushTimer = null;
-    }
-    runtime.requestSeq += 1;
-    runtime.activeRequestId = runtime.requestSeq;
-    runtime.abort?.abort();
-    runtime.abort = null;
   };
 
-  const invalidateCard = (cardId: string, nextResult: CardResultState = { status: "idle" }) => {
-    const runtime = cardRuntimes.get(cardId);
-    if (runtime) {
-      cancelRuntime(runtime);
+  const clearStreamTimer = (query: CardQuery) => {
+    if (query.streamFlushTimer !== null) {
+      clearTimeout(query.streamFlushTimer);
+      query.streamFlushTimer = null;
     }
-    updateCard(cardId, (card) => ({
-      ...card,
-      copied: false,
-      copyError: null,
-      result: nextResult,
-    }));
   };
 
-  const invalidateAllCards = (nextResult: CardResultState = { status: "idle" }) => {
+  const cancelQuery = (query: CardQuery) => {
+    clearStreamTimer(query);
+    query.abort?.abort();
+    query.abort = null;
+  };
+
+  const cancelRuntime = (runtime: CardRuntime) => {
+    clearCopyTimer(runtime);
+    for (const query of runtime.queries.values()) cancelQuery(query);
+    runtime.queries.clear();
+    runtime.selectedQuery = null;
+    runtime.context = null;
+  };
+
+  const invalidateAllCards = () => {
     clearSharedDebounce();
     for (const runtime of cardRuntimes.values()) {
       cancelRuntime(runtime);
@@ -278,7 +295,7 @@ export function createQuickTranslateSession(
         ...card,
         copied: false,
         copyError: null,
-        result: nextResult,
+        result: { status: "idle" },
       })),
     );
   };
@@ -398,180 +415,137 @@ export function createQuickTranslateSession(
       return;
     }
 
-    if (runtime.copyResetTimer !== null) {
-      clearTimeout(runtime.copyResetTimer);
-      runtime.copyResetTimer = null;
-    }
-    if (runtime.streamFlushTimer !== null) {
-      clearTimeout(runtime.streamFlushTimer);
-      runtime.streamFlushTimer = null;
-    }
+    const selectQuery = (query: CardQuery | null, result = query?.result) => {
+      runtime.selectedQuery = query;
+      clearCopyTimer(runtime);
+      updateCard(cardId, (item) => ({
+        ...item,
+        copied: false,
+        copyError: null,
+        result: result ?? { status: "idle" },
+      }));
+    };
 
     const preset = enabledPresets().find((item) => item.id === card.presetId);
     if (store.status().kind !== "ready" || !preset) {
       if (trigger === "manual") {
-        updateCard(cardId, (item) => ({
-          ...item,
-          copied: false,
-          copyError: null,
-          result: { status: "error", message: t("quickTranslate.error.noEnabledPresets") },
-        }));
+        cancelRuntime(runtime);
+        selectQuery(null, { status: "error", message: t("quickTranslate.error.noEnabledPresets") });
       }
       return;
     }
 
     const languages = action ?? captureActionLanguages();
     if (languages.text.trim().length === 0) {
-      if (trigger === "manual") {
-        updateCard(cardId, (item) => ({
-          ...item,
-          copied: false,
-          copyError: null,
-          result: { status: "error", message: t("quickTranslate.error.blankInput") },
-        }));
-      } else {
-        updateCard(cardId, (item) => ({
-          ...item,
-          copied: false,
-          copyError: null,
-          result: { status: "idle" },
-        }));
+      cancelRuntime(runtime);
+      const result =
+        trigger === "manual"
+          ? { status: "error" as const, message: t("quickTranslate.error.blankInput") }
+          : undefined;
+      selectQuery(null, result);
+      return;
+    }
+
+    const context = runtime.context;
+    if (
+      context?.preset !== preset ||
+      context.text !== languages.text ||
+      context.languageKey !== languages.languageKey
+    ) {
+      cancelRuntime(runtime);
+      runtime.context = { preset, text: languages.text, languageKey: languages.languageKey };
+    }
+
+    const templateId =
+      resolvePresetTemplate(preset, card.templateId)?.template.id ?? card.templateId;
+    const previous = runtime.queries.get(templateId);
+    if (previous) {
+      if (trigger === "auto") {
+        if (runtime.selectedQuery !== previous) selectQuery(previous);
+        return;
       }
-      return;
+      cancelQuery(previous);
     }
 
-    const templateResolution = resolvePresetTemplate(preset, card.templateId);
-    runtime.requestSeq += 1;
-    const reqId = runtime.requestSeq;
-    runtime.activeRequestId = reqId;
-    runtime.abort?.abort();
     const abort = new AbortController();
-    runtime.abort = abort;
+    const query: CardQuery = { result: { status: "loading" }, abort, streamFlushTimer: null };
+    runtime.queries.set(templateId, query);
+    selectQuery(query);
 
-    updateCard(cardId, (item) => ({
-      ...item,
-      copied: false,
-      copyError: null,
-      result: { status: "loading" },
-    }));
+    const publishResult = (result: CardResultState) => {
+      query.result = result;
+      if (runtime.selectedQuery === query) {
+        updateCard(cardId, (item) => ({ ...item, result }));
+      }
+    };
+    const isPending = () => query.abort === abort && !abort.signal.aborted;
+    const finishQuery = (result?: CardResultState) => {
+      if (!isPending()) return;
+      query.abort = null;
+      clearStreamTimer(query);
+      if (!result) {
+        runtime.queries.delete(templateId);
+        if (runtime.selectedQuery === query) selectQuery(null);
+      } else {
+        publishResult(result);
+      }
+    };
 
-    // Cards of one action share its selections; the detector sees one run per input,
-    // so later actions on the same text reuse its answer.
     const pair = await resolveActionLanguages(languages, abort.signal);
-    if (pair === null || abort.signal.aborted) {
-      if (runtime.abort === abort) runtime.abort = null;
-      return;
-    }
-    if (disposed || reqId !== runtime.activeRequestId || !cardRuntimes.has(cardId)) {
+    if (!isPending()) return;
+    if (pair === null || (!pair.ok && pair.code === "cancelled")) {
+      finishQuery();
       return;
     }
     if (!pair.ok) {
-      if (runtime.abort === abort) runtime.abort = null;
-      if (pair.code !== "cancelled") {
-        updateCard(cardId, (item) => ({
-          ...item,
-          result: { status: "error", message: languageResolutionErrorMessage(pair.code) },
-        }));
-      }
+      finishQuery({ status: "error", message: languageResolutionErrorMessage(pair.code) });
       return;
     }
-    const resolvedPair: { sourceLanguage: LanguageId; targetLanguage: LanguageId } = pair;
 
     let streamedText = "";
-    const canApplyStream = () =>
-      !disposed &&
-      reqId === runtime.activeRequestId &&
-      !abort.signal.aborted &&
-      cardRuntimes.has(cardId);
-    const clearStreamTimer = () => {
-      if (runtime.streamFlushTimer !== null) {
-        clearTimeout(runtime.streamFlushTimer);
-        runtime.streamFlushTimer = null;
-      }
-    };
-    const flushStreamedText = () => {
-      clearStreamTimer();
-      if (streamedText.length === 0 || !canApplyStream()) return;
-      updateCard(cardId, (item) => ({
-        ...item,
-        result: { status: "streaming", text: streamedText },
-      }));
-    };
     const onStreamedText = (text: string) => {
+      if (!isPending()) return;
       streamedText = text;
-      if (!canApplyStream() || runtime.streamFlushTimer !== null) return;
-      runtime.streamFlushTimer = setTimeout(flushStreamedText, STREAM_FLUSH_INTERVAL_MS);
+      if (query.streamFlushTimer !== null) return;
+      query.streamFlushTimer = setTimeout(() => {
+        clearStreamTimer(query);
+        if (isPending() && streamedText.length > 0) {
+          publishResult({ status: "streaming", text: streamedText });
+        }
+      }, STREAM_FLUSH_INTERVAL_MS);
     };
+    const failQuery = (message: string) =>
+      finishQuery({
+        status: "error",
+        message,
+        ...(streamedText.length > 0 ? { text: streamedText } : {}),
+      });
 
-    let outcome: TranslateWithPresetResult;
     try {
-      outcome = await runTranslate(
+      const outcome = await runTranslate(
         {
           preset,
           sourceText: languages.text,
-          sourceLanguage: resolvedPair.sourceLanguage,
-          targetLanguage: resolvedPair.targetLanguage,
-          templateId: templateResolution?.template.id ?? card.templateId ?? undefined,
+          sourceLanguage: pair.sourceLanguage,
+          targetLanguage: pair.targetLanguage,
+          templateId: templateId ?? undefined,
         },
         { signal: abort.signal, onText: onStreamedText },
       );
-    } catch (error) {
-      clearStreamTimer();
-      if (
-        disposed ||
-        reqId !== runtime.activeRequestId ||
-        abort.signal.aborted ||
-        !cardRuntimes.has(cardId)
-      ) {
-        return;
-      }
-      updateCard(cardId, (item) => ({
-        ...item,
-        result: {
-          status: "error",
-          message: error instanceof Error ? error.message : t("protocol.error.networkDefault"),
-          ...(streamedText.length > 0 ? { text: streamedText } : {}),
-        },
-      }));
-      return;
-    }
-    clearStreamTimer();
-
-    if (
-      disposed ||
-      reqId !== runtime.activeRequestId ||
-      abort.signal.aborted ||
-      !cardRuntimes.has(cardId)
-    ) {
-      return;
-    }
-
-    if (runtime.abort === abort) {
-      runtime.abort = null;
-    }
-
-    if (outcome.ok) {
-      updateCard(cardId, (item) => ({
-        ...item,
-        result: {
+      if (outcome.ok) {
+        finishQuery({
           status: "success",
           text: outcome.text,
           modelId: outcome.modelId,
-          targetLanguage: resolvedPair.targetLanguage,
-        },
-      }));
-      return;
-    }
-
-    if (!outcome.cancelled) {
-      updateCard(cardId, (item) => ({
-        ...item,
-        result: {
-          status: "error",
-          message: outcome.error,
-          ...(streamedText.length > 0 ? { text: streamedText } : {}),
-        },
-      }));
+          targetLanguage: pair.targetLanguage,
+        });
+      } else if (outcome.cancelled) {
+        finishQuery();
+      } else {
+        failQuery(outcome.error);
+      }
+    } catch (error) {
+      failQuery(error instanceof Error ? error.message : t("protocol.error.networkDefault"));
     }
   };
 
@@ -609,8 +583,7 @@ export function createQuickTranslateSession(
 
   const translateDelivery = () => {
     // A delivery replaces a pending typing run, so only one action follows it.
-    clearSharedDebounce();
-    for (const card of cards()) invalidateCard(card.id);
+    invalidateAllCards();
     const deliverable =
       !disposed &&
       store.status().kind === "ready" &&
@@ -743,21 +716,21 @@ export function createQuickTranslateSession(
       return;
     }
 
-    invalidateCard(cardId);
-    updateCard(cardId, (item) => ({
-      ...item,
-      templateId: nextTemplateId,
-    }));
+    const runtime = cardRuntimes.get(cardId);
+    if (!runtime) return;
+    clearCopyTimer(runtime);
+    runtime.selectedQuery = null;
+    batch(() => {
+      updateCard(cardId, (item) => ({
+        ...item,
+        templateId: nextTemplateId,
+        copied: false,
+        copyError: null,
+        result: { status: "idle" },
+      }));
+      if (!current.collapsed) void executeCard(cardId, "auto");
+    });
     persistPreferencesState();
-
-    if (
-      !current.collapsed &&
-      isAutoTranslate() &&
-      store.status().kind === "ready" &&
-      options.sourceText().trim().length > 0
-    ) {
-      void executeCard(cardId, "auto");
-    }
   };
 
   const handleToggleCollapse = (cardId: string) => {
@@ -766,27 +739,30 @@ export function createQuickTranslateSession(
     const collapsed = !current.collapsed;
 
     if (collapsed) {
-      // Collapsing stops the card: cancel its request and drop transient state.
       const runtime = cardRuntimes.get(cardId);
       if (runtime) {
-        cancelRuntime(runtime);
+        clearCopyTimer(runtime);
+        for (const [templateId, query] of runtime.queries) {
+          if (!query.abort) continue;
+          cancelQuery(query);
+          runtime.queries.delete(templateId);
+          if (runtime.selectedQuery === query) runtime.selectedQuery = null;
+        }
       }
       updateCard(cardId, (item) => ({
         ...item,
         collapsed,
         copied: false,
         copyError: null,
-        result: item.result.status === "loading" ? { status: "idle" } : item.result,
+        result: runtime?.selectedQuery?.result ?? { status: "idle" },
       }));
     } else {
-      updateCard(cardId, (item) => ({ ...item, collapsed }));
+      batch(() => {
+        updateCard(cardId, (item) => ({ ...item, collapsed }));
+        void executeCard(cardId, "auto");
+      });
     }
     persistPreferencesState();
-
-    // Expanding puts the card back to work, unless its result already answers the current input.
-    if (!collapsed && current.result.status !== "success") {
-      void executeCard(cardId, "auto");
-    }
   };
 
   const handleRemoveCard = (cardId: string) => {
