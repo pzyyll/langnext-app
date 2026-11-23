@@ -742,7 +742,7 @@ export function QuickTranslatePopup(props: QuickTranslatePopupProps) {
         disabled: false,
         tooltip: t("settings.tts.stop"),
         label: t("settings.tts.stop"),
-        icon: "mdi:stop" as const,
+        icon: "mdi:stop-circle-outline" as const,
         busy: true,
       };
     }
