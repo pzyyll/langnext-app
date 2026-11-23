@@ -186,7 +186,29 @@ export function ShortcutsSection(props: {
               </>
             )}
           </Each>
-          <View class="h-px bg-border" />
+        </Card>
+      </If>
+      <If when={canUseDoubleCopy(props.platformOs)}>
+        <Card testID="settings-copy-card" class={props.compact ? "gap-2 p-2" : "gap-2 p-3"}>
+          <View class="gap-2">
+            <Switch
+              testID="settings-double-copy-switch"
+              labelTestID="settings-double-copy-label"
+              label={t("settings.doubleCopy.label")}
+              tooltip={t("settings.doubleCopy.description")}
+              checked={doubleCopyEnabled()}
+              onChange={(checked) => void selectDoubleCopy(checked)}
+            />
+            <If when={doubleCopyError() !== null}>
+              <Text
+                testID="settings-double-copy-error"
+                role="alert"
+                class="px-3 pb-1 text-sm text-destructive"
+              >
+                {doubleCopyError()}
+              </Text>
+            </If>
+          </View>
           <View class="gap-2">
             <Switch
               testID="settings-selection-copy-switch"
@@ -207,27 +229,6 @@ export function ShortcutsSection(props: {
               </Text>
             </If>
           </View>
-        </Card>
-      </If>
-      <If when={canUseDoubleCopy(props.platformOs)}>
-        <Card testID="settings-double-copy-card" class={props.compact ? "gap-2 p-2" : "gap-2 p-3"}>
-          <Switch
-            testID="settings-double-copy-switch"
-            labelTestID="settings-double-copy-label"
-            label={t("settings.doubleCopy.label")}
-            tooltip={t("settings.doubleCopy.description")}
-            checked={doubleCopyEnabled()}
-            onChange={(checked) => void selectDoubleCopy(checked)}
-          />
-          <If when={doubleCopyError() !== null}>
-            <Text
-              testID="settings-double-copy-error"
-              role="alert"
-              class="px-3 pb-1 text-sm text-destructive"
-            >
-              {doubleCopyError()}
-            </Text>
-          </If>
         </Card>
       </If>
       <If when={!canUseDoubleCopy(props.platformOs)}>

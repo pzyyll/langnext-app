@@ -332,7 +332,7 @@ test("settings ui: renders cleanly at the minimum viewport in dark mode with red
   await app.waitFor(
     "id:settings-translation-shortcuts-card >> id:settings-quick-translate-shortcut-row",
   );
-  expect(app.shows("id:settings-double-copy-card")).toBe(true);
+  expect(app.shows("id:settings-copy-card")).toBe(true);
   expect(app.texts()).toContain("打开快速翻译");
   expect(app.texts()).toContain("Alt+Shift+D");
   expect(
@@ -345,6 +345,10 @@ test("settings ui: renders cleanly at the minimum viewport in dark mode with red
   expect(app.shows("id:settings-screenshot-translate-shortcut-reset")).toBe(false);
   expect(app.shows("id:settings-quick-translate-shortcut-reset")).toBe(false);
   expect(app.shows("id:settings-double-copy-switch")).toBe(true);
+  expect(app.shows("id:settings-copy-card >> id:settings-selection-copy-switch")).toBe(true);
+  expect(
+    app.shows("id:settings-translation-shortcuts-card >> id:settings-selection-copy-switch"),
+  ).toBe(false);
   expect(app.texts()).toContain("模拟复制获取文本");
 });
 
@@ -409,7 +413,7 @@ test("double copy: shows Windows-only opt-in off by default, hides outside Windo
   await macApp.press("id:nav-settings");
   await macApp.press("id:settings-nav-shortcuts");
   await macApp.waitFor("id:settings-shortcuts-windows-only");
-  expect(macApp.shows("id:settings-double-copy-card")).toBe(false);
+  expect(macApp.shows("id:settings-copy-card")).toBe(false);
   expect(macApp.shows("id:settings-selection-copy-switch")).toBe(false);
   expect(macApp.shows("id:settings-quick-translate-shortcut")).toBe(false);
   expect(macApp.shows("id:settings-translation-shortcuts-card")).toBe(false);
@@ -420,9 +424,9 @@ test("double copy: shows Windows-only opt-in off by default, hides outside Windo
   });
   await winApp.press("id:nav-settings");
   await winApp.waitFor("id:settings-general-card");
-  expect(winApp.shows("id:settings-double-copy-card")).toBe(false);
+  expect(winApp.shows("id:settings-copy-card")).toBe(false);
   await winApp.press("id:settings-nav-shortcuts");
-  await winApp.waitFor("id:settings-double-copy-card");
+  await winApp.waitFor("id:settings-copy-card");
   expect(winApp.shows("id:settings-double-copy-switch")).toBe(true);
   expect(winApp.storage()["quickTranslate.preferences.v1"]).toBeUndefined();
   expect(winApp.texts()).not.toContain(COPY_SWITCH_HELP.doubleCopy);
