@@ -1099,7 +1099,7 @@ test("language detection: renders detector list and detail in dark compact mode 
   expect(app.shows("id:settings-detection-preferences-card")).toBe(false);
 });
 
-test("ocr settings: starts empty, adds AI via the header picker, and configures it on its detail page", async () => {
+test("ocr settings: starts empty, adds AI from the empty state, and configures it on its detail page", async () => {
   const seed = makeSeedStorage({
     channels: [makeChannel({ id: "ch-openai", displayName: "OpenAI Main", enabled: true })],
     models: [
@@ -1133,14 +1133,15 @@ test("ocr settings: starts empty, adds AI via the header picker, and configures 
   expect(app.shows("id:settings-ocr-empty")).toBe(true);
   expect(app.shows("id:settings-ocr-priority-info")).toBe(true);
   expect(app.texts()).toContain("No OCR channels yet");
-  expect(app.texts()).toContain("Add First OCR Channel");
   expect(app.texts()).toContain("Available channels");
+  expect(app.shows("id:settings-ocr-empty-channel-ai")).toBe(true);
+  expect(app.shows("id:settings-ocr-empty-channel-baidu")).toBe(true);
   expect(app.texts()).toContain("AI OCR");
   expect(app.texts()).toContain("Baidu OCR");
   expect(app.storage()[OCR_STORAGE_KEY]).toBeUndefined();
 
   // Escape and Cancel dismiss the picker cleanly without writing.
-  await app.press("id:settings-ocr-empty-add");
+  await app.press("id:settings-ocr-add");
   await app.waitFor("id:settings-ocr-option-ai");
   expect(app.shows("id:settings-ocr-option-baidu")).toBe(true);
   await app.keyboard.press("escape");
@@ -1154,11 +1155,8 @@ test("ocr settings: starts empty, adds AI via the header picker, and configures 
   await app.waitUntil(() => !app.shows("id:settings-ocr-add-dialog"));
   expect(app.storage()[OCR_STORAGE_KEY]).toBeUndefined();
 
-  // Selecting AI adds it to the list and navigates straight to its configuration page.
-  await app.press("id:settings-ocr-add");
-  await app.waitFor("id:settings-ocr-add-dialog");
-  await app.press("id:settings-ocr-option-ai");
-  await app.waitUntil(() => !app.shows("id:settings-ocr-add-dialog"));
+  // Picking AI in the empty state adds it and navigates straight to its configuration page.
+  await app.press("id:settings-ocr-empty-channel-ai");
   await app.waitFor("id:settings-ocr-detail-card");
   expect(app.shows("id:settings-ocr-breadcrumb")).toBe(true);
   expect(app.shows("id:settings-ocr-breadcrumb-root")).toBe(true);
@@ -1275,14 +1273,16 @@ test("ocr settings: localizes the empty state and the first-channel action", asy
   await app.waitFor("id:settings-ocr-empty");
 
   expect(app.texts()).toContain("暂未添加任何 OCR 识别渠道");
-  expect(app.texts()).toContain("添加首个 OCR 渠道");
   expect(app.texts()).toContain("可添加的渠道");
   expect(app.texts()).toContain("AI OCR");
   expect(app.texts()).toContain("百度 OCR");
+  expect(app.shows("role:button[添加 AI OCR]")).toBe(true);
+  expect(app.shows("role:button[添加 百度 OCR]")).toBe(true);
 
-  await app.press("id:settings-ocr-empty-add");
-  await app.waitFor("id:settings-ocr-add-dialog");
-  expect(app.texts()).toContain("百度 OCR");
+  await app.press("id:settings-ocr-empty-channel-baidu");
+  await app.waitFor("id:settings-ocr-detail-card");
+  expect(app.shows("id:settings-ocr-add-dialog")).toBe(false);
+  expect(app.texts()).toContain("模式");
 });
 
 test("ocr settings: an open priority tooltip does not swallow Escape for the remove dialog", async () => {

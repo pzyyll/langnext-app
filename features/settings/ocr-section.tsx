@@ -92,8 +92,9 @@ function OcrChannelAvatar(props: { kind: OcrServiceKind }) {
 /** First-run card shown until the first OCR channel is added. */
 function OcrEmptyState(props: {
   compact: boolean;
+  busy: boolean;
   availableKinds: readonly OcrServiceKind[];
-  onAdd: () => void;
+  onSelect: (kind: OcrServiceKind) => void;
 }) {
   return (
     <Card testID="settings-ocr-empty" class={props.compact ? "gap-4 p-5" : "gap-6 p-8"}>
@@ -104,18 +105,6 @@ function OcrEmptyState(props: {
         <Text role="header" class="text-center text-lg font-semibold text-card-foreground">
           {t("settings.ocr.emptyTitle")}
         </Text>
-        <Button
-          testID="settings-ocr-empty-add"
-          variant="primary"
-          size="md"
-          accessibilityLabel={t("settings.ocr.emptyAction")}
-          onPress={props.onAdd}
-        >
-          <Icon name="plus" tone="primary-foreground" class="size-4" />
-          <Text class="text-sm font-medium text-primary-foreground">
-            {t("settings.ocr.emptyAction")}
-          </Text>
-        </Button>
       </View>
 
       <View class={props.compact ? "mx-4 h-px bg-border" : "mx-6 h-px bg-border"} />
@@ -127,9 +116,21 @@ function OcrEmptyState(props: {
         <View class="flex-row flex-wrap justify-center gap-2">
           <Each of={props.availableKinds} key={(kind) => kind}>
             {(kind) => (
-              <View class="rounded-lg border border-border px-4 py-1.5">
-                <Text class="text-sm text-muted-foreground">{t(`settings.ocr.${kind()}`)}</Text>
-              </View>
+              <Button
+                testID={`settings-ocr-empty-channel-${kind()}`}
+                variant="outline"
+                size="sm"
+                disabled={props.busy}
+                accessibilityLabel={t("settings.ocr.emptyAdd", {
+                  name: t(`settings.ocr.${kind()}`),
+                })}
+                onPress={() => props.onSelect(kind())}
+                class="h-auto px-4 py-1.5"
+              >
+                <Text class="text-sm font-medium text-foreground">
+                  {t(`settings.ocr.${kind()}`)}
+                </Text>
+              </Button>
             )}
           </Each>
         </View>
@@ -219,7 +220,7 @@ interface OcrChannelListProps {
   onSetError: (message: string) => void;
   onBusyChange: (busy: boolean) => void;
   onOpenChannel: (kind: OcrServiceKind) => void;
-  onAddChannel: () => void;
+  onAddAvailableChannel: (kind: OcrServiceKind) => void;
   onFocusAddButton: () => void;
   onRowRef: (kind: OcrServiceKind, node: ViewRef | null) => void;
   onGripRef: (kind: OcrServiceKind, node: ViewRef | null) => void;
@@ -496,8 +497,9 @@ function OcrChannelList(props: OcrChannelListProps) {
         else={
           <OcrEmptyState
             compact={props.compact}
+            busy={props.busy}
             availableKinds={ocrSettingsStore.availableChannels()}
-            onAdd={props.onAddChannel}
+            onSelect={props.onAddAvailableChannel}
           />
         }
       >
@@ -1081,7 +1083,7 @@ export function OcrSection(props: OcrSectionProps) {
           onSetError={(message) => listError.set(message)}
           onBusyChange={(busy) => listBusy.set(busy)}
           onOpenChannel={(kind) => props.onSelectChannel(kind)}
-          onAddChannel={handleOpenAddDialog}
+          onAddAvailableChannel={(kind) => void handleSelectAddKind(kind)}
           onFocusAddButton={focusAddButton}
           onRowRef={(kind, node) => {
             if (node) rowRefs[kind] = node;
