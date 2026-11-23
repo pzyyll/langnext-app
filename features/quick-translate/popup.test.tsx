@@ -95,6 +95,36 @@ function seedWithPresets(
   });
 }
 
+interface SavedCardSeed {
+  id: string;
+  presetId: string;
+  templateId: string | null;
+  collapsed: boolean;
+}
+
+/** Seeds the popup with saved cards; their list order is the card order. */
+function seedWithSavedCards(
+  presets: TranslationPreset[],
+  cards: SavedCardSeed[],
+): Record<string, string> {
+  return seedWithPresets(presets, {
+    [QUICK_TRANSLATE_PREFERENCES_KEY]: JSON.stringify({
+      version: 1,
+      doubleCopyEnabled: false,
+      autoTranslate: false,
+      ...DEFAULT_POPUP_LANGUAGES,
+      cards,
+    }),
+  });
+}
+
+/** The saved card ids, in popup order. */
+function savedCardIds(storage: Record<string, string>): string[] {
+  const raw = storage[QUICK_TRANSLATE_PREFERENCES_KEY];
+  if (raw === undefined) return [];
+  return (JSON.parse(raw) as { cards: { id: string }[] }).cards.map((card) => card.id);
+}
+
 test("desktop: quick popup translates on Enter, preserves Shift+Enter newline, and copies successful result", async () => {
   const app = await open(POPUP_HARNESS, {
     ...viewport,
@@ -653,6 +683,90 @@ test("preset cards: runs duplicate preset cards independently with template over
   await app.press("id:harness-resolve-fifth");
   await app.waitFor("id:quick-translate-card-card-1 >> id:quick-translate-result-text");
   expect(app.texts()).toContain("Card 1 Expanded Result");
+});
+
+test("preset cards: drags a card above the previous one, keeps its result, and saves the order", async () => {
+  const app = await open(POPUP_HARNESS, {
+    ...viewport,
+    storage: seedWithSavedCards(
+      [makePreset(), makePreset({ id: "preset-2", name: "Preset Two" })],
+      [
+        { id: "card-1", presetId: "preset-1", templateId: null, collapsed: false },
+        { id: "card-2", presetId: "preset-2", templateId: null, collapsed: false },
+      ],
+    ),
+    network: {
+      "POST https://api.openai.com/v1/chat/completions": {
+        status: 200,
+        body: { choices: [{ message: { content: "Bonjour" } }] },
+      },
+    },
+  });
+
+  await app.waitFor("id:quick-translate-card-card-2");
+  await app.type("id:quick-translate-source", "Hello");
+  await app.keyboard.press("enter");
+  await app.waitFor("id:quick-translate-card-card-1 >> id:quick-translate-copy");
+  await app.waitFor("id:quick-translate-card-card-2 >> id:quick-translate-copy");
+  expect(app.requests()).toHaveLength(2);
+
+  // Cards render in their saved order: card 1 first.
+  const before = app.texts();
+  expect(before.indexOf("Default EN to FR")).toBeLessThan(before.indexOf("Preset Two"));
+
+  // Dragging the second card's header above the first reorders the list, result included.
+  await app.drag("id:quick-translate-card-header-card-2", { x: 0, y: -80 });
+  await app.waitUntil(() => savedCardIds(app.storage())[0] === "card-2");
+  expect(savedCardIds(app.storage())).toEqual(["card-2", "card-1"]);
+  expect(app.requests()).toHaveLength(2);
+  await app.waitFor("id:quick-translate-card-card-2 >> id:quick-translate-result-text");
+  await app.waitFor("id:quick-translate-card-card-1 >> id:quick-translate-result-text");
+  const after = app.texts();
+  expect(after.indexOf("Preset Two")).toBeLessThan(after.indexOf("Default EN to FR"));
+
+  // Reopening restores the dragged order from the saved preferences.
+  const reopened = await open(POPUP_HARNESS, { ...viewport, storage: app.storage() });
+  await reopened.waitFor("id:quick-translate-card-card-2");
+  expect(savedCardIds(reopened.storage())).toEqual(["card-2", "card-1"]);
+});
+
+test("preset cards: reorders with the grip arrow keys and keeps the focus", async () => {
+  // A Linux host delivers raw keys to the focused view, as a desktop does.
+  const app = await open(POPUP_HARNESS, {
+    ...viewport,
+    platform: "linux",
+    storage: seedWithSavedCards(
+      [makePreset(), makePreset({ id: "preset-2", name: "Preset Two" })],
+      [
+        { id: "card-1", presetId: "preset-1", templateId: null, collapsed: false },
+        { id: "card-2", presetId: "preset-2", templateId: null, collapsed: false },
+      ],
+    ),
+  });
+
+  await app.waitFor("id:quick-translate-card-grip-card-2");
+  await app.press("id:quick-translate-card-grip-card-2");
+  await app.keyboard.press("arrowup");
+  await app.waitUntil(() => savedCardIds(app.storage())[0] === "card-2");
+
+  // The grip keeps the focus across the reorder, so the next key moves it back.
+  await app.keyboard.press("arrowdown");
+  await app.waitUntil(() => savedCardIds(app.storage())[0] === "card-1");
+});
+
+test("preset cards: hides the reorder grip while a single card is shown", async () => {
+  const app = await open(POPUP_HARNESS, {
+    ...viewport,
+    storage: seedWithSavedCards(
+      [makePreset()],
+      [{ id: "card-1", presetId: "preset-1", templateId: null, collapsed: false }],
+    ),
+  });
+
+  await app.waitFor("id:quick-translate-card-card-1");
+  expect(app.shows("id:quick-translate-card-card-1 >> id:quick-translate-card-grip-card-1")).toBe(
+    false,
+  );
 });
 
 test("preset cards: template switches reuse pending and completed queries for the current input", async () => {

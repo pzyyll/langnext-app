@@ -1,18 +1,23 @@
 import {
   cleanup,
+  createAnimatedValue,
   effect,
   Image,
   platform,
+  reduceMotion,
   signal,
   Text,
   View,
   type Accessor,
   type Align,
+  type AnimatedValue,
   type InputRef,
+  type PanEvent,
   type Placement,
+  type ViewRef,
 } from "nsh";
 import { t } from "nsh/i18n";
-import { Button } from "../../components/ui/button";
+import { Button, KeyboardButton } from "../../components/ui/button";
 import { Card } from "../../components/ui/card";
 import { LARGEST_FONT_STEP } from "../../components/ui/font-step";
 import { Icon, type IconName } from "../../components/ui/icon";
@@ -236,8 +241,26 @@ function PresetLeadingMark(props: { preset: TranslationPreset | null; testID?: s
   );
 }
 
+/** Time a reordered card takes to settle into its new slot. */
+const CARD_REORDER_SETTLE_MS = 180;
+
+/** Drag and keyboard reordering for one preset card. */
+interface CardReorderControls {
+  /** Whether the list has enough cards to reorder. */
+  canReorder: Accessor<boolean>;
+  /** Whether this card accepts a drag now: the list can reorder and nothing is settling. */
+  canDrag: Accessor<boolean>;
+  dragging: Accessor<boolean>;
+  offset: AnimatedValue;
+  onStart: () => void;
+  onEnd: (event: PanEvent) => void;
+  onMoveBy: (delta: number, refocus: boolean) => void;
+  onGripRef: (node: ViewRef) => void;
+}
+
 interface PresetCardRowProps {
   card: Accessor<CardViewItem>;
+  reorder: CardReorderControls;
   markdownEnabled: boolean;
   presets: Accessor<readonly TranslationPreset[]>;
   presetItems: Accessor<SelectItem[]>;
@@ -259,6 +282,7 @@ interface PresetCardRowProps {
 }
 
 function PresetCardRow(props: PresetCardRowProps) {
+  let gripNode: ViewRef | null = null;
   const presetById = (presetId: string) =>
     props.presets().find((item) => item.id === presetId) ?? null;
 
@@ -285,9 +309,19 @@ function PresetCardRow(props: PresetCardRowProps) {
   const hasOutput = () => streaming() || result().status === "success" || outputText().length > 0;
   const hasBody = () => !props.card().collapsed && result().status !== "idle";
 
+  const presetName = () => resolvedPreset()?.name ?? t("quickTranslate.presetPlaceholder");
+
   return (
-    <Card testID={`quick-translate-card-${props.card().id}`} variant="subtle">
+    <Card
+      testID={`quick-translate-card-${props.card().id}`}
+      variant="subtle"
+      class={props.reorder.dragging() ? "shadow-md" : undefined}
+    >
       <View
+        testID={`quick-translate-card-header-${props.card().id}`}
+        pan={props.reorder.canDrag() ? { y: props.reorder.offset } : undefined}
+        onPanStart={() => props.reorder.onStart()}
+        onPanEnd={(event) => props.reorder.onEnd(event)}
         class={`flex-row items-center justify-between gap-2 px-3 pt-2.5 ${hasBody() ? "pb-2" : "pb-2.5"}`}
       >
         <View class="min-w-0 flex-1 flex-row items-center gap-1.5">
@@ -364,6 +398,44 @@ function PresetCardRow(props: PresetCardRowProps) {
           >
             <Icon name="mdi:close" tone="muted-foreground" class="size-3.5" />
           </Button>
+          <If when={props.reorder.canReorder()}>
+            <KeyboardButton
+              testID={`quick-translate-card-grip-${props.card().id}`}
+              variant="ghost"
+              size="icon-xs"
+              focusable={true}
+              tooltip={t("quickTranslate.reorderCard", { name: presetName() })}
+              accessibilityLabel={t("quickTranslate.reorderCard", { name: presetName() })}
+              accessibilityHint={t("quickTranslate.reorderCardHint")}
+              accessibilityActions={[
+                {
+                  name: "moveUp",
+                  label: t("quickTranslate.moveCardUp", { name: presetName() }),
+                },
+                {
+                  name: "moveDown",
+                  label: t("quickTranslate.moveCardDown", { name: presetName() }),
+                },
+              ]}
+              onAccessibilityAction={(event) => {
+                if (event.actionName === "moveUp") props.reorder.onMoveBy(-1, false);
+                else if (event.actionName === "moveDown") props.reorder.onMoveBy(1, false);
+              }}
+              captureKeys={["arrowup", "arrowdown"]}
+              onKeyDown={(event) => {
+                if (event.key === "ArrowUp") props.reorder.onMoveBy(-1, true);
+                else if (event.key === "ArrowDown") props.reorder.onMoveBy(1, true);
+              }}
+              onPress={() => gripNode?.focus()}
+              ref={(node) => {
+                gripNode = node;
+                props.reorder.onGripRef(node);
+              }}
+              class="shrink-0 cursor-grab"
+            >
+              <Icon name="grip-vertical" tone="muted-foreground" class="size-3.5" />
+            </KeyboardButton>
+          </If>
         </View>
       </View>
 
@@ -767,6 +839,106 @@ export function QuickTranslatePopup(props: QuickTranslatePopupProps) {
     };
   };
 
+  const draggingCardId = signal<string | null>(null);
+  const settlingCards = signal(false);
+  const cardOffsets = new Map<string, AnimatedValue>();
+  const cardSlots = new Map<string, { top: number; height: number }>();
+  const cardGripNodes = new Map<string, ViewRef>();
+  const cardOrder = () => props.session.cards().map((card) => card.id);
+  const canReorderCards = () => props.session.cards().length > 1;
+
+  const cardOffset = (cardId: string): AnimatedValue => {
+    const existing = cardOffsets.get(cardId);
+    if (existing !== undefined) return existing;
+    const created = createAnimatedValue(0);
+    cardOffsets.set(cardId, created);
+    return created;
+  };
+
+  const animateCardOffset = (cardId: string, to: number): Promise<unknown> => {
+    if (reduceMotion()) {
+      cardOffset(cardId).set(to);
+      return Promise.resolve();
+    }
+    return cardOffset(cardId).timing(to, { duration: CARD_REORDER_SETTLE_MS, easing: "easeOut" });
+  };
+
+  const resetCardOffsets = () => {
+    for (const offset of cardOffsets.values()) offset.set(0);
+  };
+
+  const handleCardDragStart = (cardId: string) => {
+    if (!canReorderCards() || settlingCards() || draggingCardId() !== null) return;
+    draggingCardId.set(cardId);
+  };
+
+  /** The card whose measured slot center is nearest the dragged card's center. */
+  const nearestCardSlot = (cardId: string, offsetY: number): number | null => {
+    const slot = cardSlots.get(cardId);
+    if (slot === undefined) return null;
+    const center = slot.top + slot.height / 2 + offsetY;
+    let target: number | null = null;
+    let nearest = Number.POSITIVE_INFINITY;
+    cardOrder().forEach((other, position) => {
+      const otherSlot = cardSlots.get(other);
+      if (otherSlot === undefined) return;
+      const distance = Math.abs(otherSlot.top + otherSlot.height / 2 - center);
+      if (distance < nearest) {
+        nearest = distance;
+        target = position;
+      }
+    });
+    return target;
+  };
+
+  /** Slides every card into the slot the reordered list gives it. */
+  const settleCardsIntoSlots = async (cardId: string, target: number) => {
+    const list = cardOrder();
+    const nextOrder = [...list];
+    nextOrder.splice(list.indexOf(cardId), 1);
+    nextOrder.splice(target, 0, cardId);
+    const moves: Promise<unknown>[] = [];
+    nextOrder.forEach((row, position) => {
+      const from = cardSlots.get(row);
+      const to = cardSlots.get(list[position]!);
+      if (from === undefined || to === undefined || from.top === to.top) return;
+      moves.push(animateCardOffset(row, to.top - from.top));
+    });
+    await Promise.all(moves);
+  };
+
+  const handleCardDragEnd = async (cardId: string, event: PanEvent) => {
+    if (draggingCardId() !== cardId) {
+      await animateCardOffset(cardId, 0);
+      return;
+    }
+    settlingCards.set(true);
+    try {
+      const index = cardOrder().indexOf(cardId);
+      const target = nearestCardSlot(cardId, event.value?.y ?? event.translation.y);
+      if (event.cancelled || index === -1 || target === null || target === index) {
+        await animateCardOffset(cardId, 0);
+        return;
+      }
+      await settleCardsIntoSlots(cardId, target);
+      props.session.handleMoveCard(cardId, target);
+      resetCardOffsets();
+    } finally {
+      draggingCardId.set(null);
+      settlingCards.set(false);
+    }
+  };
+
+  const moveCardBy = (cardId: string, delta: number, refocus: boolean) => {
+    if (!canReorderCards() || settlingCards() || draggingCardId() !== null) return;
+    const list = cardOrder();
+    const index = list.indexOf(cardId);
+    const target = index + delta;
+    if (index === -1 || target < 0 || target >= list.length) return;
+    props.session.handleMoveCard(cardId, target);
+    if (refocus) queueMicrotask(() => cardGripNodes.get(cardId)?.focus());
+  };
+
   const ocrMessage = () => (props.ocrState ? props.ocrState().message : null);
   const ocrRecognizing = () => (props.ocrState ? props.ocrState().phase === "recognizing" : false);
   // One bottom-left status slot serves OCR errors and active recognition by priority.
@@ -984,41 +1156,65 @@ export function QuickTranslatePopup(props: QuickTranslatePopupProps) {
       <If when={props.session.cards().length > 0}>
         <View class="gap-2.5">
           <Each of={props.session.cards()} key={(card) => card.id}>
-            {(card) => (
-              <PresetCardRow
-                card={card}
-                markdownEnabled={props.markdownEnabled ?? false}
-                presets={props.session.enabledPresets}
-                presetItems={props.session.presetItems}
-                onOverlayOpenChange={(menuId, open) =>
-                  props.session.notifyOverlayOpenChange(menuId, open)
-                }
-                onSelectPreset={(cardId, presetId) =>
-                  props.session.handleSelectCardPreset(cardId, presetId)
-                }
-                onSelectTemplate={(cardId, templateId) =>
-                  props.session.handleSelectCardTemplate(cardId, templateId)
-                }
-                onToggleCollapse={(cardId) => props.session.handleToggleCollapse(cardId)}
-                onRemove={(cardId) => props.session.handleRemoveCard(cardId)}
-                onRetry={(id) => props.session.handleRetryCard(id)}
-                onCopy={(id) => props.session.handleCopyCard(id)}
-                speakState={() => {
-                  const state = speechControl({ cardId: card().id });
-                  return {
-                    disabled: state.disabled,
-                    tooltip: state.tooltip,
-                    label: state.label,
-                    icon: state.icon,
-                  };
-                }}
-                speakError={() => resultSpeechErrors()[card().id] ?? null}
-                onSpeak={() => {
-                  if (speechControl({ cardId: card().id }).busy) cancelSpeech();
-                  else speakResult(card().id);
-                }}
-              />
-            )}
+            {(card) => {
+              const cardId = () => card().id;
+              return (
+                <View
+                  onLayout={({ bounds }) => {
+                    cardSlots.set(cardId(), {
+                      top: bounds.origin.y,
+                      height: bounds.size.height,
+                    });
+                  }}
+                  style={{ translate: [0, cardOffset(cardId())] }}
+                  class={draggingCardId() === cardId() ? "z-10 cursor-grabbing" : undefined}
+                >
+                  <PresetCardRow
+                    card={card}
+                    reorder={{
+                      canReorder: canReorderCards,
+                      canDrag: () => canReorderCards() && !settlingCards(),
+                      dragging: () => draggingCardId() === cardId(),
+                      offset: cardOffset(cardId()),
+                      onStart: () => handleCardDragStart(cardId()),
+                      onEnd: (event) => void handleCardDragEnd(cardId(), event),
+                      onMoveBy: (delta, refocus) => moveCardBy(cardId(), delta, refocus),
+                      onGripRef: (node) => cardGripNodes.set(cardId(), node),
+                    }}
+                    markdownEnabled={props.markdownEnabled ?? false}
+                    presets={props.session.enabledPresets}
+                    presetItems={props.session.presetItems}
+                    onOverlayOpenChange={(menuId, open) =>
+                      props.session.notifyOverlayOpenChange(menuId, open)
+                    }
+                    onSelectPreset={(targetId, presetId) =>
+                      props.session.handleSelectCardPreset(targetId, presetId)
+                    }
+                    onSelectTemplate={(targetId, templateId) =>
+                      props.session.handleSelectCardTemplate(targetId, templateId)
+                    }
+                    onToggleCollapse={(targetId) => props.session.handleToggleCollapse(targetId)}
+                    onRemove={(targetId) => props.session.handleRemoveCard(targetId)}
+                    onRetry={(id) => props.session.handleRetryCard(id)}
+                    onCopy={(id) => props.session.handleCopyCard(id)}
+                    speakState={() => {
+                      const state = speechControl({ cardId: card().id });
+                      return {
+                        disabled: state.disabled,
+                        tooltip: state.tooltip,
+                        label: state.label,
+                        icon: state.icon,
+                      };
+                    }}
+                    speakError={() => resultSpeechErrors()[card().id] ?? null}
+                    onSpeak={() => {
+                      if (speechControl({ cardId: card().id }).busy) cancelSpeech();
+                      else speakResult(card().id);
+                    }}
+                  />
+                </View>
+              );
+            }}
           </Each>
         </View>
       </If>
