@@ -233,7 +233,7 @@ export function ChannelsRail(props: ChannelsRailProps) {
                               });
                             }}
                             style={{ translate: [0, offsetOf(id())] }}
-                            class={`flex-row items-center gap-1 rounded-xl border pr-1.5 ${motion.navigationFeedback} ${
+                            class={`group flex-row items-center gap-1 rounded-xl border pr-1.5 ${motion.navigationFeedback} ${
                               dragging() === id()
                                 ? "z-10 cursor-grabbing border-border bg-card shadow-md"
                                 : isSelected()
@@ -341,7 +341,11 @@ export function ChannelsRail(props: ChannelsRailProps) {
                                 ref={(node) => {
                                   gripNodes.set(id(), node);
                                 }}
-                                class="shrink-0 cursor-grab"
+                                class={`shrink-0 cursor-grab ${motion.tooltip} ${
+                                  dragging() === id()
+                                    ? "opacity-100"
+                                    : "opacity-0 group-hover:opacity-100 focus-visible:opacity-100"
+                                }`}
                               >
                                 <Icon name="grip-vertical" tone="muted-foreground" class="size-4" />
                               </KeyboardButton>

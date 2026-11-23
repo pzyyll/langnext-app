@@ -954,6 +954,12 @@ test("language detection: reorders detectors and toggles enable state while pres
   expect(app.shows("id:settings-detection-role-ai")).toBe(true);
   expect(app.shows("id:settings-detection-role-google")).toBe(true);
 
+  // The reorder grip stays hidden until its row is hovered.
+  await app.hover("id:settings-nav-language-detection");
+  expect(app.viewStyle("id:settings-detection-grip-ai")?.opacity).toBe(0);
+  await app.hover("id:settings-detection-row-ai");
+  expect(app.viewStyle("id:settings-detection-grip-ai")?.opacity).toBe(1);
+
   // Dragging the second row above the first persists the new priority order.
   await app.drag("id:settings-detection-row-google", { x: 0, y: -80 });
   await app.waitUntil(
@@ -1764,6 +1770,14 @@ test("ocr settings: reorders channels and toggles enable state while preserving 
   expect(app.shows("id:settings-ocr-role-ai")).toBe(true);
   expect(app.shows("id:settings-ocr-role-baidu")).toBe(true);
 
+  // The reorder grip stays hidden until its row is hovered.
+  await app.hover("id:settings-nav-ocr");
+  expect(app.viewStyle("id:settings-ocr-grip-ai")?.opacity).toBe(0);
+  await app.hover("id:settings-ocr-row-ai");
+  expect(app.viewStyle("id:settings-ocr-grip-ai")?.opacity).toBe(1);
+  await app.hover("id:settings-ocr-row-ai");
+  expect(app.viewStyle("id:settings-ocr-grip-ai")?.opacity).toBe(1);
+
   // Dragging the second row above the first persists the new priority order.
   await app.drag("id:settings-ocr-row-baidu", { x: 0, y: -80 });
   await app.waitUntil(() => JSON.parse(app.storage()[OCR_STORAGE_KEY]!).order[0] === "baidu");
@@ -2555,6 +2569,14 @@ test("tts settings: reorders channels and keeps the saved key of a disabled one"
   expect(app.shows("id:settings-tts-grip-azure")).toBe(true);
   expect(app.shows("id:settings-tts-role-google-cloud")).toBe(true);
   expect(app.shows("id:settings-tts-role-azure")).toBe(true);
+
+  // The reorder grip stays hidden until its row is hovered.
+  await app.hover("id:settings-nav-tts");
+  expect(app.viewStyle("id:settings-tts-grip-azure")?.opacity).toBe(0);
+  await app.hover("id:settings-tts-row-azure");
+  expect(app.viewStyle("id:settings-tts-grip-azure")?.opacity).toBe(1);
+  await app.hover("id:settings-tts-row-azure");
+  expect(app.viewStyle("id:settings-tts-grip-azure")?.opacity).toBe(1);
 
   // Dragging the second row above the first persists the new priority order.
   await app.drag("id:settings-tts-row-azure", { x: 0, y: -80 });

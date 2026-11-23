@@ -784,6 +784,7 @@ test("preset cards: reveals the reorder grip only while its card header is hover
   const gripOpacity = (cardId: string) =>
     app.viewStyle(`id:quick-translate-card-grip-${cardId}`)?.opacity;
   await app.waitFor("id:quick-translate-card-grip-card-2");
+  await app.hover("id:quick-translate-footer");
   expect(gripOpacity("card-1")).toBe(0);
   expect(gripOpacity("card-2")).toBe(0);
 

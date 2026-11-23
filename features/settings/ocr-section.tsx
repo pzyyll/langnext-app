@@ -494,7 +494,7 @@ function OcrChannelList(props: OcrChannelListProps) {
                       };
                     }}
                     style={{ translate: [0, offsets[kind()]] }}
-                    class={`flex-row items-center gap-1.5 rounded-xl pr-2 ${motion.navigationFeedback} ${
+                    class={`group flex-row items-center gap-1.5 rounded-xl pr-2 ${motion.navigationFeedback} ${
                       dragging() === kind()
                         ? "z-10 cursor-grabbing bg-card shadow-md"
                         : "hover:bg-accent/60 active:bg-accent"
@@ -563,7 +563,11 @@ function OcrChannelList(props: OcrChannelListProps) {
                         captureKeys={["arrowup", "arrowdown"]}
                         onKeyDown={(event) => handleGripKey(kind(), event)}
                         ref={(node) => props.onGripRef(kind(), node)}
-                        class="shrink-0 cursor-grab"
+                        class={`shrink-0 cursor-grab ${motion.tooltip} ${
+                          dragging() === kind()
+                            ? "opacity-100"
+                            : "opacity-0 group-hover:opacity-100 focus-visible:opacity-100"
+                        }`}
                       >
                         <Icon name="grip-vertical" tone="muted-foreground" class="size-4" />
                       </KeyboardButton>
