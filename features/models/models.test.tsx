@@ -211,6 +211,12 @@ test("reorders channels and deletes a channel with its models and credentials", 
   await app.press("id:channel-item-ch-claude");
   expect(app.texts()).toContain("Claude Team");
 
+  // The reorder grip stays hidden until the row is hovered.
+  await app.hover("id:add-channel-button");
+  expect(app.viewStyle("id:channel-grip-ch-claude")?.opacity).toBe(0);
+  await app.hover("id:channel-row-ch-claude");
+  expect(app.viewStyle("id:channel-grip-ch-claude")?.opacity).toBe(1);
+
   // Dragging the second channel above the first persists the new order.
   await app.drag("id:channel-row-ch-claude", { x: 0, y: -80 });
   await app.waitUntil(

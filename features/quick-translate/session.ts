@@ -134,6 +134,7 @@ export interface QuickTranslateSession {
   handleTargetLanguageChange: (language: TargetLanguageId) => void;
   handleSwapLanguages: () => void;
   handleAddPresetCard: (presetId: string) => void;
+  handleMoveCard: (cardId: string, targetIndex: number) => void;
   handleSelectCardPreset: (cardId: string, presetId: string | null) => void;
   handleSelectCardTemplate: (cardId: string, templateId: string | null) => void;
   handleToggleCollapse: (cardId: string) => void;
@@ -678,6 +679,20 @@ export function createQuickTranslateSession(
     }
   };
 
+  // The card keeps its queries and result: reordering changes neither.
+  const handleMoveCard = (cardId: string, targetIndex: number) => {
+    const list = cards();
+    const index = list.findIndex((item) => item.id === cardId);
+    if (index === -1) return;
+    const target = Math.max(0, Math.min(targetIndex, list.length - 1));
+    if (target === index) return;
+    const next = [...list];
+    const [moved] = next.splice(index, 1);
+    next.splice(target, 0, moved!);
+    cards.set(next);
+    persistPreferencesState();
+  };
+
   const handleSelectCardPreset = (cardId: string, value: string | null) => {
     if (!value) return;
     const current = cards().find((item) => item.id === cardId);
@@ -841,6 +856,7 @@ export function createQuickTranslateSession(
     handleTargetLanguageChange,
     handleSwapLanguages,
     handleAddPresetCard,
+    handleMoveCard,
     handleSelectCardPreset,
     handleSelectCardTemplate,
     handleToggleCollapse,

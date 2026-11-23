@@ -478,7 +478,7 @@ function TtsChannelList(props: TtsChannelListProps) {
                       };
                     }}
                     style={{ translate: [0, offsets[channel()]] }}
-                    class={`flex-row items-center gap-1.5 rounded-xl pr-2 ${motion.navigationFeedback} ${
+                    class={`group flex-row items-center gap-1.5 rounded-xl pr-2 ${motion.navigationFeedback} ${
                       dragging() === channel()
                         ? "z-10 cursor-grabbing bg-card shadow-md"
                         : "hover:bg-accent/60 active:bg-accent"
@@ -541,7 +541,11 @@ function TtsChannelList(props: TtsChannelListProps) {
                         captureKeys={["arrowup", "arrowdown"]}
                         onKeyDown={(event) => handleGripKey(channel(), event)}
                         ref={(node) => props.onGripRef(channel(), node)}
-                        class="shrink-0 cursor-grab"
+                        class={`shrink-0 cursor-grab ${motion.tooltip} ${
+                          dragging() === channel()
+                            ? "opacity-100"
+                            : "opacity-0 group-hover:opacity-100 focus-visible:opacity-100"
+                        }`}
                       >
                         <Icon name="grip-vertical" tone="muted-foreground" class="size-4" />
                       </KeyboardButton>

@@ -741,6 +741,10 @@ quickTranslate:
   collapseCard: Collapse card
   expandCard: Expand card
   removeCard: Remove card
+  reorderCard: Reorder %{name}
+  reorderCardHint: Drag the card header, or press the up and down arrow keys.
+  moveCardUp: Move %{name} up
+  moveCardDown: Move %{name} down
   translating: Translating…
   detectingLanguage: Detecting
   enableAutoTranslate: Enable automatic translation
