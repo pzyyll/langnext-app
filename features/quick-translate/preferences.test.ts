@@ -55,6 +55,7 @@ test("quick preferences: persists only allowed fields, recovers from corrupt sto
     version: 1,
     doubleCopyEnabled: false,
     autoTranslate: false,
+    markdownEnabled: false,
     sourceLanguage: null,
     targetLanguage: null,
     cards: [],
@@ -77,6 +78,7 @@ test("quick preferences: persists only allowed fields, recovers from corrupt sto
   // Explicit save overwrites corrupt storage cleanly without storing forbidden fields.
   const ok = await store.savePopupState({
     autoTranslate: true,
+    markdownEnabled: true,
     sourceLanguage: "en",
     targetLanguage: "ja",
     cards: [
@@ -91,6 +93,7 @@ test("quick preferences: persists only allowed fields, recovers from corrupt sto
     version: 1,
     doubleCopyEnabled: false,
     autoTranslate: true,
+    markdownEnabled: true,
     sourceLanguage: "en",
     targetLanguage: "ja",
     cards: [
@@ -149,6 +152,7 @@ test("quick preferences: persists only allowed fields, recovers from corrupt sto
   });
   await queuedStore.load();
 
+  expect(queuedStore.preferences().markdownEnabled).toBe(true);
   const slowEnable = queuedStore.savePopupState({ autoTranslate: true });
   const quickDisable = queuedStore.savePopupState({ autoTranslate: false });
   await Promise.resolve();
@@ -163,7 +167,9 @@ test("quick preferences: persists only allowed fields, recovers from corrupt sto
   expect(JSON.parse(writeGates[1]!.payload).autoTranslate).toBe(false);
   writeGates[1]!.resolve();
   await Promise.all([slowEnable, quickDisable]);
-  expect(JSON.parse(backing.get(QUICK_TRANSLATE_PREFERENCES_KEY)!).autoTranslate).toBe(false);
+  const saved = JSON.parse(backing.get(QUICK_TRANSLATE_PREFERENCES_KEY)!);
+  expect(saved.autoTranslate).toBe(false);
+  expect(saved.markdownEnabled).toBe(true);
 
   // 4. Write failure surfaces error cleanly and does not throw or falsely claim saved.
   failWrites = true;

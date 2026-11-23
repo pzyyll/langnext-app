@@ -694,6 +694,8 @@ quickTranslate:
   detectingLanguage: 正在检测
   enableAutoTranslate: 开启自动翻译
   disableAutoTranslate: 关闭自动翻译
+  showMarkdown: 以 Markdown 显示译文
+  showPlainText: 以纯文本显示译文
   speak: 朗读
   speakOff: 请在设置中打开语音合成。
   speakUnsupportedAzure: 此语言没有 Azure 语音。

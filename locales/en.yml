@@ -694,6 +694,8 @@ quickTranslate:
   detectingLanguage: Detecting
   enableAutoTranslate: Enable automatic translation
   disableAutoTranslate: Disable automatic translation
+  showMarkdown: Show results as Markdown
+  showPlainText: Show results as plain text
   speak: Read aloud
   speakOff: Turn on text-to-speech in Settings.
   speakUnsupportedAzure: This language has no Azure Speech voice.

@@ -19,6 +19,7 @@ import { Kbd } from "../../components/ui/kbd";
 import { Menu, MenuItem } from "../../components/ui/menu";
 import { Select, type SelectItem } from "../../components/ui/select";
 import { Textarea } from "../../components/ui/textarea";
+import { TranslationOutput } from "../../components/ui/translation-output";
 import { ProviderMark } from "../../modules/ai/ui/provider-mark";
 import { providerSettingsRegistry } from "../../modules/ai/ui/registry";
 import { languageResolutionErrorMessage } from "../language-detection/messages";
@@ -41,6 +42,7 @@ export interface QuickTranslateOcrStatus {
 
 export interface QuickTranslatePopupProps {
   session: QuickTranslateSession;
+  markdownEnabled?: boolean;
   /** OCR progress and alerts; the window entry point passes the controller's state. */
   ocrState?: Accessor<QuickTranslateOcrStatus>;
   /** False while the native window is hidden. Omitted in a harness with no window. */
@@ -215,6 +217,7 @@ function PresetLeadingMark(props: { preset: TranslationPreset | null }) {
 
 interface PresetCardRowProps {
   card: Accessor<CardViewItem>;
+  markdownEnabled: boolean;
   presets: Accessor<readonly TranslationPreset[]>;
   presetItems: Accessor<SelectItem[]>;
   onOverlayOpenChange: (menuId: string, open: boolean) => void;
@@ -249,7 +252,15 @@ function PresetCardRow(props: PresetCardRowProps) {
     return resolution ? resolution.template.id : null;
   };
 
-  const hasBody = () => !props.card().collapsed && props.card().result.status !== "idle";
+  const result = () => props.card().result;
+  const streaming = () => result().status === "streaming";
+  const failed = () => result().status === "error";
+  const outputText = () => {
+    const current = result();
+    return "text" in current ? (current.text ?? "") : "";
+  };
+  const hasOutput = () => streaming() || result().status === "success" || outputText().length > 0;
+  const hasBody = () => !props.card().collapsed && result().status !== "idle";
 
   return (
     <Card testID={`quick-translate-card-${props.card().id}`} variant="subtle">
@@ -336,72 +347,38 @@ function PresetCardRow(props: PresetCardRowProps) {
           </View>
         </If>
 
-        <If when={props.card().result.status === "streaming"}>
-          <View class="px-3 pb-3">
-            <View selectable>
-              <Text
-                testID="quick-translate-result-text"
-                class="text-base leading-relaxed text-card-foreground"
-              >
-                {(() => {
-                  const res = props.card().result;
-                  return res.status === "streaming" ? res.text : "";
-                })()}
-              </Text>
-            </View>
-          </View>
-        </If>
-
-        <If when={props.card().result.status === "error"}>
-          <View>
-            <View class="gap-1.5 px-3 pb-2.5">
-              <If
-                when={(() => {
-                  const res = props.card().result;
-                  return res.status === "error" && (res.text ?? "").length > 0;
-                })()}
-              >
-                <View selectable>
-                  <Text
-                    testID="quick-translate-partial-text"
-                    class="text-base leading-relaxed text-card-foreground"
-                  >
-                    {(() => {
-                      const res = props.card().result;
-                      return res.status === "error" ? (res.text ?? "") : "";
-                    })()}
-                  </Text>
-                </View>
-              </If>
+        <If when={hasOutput() || failed()}>
+          <View class={`min-w-0 gap-1.5 px-3 ${streaming() ? "pb-3" : "pb-2.5"}`}>
+            <If when={hasOutput()}>
+              <TranslationOutput
+                testID={failed() ? "quick-translate-partial-text" : "quick-translate-result-text"}
+                text={outputText()}
+                markdownEnabled={props.markdownEnabled}
+                streaming={streaming()}
+              />
+            </If>
+            <If when={failed()}>
               <Text testID="quick-translate-error" role="alert" class="text-xs text-destructive">
                 {(() => {
-                  const res = props.card().result;
+                  const res = result();
                   return res.status === "error" ? res.message : "";
                 })()}
               </Text>
-            </View>
-            <View class="flex-row items-center justify-end border-t border-border/60 px-2 py-1.5">
-              <RetryIconButton
-                testID="quick-translate-retry"
-                onPress={() => props.onRetry(props.card().id)}
-              />
-            </View>
+            </If>
           </View>
         </If>
 
-        <If when={props.card().result.status === "success"}>
+        <If when={failed()}>
+          <View class="flex-row items-center justify-end border-t border-border/60 px-2 py-1.5">
+            <RetryIconButton
+              testID="quick-translate-retry"
+              onPress={() => props.onRetry(props.card().id)}
+            />
+          </View>
+        </If>
+
+        <If when={result().status === "success"}>
           <View>
-            <View selectable class="px-3 pb-2.5">
-              <Text
-                testID="quick-translate-result-text"
-                class="text-base leading-relaxed text-card-foreground"
-              >
-                {(() => {
-                  const res = props.card().result;
-                  return res.status === "success" ? res.text : "";
-                })()}
-              </Text>
-            </View>
             <View class="flex-row items-center justify-between gap-2 border-t border-border/60 px-2 py-1.5">
               <View class="flex-row items-center gap-0.5">
                 <If
@@ -981,6 +958,7 @@ export function QuickTranslatePopup(props: QuickTranslatePopupProps) {
             {(card) => (
               <PresetCardRow
                 card={card}
+                markdownEnabled={props.markdownEnabled ?? false}
                 presets={props.session.enabledPresets}
                 presetItems={props.session.presetItems}
                 onOverlayOpenChange={(menuId, open) =>

@@ -20,6 +20,7 @@ import { QuickTranslateFooter, QuickTranslatePopup } from "../features/quick-tra
 import {
   autoTranslatePreference,
   doubleCopyEnabled,
+  markdownEnabledPreference,
   registerDoubleCopyRuntime,
   saveQuickTranslatePopupState,
 } from "../features/quick-translate/preferences";
@@ -170,6 +171,8 @@ function QuickTranslateWindowBody(props: { controller: QuickTranslateController 
   const headerHeight = signal(0);
   const contentHeight = signal(0);
   const footerHeight = signal(0);
+  const markdownActionLabel = () =>
+    t(markdownEnabledPreference() ? "quickTranslate.showPlainText" : "quickTranslate.showMarkdown");
   const ocrAction = signal<ViewRef | null>(null);
   let handledOcrFocusSeq = props.controller.ocrFocusSeq();
   const session = createQuickTranslateSession({
@@ -269,6 +272,22 @@ function QuickTranslateWindowBody(props: { controller: QuickTranslateController 
               class="size-3.5"
             />
           </Button>
+          <Button
+            testID="quick-translate-markdown-toggle"
+            variant="brand-ghost"
+            size="icon-sm"
+            selected={markdownEnabledPreference()}
+            tooltip={markdownActionLabel()}
+            accessibilityLabel={markdownActionLabel()}
+            onPress={() =>
+              void saveQuickTranslatePopupState({ markdownEnabled: !markdownEnabledPreference() })
+            }
+          >
+            <Icon
+              name={markdownEnabledPreference() ? "markdown-convert" : "markdown-convert-outline"}
+              tone={markdownEnabledPreference() ? "brand" : "muted-foreground"}
+            />
+          </Button>
           <If when={canCaptureScreen(platform.os)}>
             <Button
               testID="quick-translate-ocr"
@@ -322,6 +341,7 @@ function QuickTranslateWindowBody(props: { controller: QuickTranslateController 
         <View class="shrink-0" onLayout={({ bounds }) => contentHeight.set(bounds.size.height)}>
           <QuickTranslatePopup
             session={session}
+            markdownEnabled={markdownEnabledPreference()}
             ocrState={props.controller.ocrState}
             playbackAllowed={() => props.controller.attachedWindow()?.state()?.visible === true}
             onAttachSourceInput={(node) => props.controller.attachSourceInput(node)}

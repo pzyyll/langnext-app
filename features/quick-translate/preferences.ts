@@ -27,10 +27,18 @@ export interface QuickTranslatePreferences {
   version: typeof QUICK_TRANSLATE_PREFERENCES_VERSION;
   doubleCopyEnabled: boolean;
   autoTranslate: boolean;
+  markdownEnabled: boolean;
   sourceLanguage: SourceLanguageId | null;
   targetLanguage: TargetLanguageId | null;
   cards: SavedQuickTranslateCard[];
 }
+
+type PopupPreferencesPatch = Partial<
+  Pick<
+    QuickTranslatePreferences,
+    "autoTranslate" | "markdownEnabled" | "sourceLanguage" | "targetLanguage" | "cards"
+  >
+>;
 
 export interface DoubleCopyRuntimeBinding {
   os: string;
@@ -45,6 +53,7 @@ function defaultPreferences(): QuickTranslatePreferences {
     version: QUICK_TRANSLATE_PREFERENCES_VERSION,
     doubleCopyEnabled: false,
     autoTranslate: false,
+    markdownEnabled: false,
     sourceLanguage: null,
     targetLanguage: null,
     cards: [],
@@ -113,6 +122,11 @@ export function parseQuickTranslatePreferences(raw: string): QuickTranslatePrefe
     autoTranslate = parsed.autoTranslate;
   }
 
+  const markdownEnabled = parsed.markdownEnabled ?? false;
+  if (typeof markdownEnabled !== "boolean") {
+    return null;
+  }
+
   let sourceLanguage: SourceLanguageId | null = null;
   if (parsed.sourceLanguage !== undefined && parsed.sourceLanguage !== null) {
     if (!isSourceLanguageId(parsed.sourceLanguage)) {
@@ -152,6 +166,7 @@ export function parseQuickTranslatePreferences(raw: string): QuickTranslatePrefe
     version: QUICK_TRANSLATE_PREFERENCES_VERSION,
     doubleCopyEnabled: parsed.doubleCopyEnabled,
     autoTranslate,
+    markdownEnabled,
     sourceLanguage,
     targetLanguage,
     cards,
@@ -163,6 +178,7 @@ function serializePreferences(prefs: QuickTranslatePreferences): QuickTranslateP
     version: QUICK_TRANSLATE_PREFERENCES_VERSION,
     doubleCopyEnabled: prefs.doubleCopyEnabled,
     autoTranslate: prefs.autoTranslate,
+    markdownEnabled: prefs.markdownEnabled,
     sourceLanguage: prefs.sourceLanguage,
     targetLanguage: prefs.targetLanguage,
     cards: prefs.cards.map((card) => ({
@@ -222,14 +238,7 @@ export interface QuickTranslatePreferencesStore {
   load: () => Promise<void>;
   registerDoubleCopyRuntime: (runtime: DoubleCopyRuntimeBinding) => () => void;
   selectDoubleCopy: (enabled: boolean) => Promise<boolean>;
-  savePopupState: (
-    patch: Partial<
-      Pick<
-        QuickTranslatePreferences,
-        "autoTranslate" | "sourceLanguage" | "targetLanguage" | "cards"
-      >
-    >,
-  ) => Promise<boolean>;
+  savePopupState: (patch: PopupPreferencesPatch) => Promise<boolean>;
 }
 
 /** Creates an isolated Quick Translate preferences store with serialized persistence. */
@@ -372,14 +381,7 @@ export function createQuickTranslatePreferencesStore(
       return true;
     });
 
-  const savePopupState = (
-    patch: Partial<
-      Pick<
-        QuickTranslatePreferences,
-        "autoTranslate" | "sourceLanguage" | "targetLanguage" | "cards"
-      >
-    >,
-  ): Promise<boolean> => {
+  const savePopupState = (patch: PopupPreferencesPatch): Promise<boolean> => {
     const next = serializePreferences({
       ...storedPreferencesSignal(),
       ...patch,
@@ -418,6 +420,8 @@ export const quickTranslatePreferencesStore = createQuickTranslatePreferencesSto
 export const doubleCopyEnabled = () => quickTranslatePreferencesStore.doubleCopyEnabled();
 export const doubleCopyError = () => quickTranslatePreferencesStore.doubleCopyError();
 export const autoTranslatePreference = () => quickTranslatePreferencesStore.autoTranslate();
+export const markdownEnabledPreference = () =>
+  quickTranslatePreferencesStore.preferences().markdownEnabled;
 export const quickTranslatePreferencesError = () => quickTranslatePreferencesStore.saveError();
 
 export const loadQuickTranslatePreferences = () => quickTranslatePreferencesStore.load();
@@ -425,8 +429,5 @@ export const registerDoubleCopyRuntime = (runtime: DoubleCopyRuntimeBinding) =>
   quickTranslatePreferencesStore.registerDoubleCopyRuntime(runtime);
 export const selectDoubleCopy = (enabled: boolean) =>
   quickTranslatePreferencesStore.selectDoubleCopy(enabled);
-export const saveQuickTranslatePopupState = (
-  patch: Partial<
-    Pick<QuickTranslatePreferences, "autoTranslate" | "sourceLanguage" | "targetLanguage" | "cards">
-  >,
-) => quickTranslatePreferencesStore.savePopupState(patch);
+export const saveQuickTranslatePopupState = (patch: PopupPreferencesPatch) =>
+  quickTranslatePreferencesStore.savePopupState(patch);

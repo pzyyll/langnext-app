@@ -114,3 +114,9 @@ Recorded for the Google voice settings before editing its TSX. Every entry reuse
 | Search results, field errors, and unavailable state                     | Update immediately so the keyboard position stays put. The slider and preview action positions stay fixed when capability or playback changes.                                                                                |
 | Slider pointer release, arrow key, or accessibility step                | The thumb follows the value directly. No spring, inertia, or value animation.                                                                                                                                                 |
 | Play sample, Cancel, Stop, completion, save confirmation                | The existing phase label and button state change, plus the existing save toast transition. Reduced motion removes the toast movement. No waveform or background animation.                                                    |
+
+### Quick Translate Markdown
+
+- Hover, press, and focus: Use the shared brand-ghost button and `motion.pressScale`. Reduced motion removes the transition and press scale.
+- Markdown on or off: Swap the outline and filled icons in place and change the selected background and tint. Keep focus on the button. Reflow the result in the existing scroll region, with no enter or exit animation.
+- Streaming and completion: Update the result in place and keep the current scroll region. Do not add a caret, progress animation, or new overlay. Reduced motion does not change the text updates.

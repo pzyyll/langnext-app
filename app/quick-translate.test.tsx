@@ -5,6 +5,7 @@ import { makeChannel, makeModel, makeSeedStorage } from "../features/models/__te
 import { baiduCredentialStorageKey } from "../features/ocr/settings";
 import { PRESETS_STORAGE_KEY } from "../features/presets/store";
 import type { TranslationPreset } from "../features/presets/types";
+import { QUICK_TRANSLATE_PREFERENCES_KEY } from "../features/quick-translate/preferences";
 import {
   DEFAULT_QUICK_TRANSLATE_SHORTCUT,
   DEFAULT_SCREENSHOT_TRANSLATE_SHORTCUT,
@@ -89,6 +90,86 @@ test("desktop: quick window opens from production tray action, reuses existing w
   expect(app.window("quick-translate").state()?.visible).toBe(true);
   expect(app.window("quick-translate").state()?.focused).toBe(true);
   expect(app.value("id:quick-translate-source")).toBe("Hello quick window");
+});
+
+test("quick window: the Markdown toggle reformats all results without retranslating", async () => {
+  const heading = "Translation";
+  const output = `## ${heading}\n\n**Bonjour**\n\n![Illustration](https://example.com/image.png)`;
+  const app = await open(HARNESS_ENTRY, {
+    ...viewport,
+    storage: {
+      ...makeSeedStorage({
+        channels: [makeChannel({ adapterId: "openai-compatible", enabled: true })],
+        models: [makeModel({ enabled: true })],
+        credentials: { "ch-1": "sk-test" },
+      }),
+      [PRESETS_STORAGE_KEY]: JSON.stringify({ version: 1, items: [quickPreset] }),
+      "settings.language": "en",
+      "quickTranslate.preferences.v1": popupPreferences({
+        cards: [
+          { id: "card-1", presetId: quickPreset.id },
+          { id: "card-2", presetId: quickPreset.id },
+        ],
+      }),
+    },
+    network: {
+      "POST https://api.openai.com/v1/chat/completions": {
+        status: 200,
+        body: { choices: [{ message: { content: output } }] },
+      },
+    },
+  });
+  const toggle = "id:quick-translate-header >> id:quick-translate-markdown-toggle";
+  const copiesOf = (text: string) => app.texts().filter((item) => item === text);
+
+  await app.press("id:harness-tray-quick-translate");
+  await app.waitFor(toggle);
+  expect(app.shows(`role:button[${t("quickTranslate.showMarkdown")}]`)).toBe(true);
+  await app.type("id:quick-translate-source", "Hello");
+  await app.keyboard.press("enter");
+  await app.waitFor("id:quick-translate-card-card-2 >> id:quick-translate-copy");
+  expect(copiesOf(output)).toHaveLength(2);
+
+  await app.press(toggle);
+  expect(app.shows(`role:button[${t("quickTranslate.showPlainText")}]`)).toBe(true);
+  expect(copiesOf(heading)).toHaveLength(2);
+  expect(copiesOf("Bonjour")).toHaveLength(2);
+  expect(app.texts()).toContain("Illustration");
+  expect(copiesOf(output)).toHaveLength(0);
+  await app.press("id:quick-translate-card-card-1 >> id:quick-translate-copy");
+  expect(app.clipboard()).toBe(output);
+
+  await app.press(toggle);
+  expect(copiesOf(output)).toHaveLength(2);
+  expect(app.requests()).toHaveLength(2);
+});
+
+test("quick window: the Markdown toggle persists across window close and app restart", async () => {
+  const app = await open(HARNESS_ENTRY, {
+    ...viewport,
+    storage: { "settings.language": "en" },
+  });
+  const toggle = "id:quick-translate-markdown-toggle";
+  const showMarkdown = `role:button[${t("quickTranslate.showMarkdown")}]`;
+  const showPlainText = `role:button[${t("quickTranslate.showPlainText")}]`;
+  const savedMode = (storage: Record<string, string>) =>
+    JSON.parse(storage[QUICK_TRANSLATE_PREFERENCES_KEY] ?? "{}").markdownEnabled;
+
+  await app.press("id:harness-tray-quick-translate");
+  await app.waitFor(showMarkdown);
+  await app.press(toggle);
+  await app.waitUntil(() => savedMode(app.storage()) === true);
+  await app.keyboard.press("escape");
+  await app.waitUntil(() => app.window("quick-translate").state()?.visible !== true);
+  await app.press("id:harness-tray-quick-translate");
+  await app.waitFor(showPlainText);
+
+  const restarted = await open(HARNESS_ENTRY, { ...viewport, storage: app.storage() });
+  await restarted.press("id:harness-tray-quick-translate");
+  await restarted.waitFor(showPlainText);
+  await restarted.press(toggle);
+  await restarted.waitFor(showMarkdown);
+  await restarted.waitUntil(() => savedMode(restarted.storage()) === false);
 });
 
 test("quick window fits cards and translation content within the display work area", async () => {
