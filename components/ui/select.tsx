@@ -18,6 +18,8 @@ interface SelectProps {
   displayLabel?: string;
   prefix?: string;
   leading?: JSX.Element;
+  /** Draws each row's leading mark before its title, looked up by the item's value. */
+  itemLeading?: (value: string) => JSX.Element;
   tooltip?: string;
   /** Shows the shown label in a hover tooltip, for compact triggers whose label may truncate. */
   labelTooltip?: boolean;
@@ -98,9 +100,12 @@ export function Select(props: SelectProps) {
       itemClass={`group justify-center ${DROPDOWN_ITEM_GEOMETRY} focus:bg-selection/50 selected:bg-selection/70 selected:shadow-control disabled:opacity-50`}
       renderItem={(entry) => (
         <View class="flex-row items-center justify-between gap-2">
-          <Text class="min-w-0 flex-1 text-sm text-popover-foreground group-selected:font-semibold">
-            {entry.title}
-          </Text>
+          <View class="min-w-0 flex-1 flex-row items-center gap-1.5">
+            <If when={props.itemLeading !== undefined}>{props.itemLeading?.(entry.value)}</If>
+            <Text class="min-w-0 flex-1 text-sm text-popover-foreground group-selected:font-semibold">
+              {entry.title}
+            </Text>
+          </View>
           <Icon
             name="mdi:check"
             tone="foreground"

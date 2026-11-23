@@ -189,8 +189,8 @@ export function QuickTranslateFooter(props: { session: QuickTranslateSession }) 
   );
 }
 
-/** Visual engine indicator on the preset chip: DeepL mark, known AI provider mark, or brand dot. */
-function PresetLeadingMark(props: { preset: TranslationPreset | null }) {
+/** Visual engine indicator on the preset chip and its option rows: DeepL mark, known AI provider mark, or brand dot. */
+function PresetLeadingMark(props: { preset: TranslationPreset | null; testID?: string }) {
   const providerIcon = () => {
     const preset = props.preset;
     if (!preset || preset.engine.kind !== "ai") return null;
@@ -204,31 +204,33 @@ function PresetLeadingMark(props: { preset: TranslationPreset | null }) {
   };
 
   return (
-    <If
-      when={props.preset?.engine.kind === "deepl"}
-      else={
-        <If
-          when={props.preset?.engine.kind === "google-cloud"}
-          else={
-            <If
-              when={providerIcon()}
-              else={<View class="size-1.5 shrink-0 rounded-full bg-brand" />}
-            >
-              {(asset) => <ProviderMark icon={asset()} class="size-3 shrink-0" />}
-            </If>
-          }
-        >
-          <Image
-            testID="quick-translate-preset-mark-google"
-            src={googleCloudIcon}
-            accessibilityElementsHidden={true}
-            class="size-3 shrink-0 overflow-hidden"
-          />
-        </If>
-      }
-    >
-      <Icon name="deepl" tone="foreground" class="size-3 shrink-0" />
-    </If>
+    <View testID={props.testID} class="size-3 shrink-0 items-center justify-center">
+      <If
+        when={props.preset?.engine.kind === "deepl"}
+        else={
+          <If
+            when={props.preset?.engine.kind === "google-cloud"}
+            else={
+              <If
+                when={providerIcon()}
+                else={<View class="size-1.5 shrink-0 rounded-full bg-brand" />}
+              >
+                {(asset) => <ProviderMark icon={asset()} class="size-3 shrink-0" />}
+              </If>
+            }
+          >
+            <Image
+              testID="quick-translate-preset-mark-google"
+              src={googleCloudIcon}
+              accessibilityElementsHidden={true}
+              class="size-3 shrink-0 overflow-hidden"
+            />
+          </If>
+        }
+      >
+        <Icon name="deepl" tone="foreground" class="size-3 shrink-0" />
+      </If>
+    </View>
   );
 }
 
@@ -255,8 +257,10 @@ interface PresetCardRowProps {
 }
 
 function PresetCardRow(props: PresetCardRowProps) {
-  const resolvedPreset = () =>
-    props.presets().find((item) => item.id === props.card().presetId) ?? null;
+  const presetById = (presetId: string) =>
+    props.presets().find((item) => item.id === presetId) ?? null;
+
+  const resolvedPreset = () => presetById(props.card().presetId);
 
   const templateItems = () => buildTemplateItems(resolvedPreset());
 
@@ -291,6 +295,12 @@ function PresetCardRow(props: PresetCardRowProps) {
             class="min-w-0 shrink"
             labelClass="font-semibold"
             leading={<PresetLeadingMark preset={resolvedPreset()} />}
+            itemLeading={(value) => (
+              <PresetLeadingMark
+                preset={presetById(value)}
+                testID={`quick-translate-preset-option-mark-${value}`}
+              />
+            )}
             items={props.presetItems()}
             value={props.card().presetId}
             placeholder={t("quickTranslate.presetPlaceholder")}

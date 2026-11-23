@@ -2570,6 +2570,28 @@ function googleCardNetwork(detectorAnswer = "fr") {
   };
 }
 
+test("Google Cloud card: preset options repeat the card's engine mark", async () => {
+  const app = await open(POPUP_HARNESS, {
+    ...viewport,
+    storage: seedGoogleCards({ detectionMode: "off" }),
+  });
+
+  await app.waitFor("id:quick-translate-card-card-1");
+  expect(app.shows("id:quick-translate-card-card-1 >> id:quick-translate-preset-mark-google")).toBe(
+    true,
+  );
+
+  await app.press("id:quick-translate-card-card-1 >> id:quick-translate-preset");
+  await app.waitFor("role:option[Google Card]");
+
+  expect(
+    app.shows("role:option[Google Card] >> id:quick-translate-preset-option-mark-preset-google"),
+  ).toBe(true);
+  expect(
+    app.shows("role:option[DeepL Card] >> id:quick-translate-preset-option-mark-preset-deepl"),
+  ).toBe(true);
+});
+
 test("Google Cloud card: one detection run serves a Google and a DeepL card the same pair", async () => {
   const app = await open(POPUP_HARNESS, {
     ...viewport,
