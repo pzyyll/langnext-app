@@ -44,6 +44,7 @@ import mdiPinOutlineIcon from "../../assets/icons/mdi--pin-outline.svg";
 import mdiPinIcon from "../../assets/icons/mdi--pin.svg";
 import mdiPlusIcon from "../../assets/icons/mdi--plus.svg";
 import mdiRefreshIcon from "../../assets/icons/mdi--refresh.svg";
+import mdiStopIcon from "../../assets/icons/mdi--stop.svg";
 import mdiSwapHorizontalIcon from "../../assets/icons/mdi--swap-horizontal.svg";
 import mdiVolumeHighIcon from "../../assets/icons/mdi--volume-high.svg";
 import minusIcon from "../../assets/icons/minus.svg";
@@ -105,6 +106,7 @@ const ICONS = {
   "mdi:pin-outline": mdiPinOutlineIcon,
   "mdi:plus": mdiPlusIcon,
   "mdi:refresh": mdiRefreshIcon,
+  "mdi:stop": mdiStopIcon,
   "mdi:swap-horizontal": mdiSwapHorizontalIcon,
   "mdi:volume-high": mdiVolumeHighIcon,
   minus: minusIcon,
