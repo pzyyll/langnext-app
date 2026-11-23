@@ -117,7 +117,7 @@ settings:
     role:
       primary: 首选
       backup: 备用
-    ai: AI OCR
+    ai: 多模态模型
     baidu: 百度 OCR
     model: 模型
     mode: 模式

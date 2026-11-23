@@ -1204,7 +1204,7 @@ test("ocr settings: starts empty, adds AI from the empty state, and configures i
   expect(app.texts()).toContain("Available channels");
   expect(app.shows("id:settings-ocr-empty-channel-ai")).toBe(true);
   expect(app.shows("id:settings-ocr-empty-channel-baidu")).toBe(true);
-  expect(app.texts()).toContain("AI OCR");
+  expect(app.texts()).toContain("LLM");
   expect(app.texts()).toContain("Baidu OCR");
   expect(app.storage()[OCR_STORAGE_KEY]).toBeUndefined();
 
@@ -1342,9 +1342,9 @@ test("ocr settings: localizes the empty state and the first-channel action", asy
 
   expect(app.texts()).toContain("暂未添加任何 OCR 识别渠道");
   expect(app.texts()).toContain("可添加的渠道");
-  expect(app.texts()).toContain("AI OCR");
+  expect(app.texts()).toContain("多模态模型");
   expect(app.texts()).toContain("百度 OCR");
-  expect(app.shows("role:button[添加 AI OCR]")).toBe(true);
+  expect(app.shows("role:button[添加 多模态模型]")).toBe(true);
   expect(app.shows("role:button[添加 百度 OCR]")).toBe(true);
 
   await app.press("id:settings-ocr-empty-channel-baidu");

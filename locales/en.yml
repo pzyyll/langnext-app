@@ -117,7 +117,7 @@ settings:
     role:
       primary: Primary
       backup: Backup
-    ai: AI OCR
+    ai: LLM
     baidu: Baidu OCR
     model: Model
     mode: Mode
