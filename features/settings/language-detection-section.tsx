@@ -265,9 +265,9 @@ interface DetectionChannelListProps {
   listError: string | null;
   onClearError: () => void;
   onSetError: (message: string) => void;
-  onOpenAddDialog: () => void;
+  onBusyChange: (busy: boolean) => void;
   onOpenChannel: (kind: LanguageDetectorKind) => void;
-  onAddButtonRef: (node: ViewRef | null) => void;
+  onFocusAddButton: () => void;
   onRowRef: (kind: LanguageDetectorKind, node: ViewRef | null) => void;
   onGripRef: (kind: LanguageDetectorKind, node: ViewRef | null) => void;
   onRowFocusRef: (kind: LanguageDetectorKind, node: ViewRef | null) => void;
@@ -293,8 +293,10 @@ function DetectionChannelList(props: DetectionChannelListProps) {
   let removeCancelNode: ViewRef | null = null;
   let pendingRemoveCloseFocus: (() => void) | null = null;
 
+  effect(() => props.onBusyChange(mutating() || animating()));
+  cleanup(() => props.onBusyChange(false));
+
   const order = () => languageDetectionStore.detectorOrder();
-  const availableKinds = () => languageDetectionStore.availableDetectors();
   const canReorder = () => order().length > 1;
   const isBusy = () => props.busy || mutating() || animating();
   const name = (kind: LanguageDetectorKind) => t(`settings.languageDetection.${kind}`);
@@ -330,13 +332,10 @@ function DetectionChannelList(props: DetectionChannelListProps) {
   ): (() => void) => {
     const index = previousOrder.indexOf(removed);
     const remaining = previousOrder.filter((item) => item !== removed);
-    if (remaining.length === 0) return focusAddButton;
+    if (remaining.length === 0) return props.onFocusAddButton;
     const target = remaining[Math.min(Math.max(index, 0), remaining.length - 1)]!;
     return () => props.onFocusChannelFallback(target);
   };
-
-  let addButtonRef: ViewRef | null = null;
-  const focusAddButton = () => focusTarget(addButtonRef);
 
   const performRemove = async (kind: LanguageDetectorKind, fromConfirmDialog: boolean) => {
     if (isBusy()) return false;
@@ -499,7 +498,7 @@ function DetectionChannelList(props: DetectionChannelListProps) {
         </Text>
       </If>
 
-      <If when={order().length > 0 || availableKinds().length > 0}>
+      <If when={order().length > 0}>
         <Card testID="settings-detection-card" class={props.compact ? "gap-1 p-2" : "gap-1 p-3"}>
           <Each of={order()} key={(kind) => kind}>
             {(kind, index) => {
@@ -660,32 +659,6 @@ function DetectionChannelList(props: DetectionChannelListProps) {
               );
             }}
           </Each>
-
-          <If when={availableKinds().length > 0}>
-            <Button
-              testID="settings-detection-add"
-              ref={(node) => {
-                addButtonRef = node;
-                props.onAddButtonRef(node);
-              }}
-              variant="dashed"
-              size="md"
-              disabled={isBusy()}
-              accessibilityLabel={t("settings.languageDetection.addChannel")}
-              onPress={() => {
-                props.onClearError();
-                props.onOpenAddDialog();
-              }}
-              class={
-                order().length > 0 ? (props.compact ? "mt-1 w-full" : "mt-2 w-full") : "w-full"
-              }
-            >
-              <Icon name="plus" tone="muted-foreground" class="size-4" />
-              <Text class="text-sm font-medium text-muted-foreground">
-                {t("settings.languageDetection.addChannel")}
-              </Text>
-            </Button>
-          </If>
         </Card>
       </If>
 
@@ -1076,6 +1049,9 @@ interface LanguageDetectionSectionProps {
   selectedChannel: LanguageDetectorKind | null;
   onSelectChannel: (channel: LanguageDetectorKind) => void;
   onManageModels?: () => void;
+  getAddButtonRef?: () => ViewRef | null;
+  onRegisterAddTrigger?: (open: () => void) => () => void;
+  onAddBusyChange?: (busy: boolean) => void;
 }
 
 /** Settings section for prioritized detectors, their configuration pages, and language preferences. */
@@ -1083,14 +1059,19 @@ export function LanguageDetectionSection(props: LanguageDetectionSectionProps) {
   const credentialState = signal<CredentialState>("unknown");
   const addDialogOpen = signal(false);
   const addingChannel = signal(false);
+  const listBusy = signal(false);
   const listError = signal<string | null>(null);
   const rowRefs: Partial<Record<LanguageDetectorKind, ViewRef>> = {};
   const gripRefs: Partial<Record<LanguageDetectorKind, ViewRef>> = {};
   const fallbackFocusRefs: Partial<Record<LanguageDetectorKind, ViewRef>> = {};
-  let addButtonNode: ViewRef | null = null;
   let pendingDialogCloseFocus: (() => void) | null = null;
   let lastOpenedChannel: LanguageDetectorKind | null = null;
   let restoreFocus = false;
+
+  const focusAddButton = () => focusTarget(props.getAddButtonRef?.() ?? null);
+
+  effect(() => props.onAddBusyChange?.(addingChannel() || listBusy()));
+  cleanup(() => props.onAddBusyChange?.(false));
 
   effect(() => {
     const saved = languageDetectionStore.savedGoogleCloudBinding();
@@ -1127,9 +1108,16 @@ export function LanguageDetectionSection(props: LanguageDetectionSectionProps) {
     props.selectedChannel !== null && isDetectorOpenable(props.selectedChannel);
 
   const handleOpenAddDialog = () => {
-    pendingDialogCloseFocus = () => focusTarget(addButtonNode);
+    if (addingChannel() || listBusy() || languageDetectionStore.availableDetectors().length === 0) {
+      return;
+    }
+    listError.set(null);
+    pendingDialogCloseFocus = focusAddButton;
     addDialogOpen.set(true);
   };
+
+  const unregisterAddTrigger = props.onRegisterAddTrigger?.(handleOpenAddDialog);
+  if (unregisterAddTrigger) cleanup(unregisterAddTrigger);
 
   const handleSelectAddKind = async (kind: LanguageDetectorKind) => {
     if (addingChannel()) return;
@@ -1144,7 +1132,10 @@ export function LanguageDetectionSection(props: LanguageDetectionSectionProps) {
       }
       pendingDialogCloseFocus = isDetectorOpenable(kind)
         ? null
-        : () => focusTarget(rowRefs[kind] ?? fallbackFocusRefs[kind] ?? addButtonNode);
+        : () =>
+            focusTarget(
+              rowRefs[kind] ?? fallbackFocusRefs[kind] ?? props.getAddButtonRef?.() ?? null,
+            );
       addDialogOpen.set(false);
       if (isDetectorOpenable(kind)) {
         props.onSelectChannel(kind);
@@ -1174,11 +1165,9 @@ export function LanguageDetectionSection(props: LanguageDetectionSectionProps) {
           listError={listError()}
           onClearError={() => listError.set(null)}
           onSetError={(message) => listError.set(message)}
-          onOpenAddDialog={handleOpenAddDialog}
+          onBusyChange={(busy) => listBusy.set(busy)}
           onOpenChannel={(kind) => props.onSelectChannel(kind)}
-          onAddButtonRef={(node) => {
-            addButtonNode = node;
-          }}
+          onFocusAddButton={focusAddButton}
           onRowRef={(kind, node) => {
             if (node) rowRefs[kind] = node;
             else delete rowRefs[kind];
@@ -1193,7 +1182,9 @@ export function LanguageDetectionSection(props: LanguageDetectionSectionProps) {
           }}
           onFocusGrip={(kind) => gripRefs[kind]?.focus()}
           onFocusChannelFallback={(kind) =>
-            focusTarget(rowRefs[kind] ?? fallbackFocusRefs[kind] ?? addButtonNode)
+            focusTarget(
+              rowRefs[kind] ?? fallbackFocusRefs[kind] ?? props.getAddButtonRef?.() ?? null,
+            )
           }
         />
       </If>

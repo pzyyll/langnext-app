@@ -490,7 +490,7 @@ test("double copy: shows Windows-only opt-in off by default, hides outside Windo
   expect(startupFail.texts()).toContain("active=false|reads=0");
 });
 
-test("language detection: starts with the add button inside the card, adds channels via picker, and configures AI", async () => {
+test("language detection: starts with the header add button, adds channels via picker, and configures AI", async () => {
   const seed = makeSeedStorage({
     channels: [makeChannel({ id: "ch-openai", displayName: "OpenAI Main", enabled: true })],
     models: [
@@ -505,9 +505,8 @@ test("language detection: starts with the add button inside the card, adds chann
   await app.press("id:settings-nav-language-detection");
   await app.waitFor("id:settings-detection-add");
 
-  // Default state shows the card containing only the dashed add button (no channel rows yet).
-  expect(app.shows("id:settings-detection-card")).toBe(true);
-  expect(app.shows("id:settings-detection-card >> id:settings-detection-add")).toBe(true);
+  // Default state shows the header add button (no pre-populated channel card).
+  expect(app.shows("id:settings-detection-card")).toBe(false);
   expect(app.shows("id:settings-detection-row-ai")).toBe(false);
   expect(app.shows("id:settings-detection-row-google")).toBe(false);
   expect(app.shows("id:settings-detection-row-google-cloud")).toBe(false);
@@ -517,8 +516,7 @@ test("language detection: starts with the add button inside the card, adds chann
   await app.waitFor("id:settings-detection-option-ai");
   await app.keyboard.press("escape");
   await app.waitUntil(() => !app.shows("id:settings-detection-add-dialog"));
-  expect(app.shows("id:settings-detection-card")).toBe(true);
-  expect(app.shows("id:settings-detection-row-ai")).toBe(false);
+  expect(app.shows("id:settings-detection-card")).toBe(false);
   expect(app.storage()[LANGUAGE_DETECTION_STORAGE_KEY]).toBeUndefined();
 
   expect(app.texts()).not.toContain(DETECTION_PRIORITY_HINT.en);
@@ -534,8 +532,7 @@ test("language detection: starts with the add button inside the card, adds chann
   expect(app.shows("id:settings-detection-option-google-cloud")).toBe(true);
   await app.press("id:settings-detection-add-cancel");
   await app.waitUntil(() => !app.shows("id:settings-detection-add-dialog"));
-  expect(app.shows("id:settings-detection-card")).toBe(true);
-  expect(app.shows("id:settings-detection-row-ai")).toBe(false);
+  expect(app.shows("id:settings-detection-card")).toBe(false);
   expect(app.storage()[LANGUAGE_DETECTION_STORAGE_KEY]).toBeUndefined();
 
   // Selecting AI adds it to the list and navigates straight to its configuration page.
@@ -548,6 +545,7 @@ test("language detection: starts with the add button inside the card, adds chann
   expect(app.shows("id:settings-detection-breadcrumb-root")).toBe(true);
   expect(app.shows("id:settings-detection-detail-title")).toBe(true);
   expect(app.shows("id:settings-detection-priority-info")).toBe(false);
+  expect(app.shows("id:settings-detection-add")).toBe(false);
   expect(app.enabled("id:settings-detection-save")).toBe(false);
 
   // Returning without saving still keeps the added AI channel in the list as Not configured.
@@ -715,7 +713,8 @@ test("language detection: adds Google Cloud, hides add button when full, and rem
   await reopened.waitFor("id:settings-detection-add-dialog");
   await reopened.press("id:settings-detection-option-google");
   await reopened.waitUntil(() => !reopened.shows("id:settings-detection-add-dialog"));
-  expect(reopened.shows("id:settings-detection-card >> id:settings-detection-add")).toBe(true);
+  expect(reopened.shows("id:settings-detection-add")).toBe(true);
+  expect(reopened.shows("id:settings-detection-card >> id:settings-detection-add")).toBe(false);
 
   await reopened.press("id:settings-detection-add");
   await reopened.waitFor("id:settings-detection-add-dialog");
@@ -729,7 +728,8 @@ test("language detection: adds Google Cloud, hides add button when full, and rem
   await reopened.press("id:settings-detection-remove-ai");
   await reopened.waitUntil(() => !reopened.shows("id:settings-detection-row-ai"));
   expect(reopened.shows("id:settings-detection-remove-dialog")).toBe(false);
-  expect(reopened.shows("id:settings-detection-card >> id:settings-detection-add")).toBe(true);
+  expect(reopened.shows("id:settings-detection-add")).toBe(true);
+  expect(reopened.shows("id:settings-detection-card >> id:settings-detection-add")).toBe(false);
 
   await reopened.press("id:settings-detection-remove-google");
   await reopened.waitUntil(() => !reopened.shows("id:settings-detection-row-google"));
@@ -746,8 +746,8 @@ test("language detection: adds Google Cloud, hides add button when full, and rem
   await reopened.waitFor("id:settings-detection-remove-dialog");
   await reopened.press("role:button[Remove]");
   await reopened.waitUntil(() => !reopened.shows("id:settings-detection-row-google-cloud"));
-  expect(reopened.shows("id:settings-detection-card")).toBe(true);
-  expect(reopened.shows("id:settings-detection-card >> id:settings-detection-add")).toBe(true);
+  expect(reopened.shows("id:settings-detection-card")).toBe(false);
+  expect(reopened.shows("id:settings-detection-add")).toBe(true);
   expect(
     reopened.storage()[googleCloudDetectionCredentialStorageKey(credentialRef)],
   ).toBeUndefined();
@@ -1017,8 +1017,7 @@ test("language detection: keeps previous order and enabled state on a failed lis
   await failingAdd.waitUntil(() => !failingAdd.shows("id:settings-detection-add-dialog"));
   await failingAdd.waitFor("id:settings-detection-list-error");
   expect(failingAdd.shows("id:settings-detection-detail-card")).toBe(false);
-  expect(failingAdd.shows("id:settings-detection-card")).toBe(true);
-  expect(failingAdd.shows("id:settings-detection-row-ai")).toBe(false);
+  expect(failingAdd.shows("id:settings-detection-card")).toBe(false);
   expect(failingAdd.storage()[LANGUAGE_DETECTION_STORAGE_KEY]).toBeUndefined();
 });
 
@@ -1049,6 +1048,7 @@ test("language detection: localizes detector labels and preference help in both 
   await app.waitUntil(() => app.texts().includes(LANGUAGE_DETECTION_HELP.en.preferred));
 
   await app.press("id:settings-nav-general");
+  expect(app.shows("id:settings-detection-add")).toBe(false);
   await app.press("id:language-zh-CN");
   await app.press("id:settings-nav-language-detection");
   await app.waitFor("id:settings-detection-card");

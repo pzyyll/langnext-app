@@ -1,4 +1,4 @@
-import { platform, Scroll, signal, Text, View, windowSize } from "nsh";
+import { cleanup, platform, Scroll, signal, Text, View, windowSize, type ViewRef } from "nsh";
 import { Radio, RadioGroup } from "nsh/base";
 import { t } from "nsh/i18n";
 import { SplitPane } from "../../components/layout/split-pane";
@@ -10,7 +10,7 @@ import { Icon } from "../../components/ui/icon";
 import { Switch } from "../../components/ui/switch";
 import { buildTooltip } from "../../components/ui/tooltip";
 import { canOpenLogsFolder, openLogsFolder } from "../../platform/logs";
-import type { LanguageDetectorKind } from "../language-detection/settings";
+import { languageDetectionStore, type LanguageDetectorKind } from "../language-detection/settings";
 import type { OcrServiceKind } from "../ocr/settings";
 import { appearance, appearanceError, selectAppearance, type Appearance } from "./appearance";
 import { language, languageError, selectLanguage, type LanguagePreference } from "./language";
@@ -221,6 +221,32 @@ function AppearanceSection(props: { compact: boolean }) {
   );
 }
 
+function DetectionAddHeaderButton(props: {
+  disabled: boolean;
+  onRef: (node: ViewRef | null) => void;
+  onPress: () => void;
+}) {
+  cleanup(() => props.onRef(null));
+
+  return (
+    <Button
+      testID="settings-detection-add"
+      ref={(node) => props.onRef(node)}
+      variant="outline"
+      size="sm"
+      disabled={props.disabled}
+      accessibilityLabel={t("settings.languageDetection.addChannel")}
+      onPress={() => props.onPress()}
+      class="shrink-0"
+    >
+      <Icon name="plus" tone="foreground" class="size-3.5" />
+      <Text class="text-sm font-medium text-foreground">
+        {t("settings.languageDetection.addChannel")}
+      </Text>
+    </Button>
+  );
+}
+
 /** Master-detail Settings workspace with resizable category rail and scrollable detail pane. */
 export function SettingsPage(props: {
   platformOs?: string;
@@ -233,6 +259,9 @@ export function SettingsPage(props: {
   const selectedOcrChannel = signal<OcrServiceKind | null>(null);
   const selectedDetectionChannel = signal<LanguageDetectorKind | null>(null);
   const selectedTtsChannel = signal<TtsChannelId | null>(null);
+  const detectionAddBusy = signal(false);
+  let detectionAddButtonNode: ViewRef | null = null;
+  let openDetectionAddDialog: (() => void) | null = null;
 
   const headerBreadcrumb = (): HeaderBreadcrumb | null => {
     const ocrChannel = selectedOcrChannel();
@@ -298,6 +327,10 @@ export function SettingsPage(props: {
   };
 
   const showingBreadcrumb = () => headerBreadcrumb() !== null;
+  const showDetectionAddButton = () =>
+    selectedSection() === "language-detection" &&
+    !showingBreadcrumb() &&
+    languageDetectionStore.availableDetectors().length > 0;
   const headerPaddingClass = () =>
     compact()
       ? showingBreadcrumb()
@@ -373,10 +406,10 @@ export function SettingsPage(props: {
               <If
                 when={headerBreadcrumb() !== null}
                 else={
-                  <View class="min-w-0 flex-row items-center gap-1.5">
+                  <View class="min-w-0 flex-1 flex-row items-center gap-1.5">
                     <Text
                       role="header"
-                      class="min-w-0 truncate text-lg font-semibold text-foreground"
+                      class="min-w-0 shrink truncate text-lg font-semibold text-foreground"
                     >
                       {t(activeSectionLabelKey())}
                     </Text>
@@ -425,6 +458,15 @@ export function SettingsPage(props: {
                   items={headerBreadcrumb()!.items}
                 />
               </If>
+              <If when={showDetectionAddButton()}>
+                <DetectionAddHeaderButton
+                  disabled={detectionAddBusy()}
+                  onRef={(node) => {
+                    detectionAddButtonNode = node;
+                  }}
+                  onPress={() => openDetectionAddDialog?.()}
+                />
+              </If>
             </View>
           </View>
           <Scroll class="min-h-0 flex-1">
@@ -450,6 +492,14 @@ export function SettingsPage(props: {
                   selectedChannel={selectedDetectionChannel()}
                   onSelectChannel={(channel) => selectedDetectionChannel.set(channel)}
                   onManageModels={props.onNavigateToModels}
+                  getAddButtonRef={() => detectionAddButtonNode}
+                  onRegisterAddTrigger={(open) => {
+                    openDetectionAddDialog = open;
+                    return () => {
+                      if (openDetectionAddDialog === open) openDetectionAddDialog = null;
+                    };
+                  }}
+                  onAddBusyChange={(busy) => detectionAddBusy.set(busy)}
                 />
               </If>
               <If when={selectedSection() === "ocr"}>
