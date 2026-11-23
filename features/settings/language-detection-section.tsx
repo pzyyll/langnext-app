@@ -499,7 +499,7 @@ function DetectionChannelList(props: DetectionChannelListProps) {
         </Text>
       </If>
 
-      <If when={order().length > 0}>
+      <If when={order().length > 0 || availableKinds().length > 0}>
         <Card testID="settings-detection-card" class={props.compact ? "gap-1 p-2" : "gap-1 p-3"}>
           <Each of={order()} key={(kind) => kind}>
             {(kind, index) => {
@@ -660,31 +660,33 @@ function DetectionChannelList(props: DetectionChannelListProps) {
               );
             }}
           </Each>
-        </Card>
-      </If>
 
-      <If when={availableKinds().length > 0}>
-        <Button
-          testID="settings-detection-add"
-          ref={(node) => {
-            addButtonRef = node;
-            props.onAddButtonRef(node);
-          }}
-          variant="ghost"
-          size="md"
-          disabled={isBusy()}
-          accessibilityLabel={t("settings.languageDetection.addChannel")}
-          onPress={() => {
-            props.onClearError();
-            props.onOpenAddDialog();
-          }}
-          class="w-full"
-        >
-          <Icon name="plus" tone="foreground" class="size-4" />
-          <Text class="text-sm font-medium text-foreground">
-            {t("settings.languageDetection.addChannel")}
-          </Text>
-        </Button>
+          <If when={availableKinds().length > 0}>
+            <Button
+              testID="settings-detection-add"
+              ref={(node) => {
+                addButtonRef = node;
+                props.onAddButtonRef(node);
+              }}
+              variant="dashed"
+              size="md"
+              disabled={isBusy()}
+              accessibilityLabel={t("settings.languageDetection.addChannel")}
+              onPress={() => {
+                props.onClearError();
+                props.onOpenAddDialog();
+              }}
+              class={
+                order().length > 0 ? (props.compact ? "mt-1 w-full" : "mt-2 w-full") : "w-full"
+              }
+            >
+              <Icon name="plus" tone="muted-foreground" class="size-4" />
+              <Text class="text-sm font-medium text-muted-foreground">
+                {t("settings.languageDetection.addChannel")}
+              </Text>
+            </Button>
+          </If>
+        </Card>
       </If>
 
       <If when={props.listError !== null}>
