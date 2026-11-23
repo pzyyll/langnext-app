@@ -70,7 +70,7 @@ export function QuickTranslateLanguageBar(props: QuickTranslateLanguageBarProps)
   return (
     <View
       testID="quick-translate-language-bar"
-      class="h-7 min-w-0 shrink flex-row items-center gap-0.5 rounded-full border border-border bg-surface-control px-0.5"
+      class="h-7 min-w-0 shrink flex-row items-center gap-0.5 rounded-full bg-muted/80 px-0.5"
     >
       <Select
         testID="quick-translate-source-language"
