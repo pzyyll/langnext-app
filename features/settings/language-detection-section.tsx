@@ -273,6 +273,7 @@ interface DetectionChannelListProps {
   onRowFocusRef: (kind: LanguageDetectorKind, node: ViewRef | null) => void;
   onFocusGrip: (kind: LanguageDetectorKind) => void;
   onFocusChannelFallback: (kind: LanguageDetectorKind) => void;
+  onRemoveDialogOpenChange: (open: boolean) => void;
 }
 
 function DetectionChannelList(props: DetectionChannelListProps) {
@@ -282,6 +283,8 @@ function DetectionChannelList(props: DetectionChannelListProps) {
   const animating = signal(false);
   const pendingRemove = signal<LanguageDetectorKind | null>(null);
   const removeError = signal<string | null>(null);
+  effect(() => props.onRemoveDialogOpenChange(pendingRemove() !== null));
+  cleanup(() => props.onRemoveDialogOpenChange(false));
   // Per-detector drag offsets drive the rows natively; they return to 0 at rest.
   const offsets: Record<LanguageDetectorKind, AnimatedValue> = {
     ai: createAnimatedValue(0),
@@ -1052,6 +1055,8 @@ interface LanguageDetectionSectionProps {
   getAddButtonRef?: () => ViewRef | null;
   onRegisterAddTrigger?: (open: () => void) => () => void;
   onAddBusyChange?: (busy: boolean) => void;
+  /** Reports whether one of the section's dialogs owns Escape. */
+  onDialogOpenChange?: (open: boolean) => void;
 }
 
 /** Settings section for prioritized detectors, their configuration pages, and language preferences. */
@@ -1061,6 +1066,7 @@ export function LanguageDetectionSection(props: LanguageDetectionSectionProps) {
   const addingChannel = signal(false);
   const listBusy = signal(false);
   const listError = signal<string | null>(null);
+  const removeDialogOpen = signal(false);
   const rowRefs: Partial<Record<LanguageDetectorKind, ViewRef>> = {};
   const gripRefs: Partial<Record<LanguageDetectorKind, ViewRef>> = {};
   const fallbackFocusRefs: Partial<Record<LanguageDetectorKind, ViewRef>> = {};
@@ -1072,6 +1078,9 @@ export function LanguageDetectionSection(props: LanguageDetectionSectionProps) {
 
   effect(() => props.onAddBusyChange?.(addingChannel() || listBusy()));
   cleanup(() => props.onAddBusyChange?.(false));
+
+  effect(() => props.onDialogOpenChange?.(addDialogOpen() || removeDialogOpen()));
+  cleanup(() => props.onDialogOpenChange?.(false));
 
   effect(() => {
     const saved = languageDetectionStore.savedGoogleCloudBinding();
@@ -1186,6 +1195,7 @@ export function LanguageDetectionSection(props: LanguageDetectionSectionProps) {
               rowRefs[kind] ?? fallbackFocusRefs[kind] ?? props.getAddButtonRef?.() ?? null,
             )
           }
+          onRemoveDialogOpenChange={(open) => removeDialogOpen.set(open)}
         />
       </If>
 

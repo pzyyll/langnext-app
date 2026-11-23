@@ -7,6 +7,11 @@ interface TooltipLayout {
   align?: Align;
 }
 
+interface TooltipOptions extends TooltipLayout {
+  /** Hides the hint while another overlay owns Escape, so that overlay closes first. */
+  disabled?: boolean;
+}
+
 interface HoverTooltipOptions extends TooltipLayout {
   /** What it says; read again whenever the app changes it. */
   label: Accessor<string>;
@@ -20,12 +25,13 @@ interface HoverTooltipOptions extends TooltipLayout {
 export function buildTooltip(
   label: string,
   placement: Placement = "top",
-  layout: TooltipLayout = {},
+  options: TooltipOptions = {},
 ) {
   return (
     <Tooltip
       placement={placement}
-      align={layout.align}
+      align={options.align}
+      disabled={options.disabled}
       class={`rounded-xl border border-border bg-sidebar-primary px-3 py-1.5 ${motion.tooltip}`}
       startingClass="opacity-0"
       endingClass="opacity-0"

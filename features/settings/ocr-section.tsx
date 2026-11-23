@@ -51,6 +51,8 @@ interface OcrSectionProps {
   getAddButtonRef?: () => ViewRef | null;
   onRegisterAddTrigger?: (open: () => void) => () => void;
   onAddBusyChange?: (busy: boolean) => void;
+  /** Reports whether one of the section's dialogs owns Escape. */
+  onDialogOpenChange?: (open: boolean) => void;
 }
 
 type CredentialState = "unknown" | "readable" | "missing";
@@ -174,6 +176,7 @@ interface OcrChannelListProps {
   onRowFocusRef: (kind: OcrServiceKind, node: ViewRef | null) => void;
   onFocusGrip: (kind: OcrServiceKind) => void;
   onFocusChannelFallback: (kind: OcrServiceKind) => void;
+  onRemoveDialogOpenChange: (open: boolean) => void;
 }
 
 function OcrChannelList(props: OcrChannelListProps) {
@@ -183,6 +186,8 @@ function OcrChannelList(props: OcrChannelListProps) {
   const animating = signal(false);
   const pendingRemove = signal<OcrServiceKind | null>(null);
   const removeError = signal<string | null>(null);
+  effect(() => props.onRemoveDialogOpenChange(pendingRemove() !== null));
+  cleanup(() => props.onRemoveDialogOpenChange(false));
   // Per-channel drag offsets drive the rows natively; they return to 0 at rest.
   const offsets: Record<OcrServiceKind, AnimatedValue> = {
     ai: createAnimatedValue(0),
@@ -911,6 +916,7 @@ export function OcrSection(props: OcrSectionProps) {
   const addingChannel = signal(false);
   const listBusy = signal(false);
   const listError = signal<string | null>(null);
+  const removeDialogOpen = signal(false);
   const rowRefs: Partial<Record<OcrServiceKind, ViewRef>> = {};
   const gripRefs: Partial<Record<OcrServiceKind, ViewRef>> = {};
   const fallbackFocusRefs: Partial<Record<OcrServiceKind, ViewRef>> = {};
@@ -922,6 +928,9 @@ export function OcrSection(props: OcrSectionProps) {
 
   effect(() => props.onAddBusyChange?.(addingChannel() || listBusy()));
   cleanup(() => props.onAddBusyChange?.(false));
+
+  effect(() => props.onDialogOpenChange?.(addDialogOpen() || removeDialogOpen()));
+  cleanup(() => props.onDialogOpenChange?.(false));
 
   effect(() => {
     const saved = ocrSettingsStore.savedBaiduBinding();
@@ -1032,6 +1041,7 @@ export function OcrSection(props: OcrSectionProps) {
               rowRefs[kind] ?? fallbackFocusRefs[kind] ?? props.getAddButtonRef?.() ?? null,
             )
           }
+          onRemoveDialogOpenChange={(open) => removeDialogOpen.set(open)}
         />
       </If>
 

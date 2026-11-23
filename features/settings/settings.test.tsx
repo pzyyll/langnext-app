@@ -1231,6 +1231,67 @@ test("ocr settings: starts empty, adds AI via the header picker, and configures 
 });
 
 // Only the headless driver can simulate the platform independently of the host OS.
+test("ocr settings: an open priority tooltip does not keep the picker from closing on Escape", async () => {
+  const app = await open(APP_ENTRY, { ...viewport, storage: makeSeedStorage({}) });
+  await app.press("id:nav-settings");
+  await app.press("id:settings-nav-ocr");
+  await app.waitFor("id:settings-ocr-add");
+
+  await app.hover("id:settings-ocr-priority-info");
+  await app.waitUntil(() => app.texts().includes(OCR_PRIORITY_HINT.en));
+  await app.press("id:settings-ocr-add");
+  await app.waitFor("id:settings-ocr-add-dialog");
+  await app.keyboard.press("escape");
+  await app.waitUntil(() => !app.shows("id:settings-ocr-add-dialog"));
+  expect(app.storage()[OCR_STORAGE_KEY]).toBeUndefined();
+});
+
+test("language detection: an open priority tooltip does not keep the picker from closing on Escape", async () => {
+  const app = await open(APP_ENTRY, { ...viewport, storage: makeSeedStorage({}) });
+  await app.press("id:nav-settings");
+  await app.press("id:settings-nav-language-detection");
+  await app.waitFor("id:settings-detection-add");
+
+  await app.hover("id:settings-detection-priority-info");
+  await app.waitUntil(() => app.texts().includes(DETECTION_PRIORITY_HINT.en));
+  await app.press("id:settings-detection-add");
+  await app.waitFor("id:settings-detection-add-dialog");
+  await app.keyboard.press("escape");
+  await app.waitUntil(() => !app.shows("id:settings-detection-add-dialog"));
+  expect(app.storage()[LANGUAGE_DETECTION_STORAGE_KEY]).toBeUndefined();
+});
+
+test("ocr settings: an open priority tooltip does not swallow Escape for the remove dialog", async () => {
+  const ref = "tooltip-remove-ref";
+  const app = await open(APP_ENTRY, {
+    ...viewport,
+    storage: makeSeedStorage({
+      extra: {
+        [OCR_STORAGE_KEY]: ocrRecord({
+          order: ["baidu"],
+          enabled: { baidu: true },
+          baidu: { operation: "accurate", credentialRef: ref },
+        }),
+        [baiduCredentialStorageKey(ref)]: JSON.stringify({
+          apiKey: "saved-api-key",
+          secretKey: "saved-secret-key",
+        }),
+      },
+    }),
+  });
+  await app.press("id:nav-settings");
+  await app.press("id:settings-nav-ocr");
+  await app.waitFor("id:settings-ocr-card");
+
+  await app.hover("id:settings-ocr-priority-info");
+  await app.waitUntil(() => app.texts().includes(OCR_PRIORITY_HINT.en));
+  await app.press("id:settings-ocr-remove-baidu");
+  await app.waitFor("id:settings-ocr-remove-dialog");
+  await app.keyboard.press("escape");
+  await app.waitUntil(() => !app.shows("id:settings-ocr-remove-dialog"));
+  expect(app.shows("id:settings-ocr-row-baidu")).toBe(true);
+});
+
 test("ocr settings: explains the capture platform on simulated macOS", async () => {
   const app = await open(APP_ENTRY, { ...viewport, platform: "macos" });
   await app.press("id:nav-settings");

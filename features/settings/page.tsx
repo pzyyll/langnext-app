@@ -261,6 +261,7 @@ export function SettingsPage(props: {
   const selectedTtsChannel = signal<TtsChannelId | null>(null);
   const detectionAddBusy = signal(false);
   const ocrAddBusy = signal(false);
+  const sectionDialogOpen = signal(false);
   let detectionAddButtonNode: ViewRef | null = null;
   let ocrAddButtonNode: ViewRef | null = null;
   let openDetectionAddDialog: (() => void) | null = null;
@@ -390,6 +391,7 @@ export function SettingsPage(props: {
                                 selectedOcrChannel.set(null);
                                 selectedDetectionChannel.set(null);
                                 selectedTtsChannel.set(null);
+                                sectionDialogOpen.set(false);
                               }}
                               class="w-full"
                             />
@@ -426,6 +428,7 @@ export function SettingsPage(props: {
                         accessibilityLabel={t("settings.ocr.priorityHint")}
                         tooltip={buildTooltip(t("settings.ocr.priorityHint"), "top", {
                           align: "start",
+                          disabled: sectionDialogOpen(),
                         })}
                         class="shrink-0 items-center justify-center p-1"
                       >
@@ -438,6 +441,7 @@ export function SettingsPage(props: {
                         accessibilityLabel={t("settings.tts.priorityHint")}
                         tooltip={buildTooltip(t("settings.tts.priorityHint"), "top", {
                           align: "start",
+                          disabled: sectionDialogOpen(),
                         })}
                         class="shrink-0 items-center justify-center p-1"
                       >
@@ -450,6 +454,7 @@ export function SettingsPage(props: {
                         accessibilityLabel={t("settings.languageDetection.priorityHint")}
                         tooltip={buildTooltip(t("settings.languageDetection.priorityHint"), "top", {
                           align: "start",
+                          disabled: sectionDialogOpen(),
                         })}
                         class="shrink-0 items-center justify-center p-1"
                       >
@@ -520,6 +525,7 @@ export function SettingsPage(props: {
                     };
                   }}
                   onAddBusyChange={(busy) => detectionAddBusy.set(busy)}
+                  onDialogOpenChange={(open) => sectionDialogOpen.set(open)}
                 />
               </If>
               <If when={selectedSection() === "ocr"}>
@@ -537,6 +543,7 @@ export function SettingsPage(props: {
                     };
                   }}
                   onAddBusyChange={(busy) => ocrAddBusy.set(busy)}
+                  onDialogOpenChange={(open) => sectionDialogOpen.set(open)}
                 />
               </If>
               <If when={selectedSection() === "tts"}>
