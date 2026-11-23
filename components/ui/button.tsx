@@ -51,7 +51,7 @@ const VARIANT_CLASSES: Record<ButtonVariant, string> = {
   ghost:
     "hover:bg-accent active:bg-border selected:bg-accent focus-visible:ring-2 focus-visible:ring-ring",
   "brand-ghost":
-    "hover:bg-brand-soft active:bg-brand/15 selected:bg-brand-soft focus-visible:ring-2 focus-visible:ring-ring",
+    "hover:bg-accent active:bg-border selected:bg-brand-soft selected:hover:bg-brand-soft selected:active:bg-brand/20 focus-visible:ring-2 focus-visible:ring-ring",
   nav: "group hover:bg-accent/60 active:bg-accent selected:bg-accent selected:hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring",
   destructive:
     "border border-destructive bg-destructive hover:bg-destructive/90 active:bg-destructive/80 focus-visible:ring-2 focus-visible:ring-ring",
