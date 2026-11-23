@@ -3,6 +3,7 @@ import { t } from "nsh/i18n";
 import { Badge } from "../../components/ui/badge";
 import { Button } from "../../components/ui/button";
 import { Card } from "../../components/ui/card";
+import { Icon } from "../../components/ui/icon";
 import { Input } from "../../components/ui/input";
 import { Switch } from "../../components/ui/switch";
 import { FormField } from "../../modules/ai/ui/form-field";
@@ -185,6 +186,21 @@ export function PresetEditor(props: PresetEditorProps) {
               disabled={!canSave()}
               onPress={() => props.onSave()}
             />
+            <If when={props.draft.sourceId !== null}>
+              <View class="h-4 w-px bg-border" />
+              <Button
+                testID="preset-delete"
+                ref={(node) => props.onDeleteRef(node)}
+                variant="destructive-ghost"
+                size="icon-sm"
+                tooltip={t("presets.action.delete")}
+                accessibilityLabel={t("presets.action.delete")}
+                disabled={props.saving}
+                onPress={() => props.onDelete()}
+              >
+                <Icon name="delete" tone="muted-foreground" class="size-3.5" />
+              </Button>
+            </If>
           </View>
         </View>
       </View>
@@ -324,20 +340,6 @@ export function PresetEditor(props: PresetEditorProps) {
             <If when={props.draft.sourceId !== null}>
               <DeepLUsageSection presetId={props.draft.sourceId!} />
             </If>
-          </If>
-
-          <If when={props.draft.sourceId !== null}>
-            <View class="flex-row justify-end">
-              <Button
-                testID="preset-delete"
-                ref={(node) => props.onDeleteRef(node)}
-                variant="destructive-outline"
-                size="sm"
-                label={t("presets.action.delete")}
-                disabled={props.saving}
-                onPress={() => props.onDelete()}
-              />
-            </View>
           </If>
         </View>
       </Scroll>
