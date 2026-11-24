@@ -1,4 +1,5 @@
 import type { FetchLike, HttpResponseLike } from "../../modules/ai/runtime/http";
+import { createHttpLog } from "../../services/http-log";
 import { parseAzureSpeechRegion } from "./azure-regions";
 import type { TtsFailure, TtsSynthesis, TtsVoice } from "./synthesis";
 
@@ -10,6 +11,8 @@ export const AZURE_TTS_RESPONSE_BYTE_LIMIT = 4 * 1024 * 1024;
 
 /** Deadline for the request and the body read. */
 export const AZURE_TTS_DEFAULT_TIMEOUT_MS = 15_000;
+
+const httpLog = createHttpLog("tts/azure");
 
 export interface AzureSpeechTtsSynthesizeInput {
   apiKey: string;
@@ -223,32 +226,35 @@ export function createAzureSpeechTtsClient(
       const abort = trackAbort(controller.signal);
       const stopped = (): TtsSynthesis => (timedOut ? failed("timeout") : { status: "cancelled" });
 
+      const synthesizeUrl = "https://" + region + ".tts.speech.microsoft.com/cognitiveservices/v1";
+
       try {
         let response: HttpResponseLike;
+        httpLog.request("POST", synthesizeUrl, document);
         try {
-          const pending = fetchImpl(
-            "https://" + region + ".tts.speech.microsoft.com/cognitiveservices/v1",
-            {
-              method: "POST",
-              headers: {
-                "Ocp-Apim-Subscription-Key": input.apiKey,
-                "Content-Type": "application/ssml+xml",
-                "X-Microsoft-OutputFormat": "audio-24khz-48kbitrate-mono-mp3",
-                "User-Agent": "Langnext",
-              },
-              body: document,
-              redirect: "error",
-              signal: controller.signal,
+          const pending = fetchImpl(synthesizeUrl, {
+            method: "POST",
+            headers: {
+              "Ocp-Apim-Subscription-Key": input.apiKey,
+              "Content-Type": "application/ssml+xml",
+              "X-Microsoft-OutputFormat": "audio-24khz-48kbitrate-mono-mp3",
+              "User-Agent": "Langnext",
             },
-          );
+            body: document,
+            redirect: "error",
+            signal: controller.signal,
+          });
           pending.catch(() => {});
           response = await Promise.race([pending, abort.promise]);
-        } catch {
-          return controller.signal.aborted ? stopped() : failed("network");
+        } catch (error) {
+          if (controller.signal.aborted) return stopped();
+          httpLog.failure("POST", synthesizeUrl, error);
+          return failed("network");
         }
         if (controller.signal.aborted) return stopped();
         if (response.status !== 200) {
           discardBody(response.body);
+          httpLog.response("POST", synthesizeUrl, response.status);
           return failed(failureForStatus(response.status));
         }
 
@@ -259,7 +265,11 @@ export function createAzureSpeechTtsClient(
           controller.signal,
         );
         if (audio === "aborted") return stopped();
-        if (audio === "too_large" || audio === "empty") return failed("malformed");
+        if (audio === "too_large" || audio === "empty") {
+          httpLog.response("POST", synthesizeUrl, response.status, { unreadable: audio });
+          return failed("malformed");
+        }
+        httpLog.response("POST", synthesizeUrl, response.status, { audioBytes: audio.byteLength });
         return { status: "synthesized", audio };
       } finally {
         clearTimeout(timer);

@@ -1,4 +1,5 @@
 import { t } from "nsh/i18n";
+import { createHttpLog, HTTP_LOG_PAYLOAD_LIMIT } from "../../../services/http-log";
 import { ProviderProtocolError } from "../contracts/errors";
 import type {
   JsonEventStreamOptions,
@@ -9,6 +10,11 @@ import type {
 
 /** Default timeout shared by every AI HTTP request; event streams measure it as inactivity. */
 export const DEFAULT_HTTP_TIMEOUT_MS = 15_000;
+
+/** Longest wait for reading a failed answer only to fill the log. */
+const ERROR_BODY_LOG_BUDGET_MS = 1_000;
+
+const httpLog = createHttpLog("ai/http");
 
 /** Minimal response shape the client needs; a real `Response` satisfies it. */
 export interface HttpResponseLike {
@@ -89,6 +95,26 @@ function sanitizeNetworkDetail(raw: string): string {
   return sanitized.length > 0 ? sanitized : t("protocol.error.networkDefault");
 }
 
+/** Reads one failed answer for the log only, within a short budget; it never changes the failure. */
+async function readFailureBody(response: HttpResponseLike): Promise<string | null> {
+  const readText = response.text?.bind(response);
+  if (!readText) return null;
+  let timer: number | null = null;
+  try {
+    const textPromise = readText();
+    textPromise.catch(() => {});
+    const budget = new Promise<null>((resolve) => {
+      timer = setTimeout(() => resolve(null), ERROR_BODY_LOG_BUDGET_MS);
+    });
+    const text = await Promise.race([textPromise, budget]);
+    return text === null ? null : String(text);
+  } catch {
+    return null;
+  } finally {
+    clearTimeout(timer ?? undefined);
+  }
+}
+
 async function requestJson(
   fetchImpl: FetchLike,
   target: ResolvedRequestTarget,
@@ -137,6 +163,8 @@ async function requestJson(
     triggerTimeout?.();
   }, timeoutMs);
 
+  httpLog.request(target.method, target.url, body);
+  let failureBody: string | null = null;
   try {
     let response: HttpResponseLike;
     try {
@@ -168,8 +196,9 @@ async function requestJson(
     }
 
     if (!response.ok) {
-      // Only an opted-in caller reads the error body, so other clients keep the status mapping.
+      // Only an opted-in caller maps the error body; the log keeps it for every client.
       if (!classifyErrorResponse || typeof response.text !== "function") {
+        failureBody = await readFailureBody(response);
         throw statusError(response.status);
       }
       let rawError: string;
@@ -177,6 +206,7 @@ async function requestJson(
         const textPromise = response.text();
         textPromise.catch(() => {});
         rawError = String(await Promise.race([textPromise, ...racePromises]));
+        failureBody = rawError;
       } catch (error) {
         if (timedOut || isTimeoutError(error)) {
           throw new ProviderProtocolError("timeout", t("protocol.error.timeout"));
@@ -219,7 +249,11 @@ async function requestJson(
       throw new ProviderProtocolError("invalid_response", t("protocol.error.unexpectedShape"));
     }
 
+    httpLog.response(target.method, target.url, response.status, parsed);
     return parsed as Record<string, unknown>;
+  } catch (error) {
+    httpLog.failure(target.method, target.url, error, failureBody);
+    throw error;
   } finally {
     clearTimeout(timer);
     externalSignal?.removeEventListener("abort", onExternalAbort);
@@ -327,6 +361,22 @@ async function requestEventStream(
     );
   };
 
+  let preview = "";
+  let previewChars = 0;
+  const capturePreview = (text: string) => {
+    previewChars += text.length;
+    if (preview.length < HTTP_LOG_PAYLOAD_LIMIT) {
+      preview += text.slice(0, HTTP_LOG_PAYLOAD_LIMIT - preview.length);
+    }
+  };
+  const reportResponse = (status: number) =>
+    httpLog.response(target.method, target.url, status, {
+      streamedChars: previewChars,
+      preview,
+    });
+
+  httpLog.request(target.method, target.url, body);
+  let failureBody: string | null = null;
   try {
     let response: HttpResponseLike;
     try {
@@ -348,6 +398,7 @@ async function requestEventStream(
     }
 
     if (!response.ok) {
+      failureBody = await readFailureBody(response);
       throw statusError(response.status);
     }
 
@@ -376,7 +427,9 @@ async function requestEventStream(
       const textPromise = response.text ? response.text() : Promise.resolve("");
       textPromise.catch(() => {});
       const text = await Promise.race([textPromise, ...racePromises]);
+      capturePreview(String(text));
       deliver(String(text));
+      reportResponse(response.status);
       return;
     }
 
@@ -387,6 +440,7 @@ async function requestEventStream(
       if (result.done) break;
       armIdleTimer();
       const chunk = decoder.decode(result.value, { stream: true });
+      capturePreview(chunk);
       if (!sawEvent) bufferedBody += chunk;
       lineBuffer += chunk;
       let lineEnd = lineBuffer.indexOf("\n");
@@ -401,10 +455,12 @@ async function requestEventStream(
     lineBuffer += decoder.decode();
     if (lineBuffer.length > 0) deliverLine(lineBuffer.replace(/\r$/, ""));
     if (!sawEvent) deliver(bufferedBody);
+    reportResponse(response.status);
   } catch (error) {
     // Keep category errors raised by the protocol or by cancellation; wrap transport failures.
-    if (error instanceof ProviderProtocolError) throw error;
-    throw streamError(error);
+    const failure = error instanceof ProviderProtocolError ? error : streamError(error);
+    httpLog.failure(target.method, target.url, failure, failureBody);
+    throw failure;
   } finally {
     clearTimeout(timer ?? undefined);
     externalSignal?.removeEventListener("abort", onExternalAbort);

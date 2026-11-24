@@ -11,6 +11,7 @@ import {
   type GoogleCloudDetectInput,
   type GoogleCloudDetectOptions,
 } from "../../modules/google-cloud-translation/client";
+import { createHttpLog } from "../../services/http-log";
 import { resolveSavedModelRequest, type SavedModelRequestResolution } from "../models/store";
 import { isLanguageId, LANGUAGE_IDS, type LanguageId } from "../presets/languages";
 import { languageDetectionStore, type LanguageDetectorBinding } from "./settings";
@@ -71,6 +72,8 @@ export interface DetectLanguageOptions {
  */
 export const GOOGLE_DETECTION_URL =
   "https://translate.googleapis.com/translate_a/t?client=gtx&sl=auto&tl=en";
+
+const httpLog = createHttpLog("language-detection");
 
 /** Legacy codes Google still answers with for two supported languages. */
 const GOOGLE_CODE_ALIASES: Record<string, LanguageId> = { iw: "he", in: "id" };
@@ -166,29 +169,41 @@ async function detectWithGoogle(
   external?.addEventListener("abort", onExternalAbort, { once: true });
   const timer = setTimeout(() => controller.abort(), options.timeoutMs ?? DEFAULT_HTTP_TIMEOUT_MS);
 
+  const requestBody = `q=${encodeURIComponent(sample)}`;
+
   try {
     let response: GoogleDetectionResponseLike;
+    httpLog.request("POST", GOOGLE_DETECTION_URL, requestBody);
     try {
       response = await runFetch(GOOGLE_DETECTION_URL, {
         method: "POST",
         headers: { "content-type": "application/x-www-form-urlencoded" },
-        body: `q=${encodeURIComponent(sample)}`,
+        body: requestBody,
         signal: controller.signal,
       });
-    } catch {
-      return external?.aborted ? failure("cancelled") : failure("failed");
+    } catch (error) {
+      if (external?.aborted) return failure("cancelled");
+      httpLog.failure("POST", GOOGLE_DETECTION_URL, error);
+      return failure("failed");
     }
 
     if (external?.aborted) return failure("cancelled");
-    if (!response.ok || controller.signal.aborted) return failure("failed");
+    if (!response.ok) {
+      httpLog.response("POST", GOOGLE_DETECTION_URL, response.status);
+      return failure("failed");
+    }
+    if (controller.signal.aborted) return failure("failed");
 
     let payload: unknown;
     try {
       payload = await response.json();
-    } catch {
-      return external?.aborted ? failure("cancelled") : failure("failed");
+    } catch (error) {
+      if (external?.aborted) return failure("cancelled");
+      httpLog.failure("POST", GOOGLE_DETECTION_URL, error);
+      return failure("failed");
     }
 
+    httpLog.response("POST", GOOGLE_DETECTION_URL, response.status, payload);
     if (external?.aborted) return failure("cancelled");
 
     const code = readGoogleLanguageCode(payload);
