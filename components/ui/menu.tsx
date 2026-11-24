@@ -86,6 +86,8 @@ interface MenuItemProps {
   closeOnSelect?: boolean;
   accessibilityLabel?: string;
   label?: string;
+  /** Mark drawn before the label, in the same slot as a select option. */
+  leading?: JSX.Element;
   class?: string;
   onSelect?: () => void;
   children?: JSX.Element;
@@ -116,10 +118,24 @@ export function MenuItem(props: MenuItemProps) {
         ) : undefined
       }
     >
-      <If when={props.label !== undefined}>
-        <Text class="min-w-0 flex-1 truncate text-sm text-popover-foreground group-checked:font-medium">
-          {props.label}
-        </Text>
+      <If
+        when={props.leading !== undefined}
+        else={
+          <If when={props.label !== undefined}>
+            <Text class="min-w-0 flex-1 truncate text-sm text-popover-foreground group-checked:font-medium">
+              {props.label}
+            </Text>
+          </If>
+        }
+      >
+        <View class="min-w-0 flex-1 flex-row items-center gap-1.5">
+          {props.leading}
+          <If when={props.label !== undefined}>
+            <Text class="min-w-0 flex-1 truncate text-sm text-popover-foreground group-checked:font-medium">
+              {props.label}
+            </Text>
+          </If>
+        </View>
       </If>
       {props.children}
     </BaseMenuItem>

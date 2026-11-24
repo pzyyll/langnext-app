@@ -167,6 +167,12 @@ export function QuickTranslateAddPresetMenu(props: QuickTranslateAddPresetMenuPr
               testID={`quick-translate-add-preset-option-${preset().id}`}
               accessibilityLabel={preset().name}
               label={preset().name}
+              leading={
+                <PresetLeadingMark
+                  preset={preset()}
+                  testID={`quick-translate-add-preset-option-mark-${preset().id}`}
+                />
+              }
               onSelect={() => props.session.handleAddPresetCard(preset().id)}
             />
           )}
@@ -198,7 +204,7 @@ export function QuickTranslateFooter(props: { session: QuickTranslateSession }) 
   );
 }
 
-/** Visual engine indicator on the preset chip and its option rows: DeepL mark, known AI provider mark, or brand dot. */
+/** Visual engine indicator on the preset chip, its option rows, and the add-preset menu: DeepL mark, known AI provider mark, or brand dot. */
 function PresetLeadingMark(props: { preset: TranslationPreset | null; testID?: string }) {
   const providerMark = () => {
     const preset = props.preset;

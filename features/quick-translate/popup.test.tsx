@@ -2768,6 +2768,28 @@ test("Google Cloud card: preset options repeat the card's engine mark", async ()
   ).toBe(true);
 });
 
+test("add preset menu: options repeat the card preset engine marks", async () => {
+  const app = await open(POPUP_HARNESS, {
+    ...viewport,
+    storage: seedGoogleCards({ detectionMode: "off" }),
+  });
+
+  await app.waitFor("id:quick-translate-add-preset");
+  await app.press("id:quick-translate-add-preset");
+  await app.waitFor("role:menuitem[Google Card]");
+
+  expect(
+    app.shows(
+      "role:menuitem[Google Card] >> id:quick-translate-add-preset-option-mark-preset-google",
+    ),
+  ).toBe(true);
+  expect(
+    app.shows(
+      "role:menuitem[DeepL Card] >> id:quick-translate-add-preset-option-mark-preset-deepl",
+    ),
+  ).toBe(true);
+});
+
 test("Google Cloud card: one detection run serves a Google and a DeepL card the same pair", async () => {
   const app = await open(POPUP_HARNESS, {
     ...viewport,
