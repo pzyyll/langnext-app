@@ -254,7 +254,7 @@ test("quick window: closes on unpinned blur, survives blur when pinned, resets p
   // Pinning keeps it open across blur, while close button closes it and resets pin.
   await app.press("id:harness-tray-quick-translate");
   await app.waitFor("id:quick-translate-pin");
-  await app.type("id:quick-translate-source", "Draft to clear on close");
+  await app.type("id:quick-translate-source", "Unfinished draft");
   await app.press("id:quick-translate-pin");
   await app.press("id:nav-models");
   expect(app.window("quick-translate").state()?.visible).toBe(true);
@@ -264,10 +264,10 @@ test("quick window: closes on unpinned blur, survives blur when pinned, resets p
   await app.waitUntil(() => app.window("quick-translate").state() === null);
   expect(app.window("main").state()?.visible).toBe(true);
 
-  // Reopen confirms pin reset and empty draft.
+  // Reopen restores the draft but not the pin.
   await app.press("id:harness-tray-quick-translate");
   await app.waitFor("id:quick-translate-source");
-  expect(app.value("id:quick-translate-source")).toBe("");
+  expect(app.value("id:quick-translate-source")).toBe("Unfinished draft");
   await app.press("id:nav-settings");
   await app.waitUntil(() => app.window("quick-translate").state() === null);
 
@@ -296,7 +296,6 @@ test("desktop: quick window pins, survives focus switch, resets pin on close, an
 
   await app.press("id:harness-tray-quick-translate");
   await app.waitFor("id:quick-translate-pin");
-  await app.type("id:quick-translate-source", "Draft to clear on close");
   await app.press("id:quick-translate-pin");
   await app.press("id:nav-models");
   expect(app.window("quick-translate").state()?.visible).toBe(true);
@@ -306,10 +305,8 @@ test("desktop: quick window pins, survives focus switch, resets pin on close, an
   await app.waitUntil(() => app.window("quick-translate").state() === null);
   expect(app.window("main").state()?.visible).toBe(true);
 
-  // Reopen confirms pin reset (pressing Pin again selects it fresh) and cleared source.
   await app.press("id:harness-tray-quick-translate");
-  await app.waitFor("id:quick-translate-source");
-  expect(app.value("id:quick-translate-source")).toBe("");
+  await app.waitFor("id:quick-translate-pin");
   await app.press("id:quick-translate-pin");
   await app.keyboard.press("escape");
   await app.waitUntil(() => app.window("quick-translate").state() === null);
@@ -851,7 +848,7 @@ test("double copy: controller reads clipboard once, skips when disabled or empty
   pendingReads.shift()!.resolve("Stale closed text");
   await closedPromise;
   expect(controller.isOpen()).toBe(false);
-  expect(controller.sourceText()).toBe("");
+  expect(controller.sourceText()).toBe("Keep draft");
 
   // 5. Slow read superseded by newer activation -> older read never overwrites newer delivery.
   const slowFirst = controller.activateDoubleCopy({ hasValidCopy: true });
@@ -1061,7 +1058,7 @@ test("selection controller: only the latest current read delivers", async () => 
   await cancelled;
   expect(pendingSelections).toHaveLength(0);
   expect(controller.isOpen()).toBe(false);
-  expect(controller.sourceText()).toBe("");
+  expect(controller.sourceText()).toBe("Third");
   expect(controller.sourceDelivery()).toBeNull();
 
   currentTarget = "s1";
@@ -1166,7 +1163,7 @@ test("selection controller: an empty or failed read opens without changing the d
   pendingReads.shift()!.resolve({ status: "noSelection" });
   await stale;
   expect(controller.isOpen()).toBe(false);
-  expect(controller.sourceText()).toBe("");
+  expect(controller.sourceText()).toBe("Keep draft");
   expect(controller.sourceDelivery()).toBeNull();
 });
 
@@ -1246,7 +1243,16 @@ test("double copy: shell seam delivers copied text to a newly mounted popup, tra
   expect(app.texts()).toContain("Translated ok");
   expect(app.requests()).toHaveLength(1);
 
-  // Pin before triggering harness controls on main window so blur does not close & clear draft.
+  await app.keyboard.press("escape");
+  await app.waitUntil(() => app.window("quick-translate").state() === null);
+  await app.keyboard.press(DEFAULT_QUICK_TRANSLATE_SHORTCUT);
+  await app.waitFor("id:quick-translate-source-preview");
+  await app.waitFor("id:quick-translate-result-text");
+  expect(app.texts()).toContain("Clipboard manual text");
+  expect(app.texts()).toContain("Translated ok");
+  expect(app.requests()).toHaveLength(1);
+
+  // Pin before triggering harness controls on the main window so blur does not close the popup.
   await app.press("id:quick-translate-pin");
 
   // Empty clipboard leaves the sent draft and its result untouched, with no request.
@@ -1283,6 +1289,15 @@ test("double copy: shell seam delivers copied text to a newly mounted popup, tra
   expect(app.texts()).toContain("Translated ok");
   expect(app.requests()).toHaveLength(3);
 
+  await app.press("id:quick-translate-clear");
+  await app.keyboard.press("escape");
+  await app.waitUntil(() => app.window("quick-translate").state() === null);
+  await app.keyboard.press(DEFAULT_QUICK_TRANSLATE_SHORTCUT);
+  await app.waitFor("id:quick-translate-source");
+  expect(app.value("id:quick-translate-source")).toBe("");
+  expect(app.shows("id:quick-translate-result-text")).toBe(false);
+  expect(app.requests()).toHaveLength(3);
+
   // Failed worker initialization keeps listener inactive with zero clipboard reads.
   const failed = await open(HARNESS_ENTRY, {
     ...viewport,
@@ -1297,6 +1312,61 @@ test("double copy: shell seam delivers copied text to a newly mounted popup, tra
   await failed.press("id:harness-trigger-double-copy-valid");
   expect(failed.window("quick-translate").state()).toBeNull();
   expect(failed.texts().join(" ")).toContain("dcReads=0|");
+});
+
+test("quick window: reopening restores the draft and completed translation without sending a request", async () => {
+  const draft = "Keep this source";
+  const translation = "Completed translation";
+  const responseDelay = 1000;
+  const app = await open(HARNESS_ENTRY, {
+    ...viewport,
+    clock: {},
+    storage: {
+      ...makeSeedStorage({
+        channels: [makeChannel({ adapterId: "openai-compatible", enabled: true })],
+        models: [makeModel({ enabled: true })],
+        credentials: { "ch-1": "sk-test" },
+      }),
+      [PRESETS_STORAGE_KEY]: JSON.stringify({ version: 1, items: [quickPreset] }),
+      [QUICK_TRANSLATE_PREFERENCES_KEY]: popupPreferences(),
+    },
+    network: {
+      "POST https://api.openai.com/v1/chat/completions": {
+        status: 200,
+        delay: responseDelay,
+        body: { choices: [{ message: { content: translation } }] },
+      },
+    },
+  });
+
+  await app.press("id:harness-tray-quick-translate");
+  await app.waitFor("id:quick-translate-source");
+  await app.type("id:quick-translate-source", draft);
+  await app.keyboard.press("enter");
+  await app.waitUntil(() => app.requests().length === 1);
+  expect(app.shows("id:quick-translate-status")).toBe(true);
+
+  await app.keyboard.press("escape");
+  await app.waitUntil(() => app.window("quick-translate").state() === null);
+  await app.keyboard.press(DEFAULT_QUICK_TRANSLATE_SHORTCUT);
+  await app.waitFor("id:quick-translate-source");
+  await app.clock!.runFor(responseDelay);
+
+  expect(app.value("id:quick-translate-source")).toBe(draft);
+  expect(app.shows("id:quick-translate-status")).toBe(false);
+  expect(app.shows("id:quick-translate-result-text")).toBe(false);
+  expect(app.requests()).toHaveLength(1);
+
+  await app.keyboard.press("enter");
+  await app.waitFor("id:quick-translate-result-text");
+  await app.keyboard.press("escape");
+  await app.waitUntil(() => app.window("quick-translate").state() === null);
+  await app.keyboard.press(DEFAULT_QUICK_TRANSLATE_SHORTCUT);
+  await app.waitFor("id:quick-translate-result-text");
+
+  expect(app.value("id:quick-translate-source")).toBe(draft);
+  expect(app.texts()).toContain(translation);
+  expect(app.requests()).toHaveLength(2);
 });
 
 const HARNESS_OCR_CAPTURE_KEY = "__test.qt.ocrCapture";

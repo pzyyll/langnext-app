@@ -760,13 +760,8 @@ export function QuickTranslatePopup(props: QuickTranslatePopupProps) {
   const sourceText = () => props.session.sourceText();
   const hasSourceText = () => sourceText().length > 0;
   const hasSpeakableSource = () => sourceText().trim().length > 0;
-  // Collapse is a view-only mode: an empty field always shows the editor for the next input.
-  // Clipboard and selection arrive collapsed: the user asked to translate, not to edit.
   const delivery = () => props.session.sourceDelivery();
-  const sourceCollapsed = signal(
-    (delivery()?.kind === "clipboard" || delivery()?.kind === "selection") && hasSourceText(),
-  );
-  const isSourceCollapsed = () => sourceCollapsed() && hasSourceText();
+  const isSourceCollapsed = () => props.session.sourceCollapsed() && hasSourceText();
   const sourceFirstLine = () => sourceText().split(/\r?\n/, 1)[0] ?? "";
   const sourceHasMultipleLines = () => /\r?\n/.test(sourceText());
   const sourceInputRef = signal<InputRef | null>(null);
@@ -776,27 +771,16 @@ export function QuickTranslatePopup(props: QuickTranslatePopupProps) {
   let lastDeliverySeq = delivery()?.seq ?? 0;
 
   effect(() => {
-    if (!hasSourceText()) sourceCollapsed.set(false);
-  });
-
-  // Recognized text opens the editor and takes the caret; copied text stays a one-line preview.
-  effect(() => {
     const current = delivery();
     const seq = current?.seq ?? 0;
     if (seq === lastDeliverySeq) return;
     lastDeliverySeq = seq;
-    if (!hasSourceText() || current === null) return;
-    if (current.kind === "ocr") {
-      focusSourceAfterExpand.set(true);
-      sourceCollapsed.set(false);
-      return;
-    }
-    sourceCollapsed.set(true);
+    if (current?.kind === "ocr") focusSourceAfterExpand.set(true);
   });
 
   const expandSource = () => {
     focusSourceAfterExpand.set(true);
-    sourceCollapsed.set(false);
+    props.session.setSourceCollapsed(false);
   };
 
   // The editor remounts on expand: focus it with the caret past the last character.
@@ -1239,7 +1223,7 @@ export function QuickTranslatePopup(props: QuickTranslatePopupProps) {
               expandSource();
               return;
             }
-            sourceCollapsed.set(true);
+            props.session.setSourceCollapsed(true);
           }}
         >
           <Icon

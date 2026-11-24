@@ -43,6 +43,7 @@ export interface SourceLanguageDetection {
   ): Promise<LanguageDetectionResult | null>;
   /** Drops the saved result when the input text changes. */
   syncText(text: string): void;
+  cancelPending(): void;
   dispose(): void;
 }
 
@@ -192,6 +193,11 @@ export function createSourceLanguageDetection(
       if (disposed || nextText === text) return;
       text = nextText;
       reset();
+    },
+    cancelPending: () => {
+      if (current === null) return;
+      supersede();
+      publish({ status: "idle" });
     },
     dispose: () => {
       disposed = true;

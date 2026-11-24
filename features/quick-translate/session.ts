@@ -1,4 +1,4 @@
-import { batch, cleanup, Clipboard, effect, signal, type Accessor } from "nsh";
+import { batch, cleanup, Clipboard, effect, signal, untracked, type Accessor } from "nsh";
 import { t } from "nsh/i18n";
 import type { SelectItem } from "../../components/ui/select";
 import type { LanguageDetectionResult } from "../language-detection/detect";
@@ -120,6 +120,8 @@ interface ActionLanguages {
 }
 
 export interface QuickTranslateSessionOptions {
+  /** When provided, the session outlives the window but stops pending work on close. */
+  windowOpen?: Accessor<boolean>;
   sourceText: Accessor<string>;
   /** The newest text that arrived as a whole (clipboard, selection, or OCR), with its kind. */
   sourceDelivery?: Accessor<SourceDelivery | null>;
@@ -141,6 +143,8 @@ export interface QuickTranslateSession {
   sourceText: Accessor<string>;
   /** The newest delivered text, or `null` when the draft was typed. */
   sourceDelivery: Accessor<SourceDelivery | null>;
+  sourceCollapsed: Accessor<boolean>;
+  setSourceCollapsed: (collapsed: boolean) => void;
   sourceLanguage: Accessor<SourceLanguageId>;
   targetLanguage: Accessor<TargetLanguageId>;
   sourceDetection: Accessor<SourceDetectionState>;
@@ -217,6 +221,7 @@ export function createQuickTranslateSession(
   }
 
   const cards = signal<CardViewItem[]>([]);
+  const sourceCollapsed = signal(false);
   const sourceLanguage = signal<SourceLanguageId>(AUTO_LANGUAGE);
   const targetLanguage = signal<TargetLanguageId>(AUTO_LANGUAGE);
   const sourceDetection = signal<SourceDetectionState>({ status: "idle" });
@@ -237,8 +242,10 @@ export function createQuickTranslateSession(
     expandedCards().some((card) => enabledPresets().some((preset) => preset.id === card.presetId));
   const presetItems = () => buildPresetItems(enabledPresets());
 
-  let hasSeededInitialCard = false;
+  let needsCardRestore = true;
+  let hasRestoredCards = false;
   let hasRestoredLanguages = false;
+  let windowEpoch = 0;
   let nextCardOrdinal = 1;
   let debounceTimer: ReturnType<typeof setTimeout> | null = null;
   let lastHandledDeliverySeq = 0;
@@ -340,6 +347,15 @@ export function createQuickTranslateSession(
     query.abort = null;
   };
 
+  const cancelPendingQueries = (runtime: CardRuntime) => {
+    for (const [templateId, query] of runtime.queries) {
+      if (!query.abort) continue;
+      cancelQuery(query);
+      runtime.queries.delete(templateId);
+      if (runtime.selectedQuery === query) runtime.selectedQuery = null;
+    }
+  };
+
   const cancelRuntime = (runtime: CardRuntime) => {
     clearCopyTimer(runtime);
     clearBackTranslation(runtime);
@@ -381,8 +397,12 @@ export function createQuickTranslateSession(
     });
   };
 
-  // Seed or restore valid cards and languages only after presets finish loading cleanly.
+  // Restore the card layout on open, keeping results for cards that are still valid.
   effect(() => {
+    if (options.windowOpen?.() === false) {
+      needsCardRestore = true;
+      return;
+    }
     const status = store.status();
     if (status.kind !== "ready") {
       return;
@@ -396,68 +416,92 @@ export function createQuickTranslateSession(
         targetLanguage.set(saved.targetLanguage ?? AUTO_LANGUAGE);
       });
     }
-    if (hasSeededInitialCard) {
-      return;
+    if (!needsCardRestore) return;
+
+    const currentCards = untracked(cards);
+    const restored = resolveQuickTranslateCards(
+      hasRestoredCards ? currentCards : saved.cards,
+      status,
+      store.records(),
+    );
+    if (restored === null) return;
+
+    const firstAvailable = enabledPresets()[0];
+    for (const current of currentCards) {
+      const entry = restored.find((card) => card.id === current.id);
+      if (entry?.presetId === current.presetId && entry.templateId === current.templateId) continue;
+      const runtime = cardRuntimes.get(current.id);
+      if (runtime) cancelRuntime(runtime);
+      cardRuntimes.delete(current.id);
     }
-    const available = enabledPresets();
-    const restored = resolveQuickTranslateCards(saved.cards, status, store.records());
-    if (restored === null) {
-      return;
-    }
-    if (available.length === 0 && restored.length === 0) {
-      return;
+    if (restored.length === 0 && firstAvailable) {
+      restored.push({
+        id: allocateCardId(),
+        presetId: firstAvailable.id,
+        templateId: null,
+        collapsed: false,
+      });
     }
 
-    hasSeededInitialCard = true;
-    const firstAvailable = available[0];
-
-    let nextCards: CardViewItem[];
-    if (restored.length > 0) {
-      let maxOrd = 0;
-      for (const entry of restored) {
-        const match = /^card-(\d+)$/.exec(entry.id);
-        if (match) {
-          maxOrd = Math.max(maxOrd, Number(match[1]));
+    needsCardRestore = restored.length === 0;
+    hasRestoredCards ||= restored.length > 0;
+    cards.set(
+      restored.map((entry) => {
+        if (cardRuntimes.has(entry.id)) {
+          return currentCards.find((card) => card.id === entry.id)!;
         }
+        const match = /^card-(\d+)$/.exec(entry.id);
+        if (match) nextCardOrdinal = Math.max(nextCardOrdinal, Number(match[1]) + 1);
         cardRuntimes.set(entry.id, createCardRuntime());
-      }
-      nextCardOrdinal = Math.max(nextCardOrdinal, maxOrd + 1);
-      nextCards = restored.map((entry) => ({
-        id: entry.id,
-        presetId: entry.presetId,
-        templateId: entry.templateId,
-        collapsed: entry.collapsed,
-        result: { status: "idle" },
-        copied: false,
-        copyError: null,
-        backTranslation: { status: "closed" },
-      }));
-    } else if (firstAvailable) {
-      const id = allocateCardId();
-      cardRuntimes.set(id, createCardRuntime());
-      nextCards = [
-        {
-          id,
-          presetId: firstAvailable.id,
-          templateId: null,
-          collapsed: false,
+        return {
+          ...entry,
           result: { status: "idle" },
           copied: false,
           copyError: null,
           backTranslation: { status: "closed" },
-        },
-      ];
-    } else {
-      nextCards = [];
-    }
-
-    cards.set(nextCards);
+        };
+      }),
+    );
   });
 
   effect(() => {
     if (!isAutoTranslate()) {
       clearSharedDebounce();
     }
+  });
+
+  effect(() => {
+    if (options.windowOpen?.() !== false) return;
+    windowEpoch += 1;
+    clearSharedDebounce();
+    languageDetection.cancelPending();
+    prefsStore.clearSaveError();
+    cards.set(
+      untracked(cards).map((card) => {
+        const runtime = cardRuntimes.get(card.id)!;
+        clearCopyTimer(runtime);
+        cancelPendingQueries(runtime);
+        const bt = runtime.backTranslation;
+        if (bt?.state.status === "success") {
+          bt.copyEpoch += 1;
+          clearBackTranslationCopyTimer(bt);
+          bt.copied = false;
+          bt.copyError = null;
+        } else {
+          clearBackTranslation(runtime);
+        }
+        return {
+          ...card,
+          copied: false,
+          copyError: null,
+          result:
+            card.result.status === "loading" || card.result.status === "streaming"
+              ? { status: "idle" }
+              : card.result,
+          backTranslation: toBackTranslationViewState(runtime.backTranslation),
+        };
+      }),
+    );
   });
 
   cleanup(() => {
@@ -668,17 +712,19 @@ export function createQuickTranslateSession(
   };
 
   effect(() => {
-    const seq = options.sourceDelivery?.()?.seq ?? 0;
-    if (seq > lastHandledDeliverySeq) {
-      lastHandledDeliverySeq = seq;
+    const delivery = options.sourceDelivery?.();
+    if (delivery && delivery.seq > lastHandledDeliverySeq) {
+      lastHandledDeliverySeq = delivery.seq;
+      sourceCollapsed.set(delivery.kind === "clipboard" || delivery.kind === "selection");
       // Delivered text is a translation request, whatever Auto-translate says.
       translateDelivery();
     }
   });
 
-  // A new input belongs to no detection yet, whichever path replaced the draft.
   effect(() => {
-    languageDetection.syncText(options.sourceText());
+    const text = options.sourceText();
+    if (text.length === 0) sourceCollapsed.set(false);
+    languageDetection.syncText(text);
   });
 
   const handleSourceChange = (nextText: string) => {
@@ -855,12 +901,7 @@ export function createQuickTranslateSession(
       if (runtime) {
         clearCopyTimer(runtime);
         closeBackTranslationRuntime(runtime);
-        for (const [templateId, query] of runtime.queries) {
-          if (!query.abort) continue;
-          cancelQuery(query);
-          runtime.queries.delete(templateId);
-          if (runtime.selectedQuery === query) runtime.selectedQuery = null;
-        }
+        cancelPendingQueries(runtime);
         if (
           runtime.backTranslation &&
           runtime.backTranslation.forwardQuery !== runtime.selectedQuery
@@ -939,10 +980,13 @@ export function createQuickTranslateSession(
 
     const expectedText = card.result.text;
     const expectedQuery = runtime.selectedQuery;
+    const expectedEpoch = windowEpoch;
     void runCopyWithFeedback({
       text: expectedText,
       isValid: () => {
-        if (disposed || cardRuntimes.get(cardId) !== runtime) return false;
+        if (disposed || windowEpoch !== expectedEpoch || cardRuntimes.get(cardId) !== runtime) {
+          return false;
+        }
         const latest = cards().find((item) => item.id === cardId);
         return (
           latest !== undefined &&
@@ -1196,6 +1240,8 @@ export function createQuickTranslateSession(
   return {
     sourceText: options.sourceText,
     sourceDelivery: options.sourceDelivery ?? (() => null),
+    sourceCollapsed,
+    setSourceCollapsed: (collapsed) => sourceCollapsed.set(collapsed),
     sourceLanguage: () => sourceLanguage(),
     targetLanguage: () => targetLanguage(),
     sourceDetection: () => sourceDetection(),

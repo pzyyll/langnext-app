@@ -24,7 +24,10 @@ import {
   registerDoubleCopyRuntime,
   saveQuickTranslatePopupState,
 } from "../features/quick-translate/preferences";
-import { createQuickTranslateSession } from "../features/quick-translate/session";
+import {
+  createQuickTranslateSession,
+  type QuickTranslateSession,
+} from "../features/quick-translate/session";
 import { selectionCopyEnabled } from "../features/settings/selection-copy";
 import {
   createTranslationShortcutSetting,
@@ -166,7 +169,11 @@ export function registerQuickTranslateDoubleCopy(
 const ROOT_BORDER_HEIGHT = 2;
 
 /** Renders popup contents inside `<Window>` so `titleBar()` reads this window's caption area. */
-function QuickTranslateWindowBody(props: { controller: QuickTranslateController }) {
+function QuickTranslateWindowBody(props: {
+  controller: QuickTranslateController;
+  session: QuickTranslateSession;
+}) {
+  const session = props.session;
   const win = currentWindow();
   const headerHeight = signal(0);
   const contentHeight = signal(0);
@@ -175,13 +182,6 @@ function QuickTranslateWindowBody(props: { controller: QuickTranslateController 
     t(markdownEnabledPreference() ? "quickTranslate.showPlainText" : "quickTranslate.showMarkdown");
   const ocrAction = signal<ViewRef | null>(null);
   let handledOcrFocusSeq = props.controller.ocrFocusSeq();
-  const session = createQuickTranslateSession({
-    sourceText: props.controller.sourceText,
-    sourceDelivery: props.controller.sourceDelivery,
-    onSourceTextChange: (text) => props.controller.setSourceText(text),
-    autoTranslate: props.controller.autoTranslate,
-    onOverlayOpenChange: (menuId, open) => props.controller.setMenuOpen(menuId, open),
-  });
   // On Windows the first layout can arrive before the native window state.
   const readyToFit = computed(() => {
     const state = props.controller.attachedWindow()?.state();
@@ -360,8 +360,17 @@ function QuickTranslateWindowBody(props: { controller: QuickTranslateController 
   );
 }
 
-/** Floating Stage 1/2 Quick Translate window controlled by the app shell. */
+/** Floating Quick Translate window with a session that survives native window close. */
 export function QuickTranslateWindow(props: { controller: QuickTranslateController }) {
+  const session = createQuickTranslateSession({
+    windowOpen: props.controller.isOpen,
+    sourceText: props.controller.sourceText,
+    sourceDelivery: props.controller.sourceDelivery,
+    onSourceTextChange: (text) => props.controller.setSourceText(text),
+    autoTranslate: props.controller.autoTranslate,
+    onOverlayOpenChange: (menuId, open) => props.controller.setMenuOpen(menuId, open),
+  });
+
   effect(() => {
     const win = props.controller.attachedWindow();
     const state = win?.state();
@@ -406,7 +415,7 @@ export function QuickTranslateWindow(props: { controller: QuickTranslateControll
       }}
       ref={(node) => props.controller.attachWindow(node)}
     >
-      <QuickTranslateWindowBody controller={props.controller} />
+      <QuickTranslateWindowBody controller={props.controller} session={session} />
     </Window>
   );
 }

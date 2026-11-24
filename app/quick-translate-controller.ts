@@ -203,7 +203,6 @@ export function createQuickTranslateController(
     const hadState =
       openSignal() ||
       pinnedSignal() ||
-      sourceSignal() !== "" ||
       sourceDeliverySignal() !== null ||
       Object.keys(openMenusSignal()).length > 0;
     if (!hadState && windowRef === null && !ocrActive) {
@@ -214,7 +213,6 @@ export function createQuickTranslateController(
     draftGen += 1;
     openSignal.set(false);
     pinnedSignal.set(false);
-    sourceSignal.set("");
     sourceDeliverySignal.set(null);
     openMenusSignal.set({});
     windowRef = null;
