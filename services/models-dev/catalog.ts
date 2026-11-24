@@ -2,7 +2,7 @@
 // ABOUTME: Refreshes https://models.dev/models.json once per 24h; the bundled snapshot answers when it cannot.
 import { Storage } from "nsh";
 import bundledCatalogUrl from "../../assets/catalog/models.dev.json?url";
-import { createHttpLog } from "../http-log";
+import { createHttpFetch } from "../http";
 import { createLogger } from "../log";
 
 /** Provider-agnostic model metadata published from https://github.com/anomalyco/models.dev. */
@@ -21,7 +21,9 @@ const MAX_CATALOG_CHARS = 10 * 1024 * 1024;
 const MAX_TOKEN_COUNT = 4_294_967_295;
 
 const log = createLogger("models-dev/catalog");
-const httpLog = createHttpLog("models-dev/catalog");
+const httpFetch = createHttpFetch({ scope: "models-dev/catalog" });
+/** Local asset reads have nothing to abort. */
+const NEVER_ABORTED = new AbortController().signal;
 
 /** Capability flags and token limits the catalog reports for one model. */
 export interface CatalogFacts {
@@ -270,34 +272,36 @@ function positiveTokenCount(value: unknown): number | null {
 
 /** Reads the catalog snapshot the app ships; an `asset:` fetch needs no network. */
 async function fetchBundledCatalogBody(): Promise<string> {
-  const response = await fetch(BUNDLED_CATALOG_URL, { headers: { Accept: "application/json" } });
+  const response = await httpFetch(BUNDLED_CATALOG_URL, {
+    method: "GET",
+    headers: { Accept: "application/json" },
+    signal: NEVER_ABORTED,
+  });
   if (!response.ok) {
     throw new Error(`bundled models.dev catalog responded ${response.status}`);
   }
+  if (!response.text) throw new Error("bundled models.dev catalog has no text body");
   return await response.text();
 }
 
 async function fetchCatalogBody(): Promise<string> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS);
-  httpLog.request("GET", CATALOG_URL);
   try {
-    const response = await fetch(CATALOG_URL, {
+    const response = await httpFetch(CATALOG_URL, {
+      method: "GET",
       headers: { Accept: "application/json" },
       signal: controller.signal,
     });
     if (!response.ok) {
       throw new Error(`models.dev responded ${response.status}`);
     }
+    if (!response.text) throw new Error("models.dev answered no text body");
     const body = await response.text();
-    httpLog.response("GET", CATALOG_URL, response.status, { chars: body.length });
     if (body.length > MAX_CATALOG_CHARS) {
       throw new Error(`models.dev catalog too large: ${body.length} characters`);
     }
     return body;
-  } catch (error) {
-    httpLog.failure("GET", CATALOG_URL, error);
-    throw error;
   } finally {
     clearTimeout(timer);
   }

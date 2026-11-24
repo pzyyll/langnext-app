@@ -61,39 +61,48 @@ test("http-log: a 2xx answer is info and a rejected answer is an error", () => {
   const url = "https://api.openai.com/v1/chat/completions";
   const info = capture("info");
   const error = capture("error");
-  const debug = capture("debug");
   try {
-    httpLog.response("POST", url, 200, { choices: [{ message: { content: "hi" } }] });
-    httpLog.response("POST", url, 400, { error: { message: "bad model" } });
+    httpLog.response("POST", url, 200);
+    httpLog.response("POST", url, 400);
   } finally {
     info.restore();
     error.restore();
-    debug.restore();
   }
 
   expect(info.calls).toEqual([[`[ai/http] response 200 POST ${url}`]]);
   expect(error.calls).toEqual([[`[ai/http] response 400 POST ${url}`]]);
+});
+
+test("http-log: the answer body stays on a debug line", () => {
+  const httpLog = createHttpLog("ai/http");
+  const url = "https://api.openai.com/v1/chat/completions";
+  const debug = capture("debug");
+  try {
+    httpLog.responseBody("POST", url, 200, { choices: [{ message: { content: "hi" } }] });
+    httpLog.responseBody("POST", url, 400, { error: { message: "bad model" } });
+  } finally {
+    debug.restore();
+  }
+
   expect(debug.calls).toEqual([
     [`[ai/http] response body 200 POST ${url} body={"choices":[{"message":{"content":"hi"}}]}`],
     [`[ai/http] response body 400 POST ${url} body={"error":{"message":"bad model"}}`],
   ]);
 });
 
-test("http-log: the failure line keeps the provider category, its body waits for debug", () => {
+test("http-log: the failure line keeps the provider category", () => {
   const httpLog = createHttpLog("ai/http");
   const url = "https://api.openai.com/v1/chat/completions";
   const error = capture("error");
-  const debug = capture("debug");
   const failure = Object.assign(new Error("rejected"), {
     name: "ProviderProtocolError",
     kind: "invalid_request",
     status: 400,
   });
   try {
-    httpLog.failure("POST", url, failure, '{"message":"no such model"}');
+    httpLog.failure("POST", url, failure);
   } finally {
     error.restore();
-    debug.restore();
   }
 
   expect(error.calls).toEqual([
@@ -102,13 +111,11 @@ test("http-log: the failure line keeps the provider category, its body waits for
         " error=ProviderProtocolError: rejected kind=invalid_request status=400",
     ],
   ]);
-  expect(debug.calls).toEqual([
-    [`[ai/http] failure body POST ${url} body={"message":"no such model"}`],
-  ]);
 });
 
-test("http-log: a cancelled request is debug, never an error", () => {
+test("http-log: a cancelled request and a stopped call are debug, never errors", () => {
   const httpLog = createHttpLog("ai/http");
+  const url = "https://api.openai.com/v1/chat/completions";
   const error = capture("error");
   const debug = capture("debug");
   const cancelled = Object.assign(new Error("stopped"), {
@@ -116,14 +123,18 @@ test("http-log: a cancelled request is debug, never an error", () => {
     kind: "cancelled",
   });
   try {
-    httpLog.failure("POST", "https://api.openai.com/v1/chat/completions", cancelled);
+    httpLog.failure("POST", url, cancelled);
+    httpLog.aborted("POST", url);
   } finally {
     error.restore();
     debug.restore();
   }
 
   expect(error.calls).toEqual([]);
-  expect(debug.calls).toHaveLength(1);
+  expect(debug.calls).toEqual([
+    [`[ai/http] failure POST ${url} error=ProviderProtocolError: stopped kind=cancelled`],
+    [`[ai/http] aborted POST ${url}`],
+  ]);
 });
 
 test("http-log: a long payload keeps its head and states the dropped size", () => {

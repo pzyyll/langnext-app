@@ -2,7 +2,8 @@ import { t } from "nsh/i18n";
 import type { LanguageId } from "../../features/presets/languages";
 import { ProviderProtocolError } from "../ai/contracts/errors";
 import type { JsonHttpClient, ResolvedRequestTarget } from "../ai/contracts/protocol";
-import { createJsonHttpClient, type FetchLike } from "../ai/runtime/http";
+import { createJsonHttpClient } from "../ai/runtime/http";
+import type { FetchLike } from "../../services/http";
 import { toGoogleTranslationLanguage } from "./languages";
 
 const GOOGLE_TRANSLATION_URL = "https://translation.googleapis.com/language/translate/v2";
@@ -185,6 +186,7 @@ export function createGoogleCloudTranslateClient(
     options.http ??
     createJsonHttpClient({
       fetchImpl: options.fetchImpl,
+      logScope: "google-cloud/translate",
       classifyErrorResponse: classifyGoogleErrorResponse,
     });
 

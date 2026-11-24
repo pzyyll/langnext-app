@@ -1,5 +1,4 @@
-import type { FetchLike, HttpResponseLike } from "../../modules/ai/runtime/http";
-import { createHttpLog } from "../../services/http-log";
+import { createHttpFetch, type FetchLike, type HttpResponseLike } from "../../services/http";
 import type { BaiduCredentialPair, BaiduOcrOperation } from "./settings";
 
 const BAIDU_ORIGIN = "https://aip.baidubce.com";
@@ -19,8 +18,6 @@ const OPERATION_REQUEST: Record<BaiduOcrOperation, { path: string; languageType:
   general: { path: "general", languageType: "CHN_ENG" },
   accurate: { path: "accurate", languageType: "auto_detect" },
 };
-
-const httpLog = createHttpLog("ocr/baidu");
 
 export type BaiduOcrFailureReason =
   | "invalid_image"
@@ -280,7 +277,6 @@ type Interpreted =
 
 async function interpretResponse(
   response: HttpResponseLike,
-  url: string,
   maxBytes: number,
   phase: "token" | "ocr",
   abortPromise: Promise<never>,
@@ -288,9 +284,6 @@ async function interpretResponse(
 ): Promise<Interpreted> {
   const body = await readJson(response, maxBytes, abortPromise, signal);
   if ("aborted" in body && body.aborted) return { kind: "aborted" };
-  if (body.ok) httpLog.response("POST", url, response.status, body.value);
-  else if ("failure" in body)
-    httpLog.response("POST", url, response.status, { failure: body.failure });
   const statusFailure = classifyStatus(response.status);
   if (!body.ok) {
     if (!("failure" in body)) return { kind: "aborted" };
@@ -329,7 +322,6 @@ async function postForm(
   abortPromise: Promise<never>,
 ): Promise<HttpResponseLike | "aborted" | "network"> {
   if (signal.aborted) return "aborted";
-  httpLog.request("POST", url, body);
   try {
     const pending = fetchImpl(url, {
       method: "POST",
@@ -340,16 +332,14 @@ async function postForm(
     });
     pending.catch(() => {});
     return await Promise.race([pending, abortPromise]);
-  } catch (error) {
-    if (signal.aborted) return "aborted";
-    httpLog.failure("POST", url, error);
-    return "network";
+  } catch {
+    return signal.aborted ? "aborted" : "network";
   }
 }
 
 /** Creates a Baidu OCR client. `fetchImpl` is the only I/O boundary. */
 export function createBaiduOcrClient(options: { fetchImpl?: FetchLike } = {}): BaiduOcrClient {
-  const fetchImpl: FetchLike = options.fetchImpl ?? ((url, init) => fetch(url, init));
+  const fetchImpl = createHttpFetch({ fetchImpl: options.fetchImpl, scope: "ocr/baidu" });
 
   return {
     recognize: async (input, callOptions) => {
@@ -389,7 +379,6 @@ export function createBaiduOcrClient(options: { fetchImpl?: FetchLike } = {}): B
 
         const token = await interpretResponse(
           tokenResponse,
-          TOKEN_URL,
           TOKEN_BODY_LIMIT,
           "token",
           abort.promise,
@@ -421,7 +410,6 @@ export function createBaiduOcrClient(options: { fetchImpl?: FetchLike } = {}): B
 
         const recognized = await interpretResponse(
           ocrResponse,
-          ocrUrl,
           OCR_BODY_LIMIT,
           "ocr",
           abort.promise,

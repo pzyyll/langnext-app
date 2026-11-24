@@ -1,7 +1,7 @@
 import { t } from "nsh/i18n";
 import { expect, test } from "nsh/test";
 import { ProviderProtocolError } from "../ai/contracts/errors";
-import type { FetchLike, HttpResponseLike } from "../ai/runtime/http";
+import type { FetchLike, HttpResponseLike } from "../../services/http";
 import { createDeepLClient, DEEPL_MAX_REQUEST_BYTES, DEEPL_NO_CHARACTER_LIMIT } from "./client";
 
 interface RecordedRequest {

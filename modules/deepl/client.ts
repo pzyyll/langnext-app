@@ -2,7 +2,8 @@ import { t } from "nsh/i18n";
 import type { LanguageId } from "../../features/presets/languages";
 import { ProviderProtocolError } from "../ai/contracts/errors";
 import type { JsonHttpClient, ResolvedRequestTarget } from "../ai/contracts/protocol";
-import { createJsonHttpClient, type FetchLike } from "../ai/runtime/http";
+import { createJsonHttpClient } from "../ai/runtime/http";
+import type { FetchLike } from "../../services/http";
 import { toDeepLSourceLanguage, toDeepLTargetLanguage } from "./languages";
 
 const DEEPL_FREE_HOST = "https://api-free.deepl.com";
@@ -118,7 +119,8 @@ function mapTransportError(error: unknown): never {
 
 /** Creates the DeepL client; it performs no I/O until a call. */
 export function createDeepLClient(options: DeepLClientOptions = {}): DeepLClient {
-  const http = options.http ?? createJsonHttpClient({ fetchImpl: options.fetchImpl });
+  const http =
+    options.http ?? createJsonHttpClient({ fetchImpl: options.fetchImpl, logScope: "deepl" });
 
   return {
     translate: async (input, callOptions = {}) => {

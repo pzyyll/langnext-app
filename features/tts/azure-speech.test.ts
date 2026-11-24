@@ -1,5 +1,5 @@
 import { expect, test } from "nsh/test";
-import type { FetchLike, HttpResponseLike } from "../../modules/ai/runtime/http";
+import type { FetchLike, HttpResponseLike } from "../../services/http";
 import {
   AZURE_TTS_DEFAULT_TIMEOUT_MS,
   AZURE_TTS_RESPONSE_BYTE_LIMIT,

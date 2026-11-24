@@ -2,7 +2,7 @@ import { t } from "nsh/i18n";
 import { expect, test } from "nsh/test";
 import type { LanguageId } from "../../features/presets/languages";
 import { ProviderProtocolError } from "../ai/contracts/errors";
-import type { FetchLike, HttpResponseLike } from "../ai/runtime/http";
+import type { FetchLike, HttpResponseLike } from "../../services/http";
 import {
   createGoogleCloudTranslateClient,
   GOOGLE_CLOUD_TRANSLATION_MAX_REQUEST_BYTES,

@@ -1,6 +1,7 @@
 import { t } from "nsh/i18n";
 import { expect, test } from "nsh/test";
-import { createJsonHttpClient, type FetchLike, type HttpResponseLike } from "../runtime/http";
+import { createJsonHttpClient } from "../runtime/http";
+import type { FetchLike, HttpResponseLike } from "../../../services/http";
 import { anthropicProtocol } from "./anthropic";
 import { geminiProtocol } from "./gemini";
 import { openAIChatProtocol } from "./openai-chat";

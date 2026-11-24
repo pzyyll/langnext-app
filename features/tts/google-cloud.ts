@@ -1,6 +1,5 @@
 import { atob } from "buffer";
-import type { FetchLike, HttpResponseLike } from "../../modules/ai/runtime/http";
-import { createHttpLog } from "../../services/http-log";
+import { createHttpFetch, type FetchLike, type HttpResponseLike } from "../../services/http";
 import type { GoogleAudioOptions } from "./google-preferences";
 import type { GoogleTtsFailure, TtsResult } from "./synthesis";
 
@@ -24,8 +23,6 @@ export const TTS_RESPONSE_BYTE_LIMIT = 8 * 1024 * 1024;
 
 /** Deadline for the request and the body read. */
 export const TTS_DEFAULT_TIMEOUT_MS = 15_000;
-
-const httpLog = createHttpLog("tts/google-cloud");
 
 export type GoogleCloudTtsFailure = GoogleTtsFailure;
 
@@ -192,7 +189,7 @@ function failureForStatus(status: number, body: unknown): GoogleCloudTtsFailure 
 export function createGoogleCloudTtsClient(
   options: { fetchImpl?: FetchLike } = {},
 ): GoogleCloudTtsClient {
-  const fetchImpl: FetchLike = options.fetchImpl ?? ((url, init) => fetch(url, init));
+  const fetchImpl = createHttpFetch({ fetchImpl: options.fetchImpl, scope: "tts/google-cloud" });
 
   return {
     synthesize: async (input, callOptions) => {
@@ -229,7 +226,6 @@ export function createGoogleCloudTtsClient(
 
       try {
         let response: HttpResponseLike;
-        httpLog.request("POST", GOOGLE_CLOUD_TTS_URL, requestBody);
         try {
           const pending = fetchImpl(GOOGLE_CLOUD_TTS_URL, {
             method: "POST",
@@ -243,10 +239,8 @@ export function createGoogleCloudTtsClient(
           });
           pending.catch(() => {});
           response = await Promise.race([pending, abort.promise]);
-        } catch (error) {
-          if (controller.signal.aborted) return stopped();
-          httpLog.failure("POST", GOOGLE_CLOUD_TTS_URL, error);
-          return failed("network");
+        } catch {
+          return controller.signal.aborted ? stopped() : failed("network");
         }
         if (controller.signal.aborted) return stopped();
 
@@ -258,28 +252,13 @@ export function createGoogleCloudTtsClient(
         );
         if (bytes === "aborted") return stopped();
         if (bytes === "too_large") {
-          httpLog.response("POST", GOOGLE_CLOUD_TTS_URL, response.status, {
-            unreadable: "too_large",
-          });
           return failed(response.ok ? "malformed" : failureForStatus(response.status, null));
         }
 
-        const text = new TextDecoder().decode(bytes);
         let payload: unknown;
-        let parsed = true;
         try {
-          payload = JSON.parse(text);
+          payload = JSON.parse(new TextDecoder().decode(bytes));
         } catch {
-          parsed = false;
-          payload = text;
-        }
-        httpLog.response(
-          "POST",
-          GOOGLE_CLOUD_TTS_URL,
-          response.status,
-          response.ok ? { bodyBytes: bytes.byteLength } : payload,
-        );
-        if (!parsed) {
           return response.ok
             ? failed("malformed")
             : failed(failureForStatus(response.status, null));

@@ -15,7 +15,8 @@ import {
   type CatalogIndex,
 } from "../../../services/models-dev/catalog";
 import { createAiClient, type AiClientInput } from "./client";
-import { createJsonHttpClient, type FetchLike } from "./http";
+import { createJsonHttpClient } from "./http";
+import type { FetchLike } from "../../../services/http";
 import { createAiRegistry } from "./registry";
 
 interface Harness {

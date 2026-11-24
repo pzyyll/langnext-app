@@ -1,5 +1,4 @@
-import type { FetchLike, HttpResponseLike } from "../../modules/ai/runtime/http";
-import { createHttpLog } from "../../services/http-log";
+import { createHttpFetch, type FetchLike, type HttpResponseLike } from "../../services/http";
 import { parseAzureSpeechRegion } from "./azure-regions";
 import type { TtsFailure, TtsSynthesis, TtsVoice } from "./synthesis";
 
@@ -11,8 +10,6 @@ export const AZURE_TTS_RESPONSE_BYTE_LIMIT = 4 * 1024 * 1024;
 
 /** Deadline for the request and the body read. */
 export const AZURE_TTS_DEFAULT_TIMEOUT_MS = 15_000;
-
-const httpLog = createHttpLog("tts/azure");
 
 export interface AzureSpeechTtsSynthesizeInput {
   apiKey: string;
@@ -200,7 +197,7 @@ function failureForStatus(status: number): TtsFailure {
 export function createAzureSpeechTtsClient(
   options: { fetchImpl?: FetchLike } = {},
 ): AzureSpeechTtsClient {
-  const fetchImpl: FetchLike = options.fetchImpl ?? ((url, init) => fetch(url, init));
+  const fetchImpl = createHttpFetch({ fetchImpl: options.fetchImpl, scope: "tts/azure" });
 
   return {
     synthesize: async (input, callOptions) => {
@@ -230,7 +227,6 @@ export function createAzureSpeechTtsClient(
 
       try {
         let response: HttpResponseLike;
-        httpLog.request("POST", synthesizeUrl, document);
         try {
           const pending = fetchImpl(synthesizeUrl, {
             method: "POST",
@@ -246,15 +242,12 @@ export function createAzureSpeechTtsClient(
           });
           pending.catch(() => {});
           response = await Promise.race([pending, abort.promise]);
-        } catch (error) {
-          if (controller.signal.aborted) return stopped();
-          httpLog.failure("POST", synthesizeUrl, error);
-          return failed("network");
+        } catch {
+          return controller.signal.aborted ? stopped() : failed("network");
         }
         if (controller.signal.aborted) return stopped();
         if (response.status !== 200) {
           discardBody(response.body);
-          httpLog.response("POST", synthesizeUrl, response.status);
           return failed(failureForStatus(response.status));
         }
 
@@ -265,11 +258,7 @@ export function createAzureSpeechTtsClient(
           controller.signal,
         );
         if (audio === "aborted") return stopped();
-        if (audio === "too_large" || audio === "empty") {
-          httpLog.response("POST", synthesizeUrl, response.status, { unreadable: audio });
-          return failed("malformed");
-        }
-        httpLog.response("POST", synthesizeUrl, response.status, { audioBytes: audio.byteLength });
+        if (audio === "too_large" || audio === "empty") return failed("malformed");
         return { status: "synthesized", audio };
       } finally {
         clearTimeout(timer);

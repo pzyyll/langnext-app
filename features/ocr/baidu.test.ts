@@ -1,5 +1,5 @@
 import { expect, test } from "nsh/test";
-import type { FetchLike, HttpResponseLike } from "../../modules/ai/runtime/http";
+import type { FetchLike, HttpResponseLike } from "../../services/http";
 import { createBaiduOcrClient, type BaiduOcrRecognition } from "./baidu";
 import type { BaiduOcrOperation } from "./settings";
 

@@ -1,13 +1,13 @@
-// ABOUTME: Writes one log line per outbound HTTP call: request, response, and failure.
+// ABOUTME: Writes one log line per outbound HTTP call: request, answer, and failure.
 // ABOUTME: Keeps every payload on a debug line, shortened and with credentials masked.
 import { createLogger } from "./log";
 
-/** Longest payload kept in one line; callers that stream cap their capture at this length. */
+/** Longest payload kept in one line; the transport caps its streamed capture at this length. */
 export const HTTP_LOG_PAYLOAD_LIMIT = 4_000;
 
 /** Field, query, and header names whose value is a credential the log must not keep. */
 const SECRET_NAME =
-  /^(?:authorization|api[_-]?key|apikey|x-api-key|x-goog-api-key|ocp-apim-subscription-key|access[_-]?token|client[_-]?secret|password|secret|token)$/i;
+  /^(?:authorization|api[_-]?key|apikey|x-api-key|x-goog-api-key|ocp-apim-subscription-key|access[_-]?token|client[_-]?secret|key|password|secret|token)$/i;
 
 /** What replaces a credential value. */
 const SECRET_MASK = "***";
@@ -15,14 +15,18 @@ const SECRET_MASK = "***";
 /** Deepest object level masked; request bodies nest a few levels at most. */
 const MASK_DEPTH = 10;
 
-/** Request, response, and failure lines for one HTTP client; every line names its method and URL. */
+/** Lines one HTTP client writes; every line names the method and URL. */
 export interface HttpLog {
   /** Writes the outgoing call; its body follows on a debug line. */
   request(method: string, url: string, body?: string | null): void;
-  /** Writes the answer, an error line outside 2xx; its body follows on a debug line. */
-  response(method: string, url: string, status: number, body?: unknown): void;
-  /** Writes a call that threw; the answer body, when read, follows on a debug line. */
-  failure(method: string, url: string, error: unknown, body?: string | null): void;
+  /** Writes the answer, an error line outside 2xx. */
+  response(method: string, url: string, status: number): void;
+  /** Writes the answer body the transport read, always on a debug line. */
+  responseBody(method: string, url: string, status: number, body: unknown): void;
+  /** Writes a call the caller stopped, at debug level. */
+  aborted(method: string, url: string): void;
+  /** Writes a call that threw. */
+  failure(method: string, url: string, error: unknown): void;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -80,11 +84,14 @@ function maskForm(body: string): string {
   return masked ? params.toString() : body;
 }
 
-/** One line of payload: newlines escaped and a long tail replaced by its size. */
+/** One line of payload: credentials masked, newlines escaped, the tail dropped. */
 function oneLine(payload: string): string {
-  const flat = payload.replace(/\r?\n/g, "\\n");
-  if (flat.length <= HTTP_LOG_PAYLOAD_LIMIT) return flat;
-  return `${flat.slice(0, HTTP_LOG_PAYLOAD_LIMIT)}…(+${flat.length - HTTP_LOG_PAYLOAD_LIMIT} chars)`;
+  const head = payload
+    .slice(0, HTTP_LOG_PAYLOAD_LIMIT)
+    .replace(/\r?\n/g, "\\n")
+    .replace(/https?:\/\/[^\s"'<>]+/gi, (url) => maskUrl(url));
+  if (payload.length <= HTTP_LOG_PAYLOAD_LIMIT) return head;
+  return `${head.slice(0, HTTP_LOG_PAYLOAD_LIMIT)}…(+${payload.length - HTTP_LOG_PAYLOAD_LIMIT} chars)`;
 }
 
 /** Serializes a request body: JSON and form bodies are masked, other text is kept as sent. */
@@ -117,10 +124,10 @@ function describeError(error: unknown): string {
   const status = (error as { status?: unknown }).status;
   const category = typeof kind === "string" ? ` kind=${kind}` : "";
   const statusCode = typeof status === "number" ? ` status=${status}` : "";
-  return `${error.name}: ${error.message}${category}${statusCode}`;
+  return `${oneLine(`${error.name}: ${error.message}`)}${category}${statusCode}`;
 }
 
-/** True for a request the caller stopped, which is not a failure worth an error line. */
+/** True for a failure the app already reports as a stopped request. */
 function cancelled(error: unknown): boolean {
   return (
     typeof error === "object" &&
@@ -129,7 +136,7 @@ function cancelled(error: unknown): boolean {
   );
 }
 
-/** Creates the request, response, and failure lines one HTTP client writes. */
+/** Creates the lines one HTTP client writes. */
 export function createHttpLog(scope: string): HttpLog {
   const log = createLogger(scope);
   const call = (method: string, url: string) => `${method} ${maskUrl(url)}`;
@@ -139,19 +146,21 @@ export function createHttpLog(scope: string): HttpLog {
       if (body === undefined || body === null) return;
       log.debug(`request body ${call(method, url)} body=${describeBody(body)}`);
     },
-    response: (method, url, status, body) => {
+    response: (method, url, status) => {
       const line = `response ${status} ${call(method, url)}`;
       if (status >= 200 && status < 300) log.info(line);
       else log.error(line);
-      if (body === undefined) return;
+    },
+    responseBody: (method, url, status, body) => {
       log.debug(`response body ${status} ${call(method, url)} body=${describeValue(body)}`);
     },
-    failure: (method, url, error, body) => {
+    aborted: (method, url) => {
+      log.debug(`aborted ${call(method, url)}`);
+    },
+    failure: (method, url, error) => {
       const line = `failure ${call(method, url)} error=${describeError(error)}`;
       if (cancelled(error)) log.debug(line);
       else log.error(line);
-      if (body === undefined || body === null) return;
-      log.debug(`failure body ${call(method, url)} body=${describeBody(body)}`);
     },
   };
 }

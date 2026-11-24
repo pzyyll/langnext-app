@@ -32,7 +32,12 @@ Langnext is a desktop application built with:
 
 - Log through `createLogger` from `services/log.ts`: `const log = createLogger("<area>/<module>")`, then `log.warn("Could not ...", error)`. Do not call `console.*` outside that module.
 - Native code logs through the `log` crate (`log::warn!`, `log::debug!`). NSH writes both kinds to `logs/app.log` in the app data directory.
-- Never log API keys, credentials, selected or translated text, or request bodies.
+- Never log API keys or credentials. Request and response bodies, selected text, and translated text go only to `debug` lines.
+
+## HTTP
+
+- Every network call goes through `services/http.ts`: `createHttpFetch({ scope })` wraps the fetch boundary, logs the call, and hands back the response. Do not call `fetch` outside that module; pass a test double through `fetchImpl` instead.
+- The transport logs the request, the status, and the failure itself; the response body reaches the log once the caller reads it. Credential fields and URL parameters are masked.
 
 ## Commands
 
