@@ -149,7 +149,7 @@ test("settings ui: groups language under General and theme under Appearance in a
 
   // General is active by default and displays Language and Silent launch.
   expect(app.shows("id:settings-general-card")).toBe(true);
-  expect(app.shows("id:settings-silent-launch-card")).toBe(true);
+  expect(app.shows("id:settings-general-options-card")).toBe(true);
   expect(app.shows("id:language-system")).toBe(true);
   expect(app.shows("id:settings-theme-card")).toBe(false);
   expect(app.shows("id:theme-dark")).toBe(false);
@@ -245,7 +245,7 @@ test("logs: opens the logs folder and reports a folder that cannot open", async 
     modules: { "langnext/native": { "AppPathsNative.openLogsFolder": () => true } },
   });
   await opened.press("id:nav-settings");
-  await opened.waitFor("id:settings-logs-card");
+  await opened.waitFor("id:settings-general-options-card");
   await opened.press("id:settings-open-logs");
   expect(opened.shows("id:settings-logs-error")).toBe(false);
 
@@ -274,7 +274,7 @@ test("logs: opens the logs folder and reports a folder that cannot open", async 
     storage: { "settings.language": "en" },
   });
   await mac.press("id:nav-settings");
-  expect(mac.shows("id:settings-logs-card")).toBe(true);
+  expect(mac.shows("id:settings-general-options-card")).toBe(true);
   expect(mac.shows("id:settings-log-level")).toBe(true);
   expect(mac.shows("id:settings-open-logs")).toBe(false);
 });
@@ -285,7 +285,7 @@ test("log level: warns by default and keeps the level the user chooses", async (
     storage: { "settings.language": "en" },
   });
   await app.press("id:nav-settings");
-  await app.waitFor("id:settings-logs-card");
+  await app.waitFor("id:settings-general-options-card");
   expect(app.storage()[LOG_LEVEL_STORAGE_KEY]).toBeUndefined();
   expect(app.texts()).toContain("Log level");
   expect(app.texts()).toContain("Warning");
@@ -297,7 +297,7 @@ test("log level: warns by default and keeps the level the user chooses", async (
 
   const reopened = await open(APP_ENTRY, { ...viewport, storage: app.storage() });
   await reopened.press("id:nav-settings");
-  await reopened.waitFor("id:settings-logs-card");
+  await reopened.waitFor("id:settings-general-options-card");
   await reopened.press("id:settings-log-level");
   await reopened.waitFor("role:option[Error]");
   await reopened.press("role:option[Error]");

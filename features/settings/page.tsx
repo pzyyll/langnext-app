@@ -146,25 +146,30 @@ function GeneralSection(props: { compact: boolean; os: string }) {
         </If>
       </Card>
 
-      <Card testID="settings-silent-launch-card" class={props.compact ? "gap-2 p-2" : "gap-2 p-3"}>
-        <Switch
-          testID="settings-silent-launch-switch"
-          label={t("settings.silentLaunch.label")}
-          checked={silentLaunch()}
-          onChange={(checked) => void selectSilentLaunch(checked)}
-        />
-        <If when={silentLaunchError() !== null}>
-          <Text
-            testID="settings-silent-launch-error"
-            role="alert"
-            class="px-3 pb-1 text-sm text-destructive"
-          >
-            {silentLaunchError()}
-          </Text>
-        </If>
-      </Card>
+      <Card
+        testID="settings-general-options-card"
+        class={props.compact ? "gap-2 p-2" : "gap-2 p-3"}
+      >
+        <View class="gap-2">
+          <Switch
+            testID="settings-silent-launch-switch"
+            label={t("settings.silentLaunch.label")}
+            checked={silentLaunch()}
+            onChange={(checked) => void selectSilentLaunch(checked)}
+          />
+          <If when={silentLaunchError() !== null}>
+            <Text
+              testID="settings-silent-launch-error"
+              role="alert"
+              class="px-3 pb-1 text-sm text-destructive"
+            >
+              {silentLaunchError()}
+            </Text>
+          </If>
+        </View>
 
-      <Card testID="settings-logs-card" class={props.compact ? "gap-2 p-2" : "gap-2 p-3"}>
+        <View class="mx-3 h-px bg-border" />
+
         <View class="gap-2">
           <View class="flex-row items-center justify-between gap-4 px-3 py-0.5">
             <Text class="text-sm font-medium text-card-foreground">
