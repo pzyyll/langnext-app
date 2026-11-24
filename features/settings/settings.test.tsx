@@ -245,7 +245,7 @@ test("logs: opens the logs folder and reports a folder that cannot open", async 
     modules: { "langnext/native": { "AppPathsNative.openLogsFolder": () => true } },
   });
   await opened.press("id:nav-settings");
-  await opened.waitFor("id:settings-open-logs-card");
+  await opened.waitFor("id:settings-logs-card");
   await opened.press("id:settings-open-logs");
   expect(opened.shows("id:settings-logs-error")).toBe(false);
 
@@ -274,7 +274,9 @@ test("logs: opens the logs folder and reports a folder that cannot open", async 
     storage: { "settings.language": "en" },
   });
   await mac.press("id:nav-settings");
-  expect(mac.shows("id:settings-open-logs-card")).toBe(false);
+  expect(mac.shows("id:settings-logs-card")).toBe(true);
+  expect(mac.shows("id:settings-log-level")).toBe(true);
+  expect(mac.shows("id:settings-open-logs")).toBe(false);
 });
 
 test("log level: warns by default and keeps the level the user chooses", async () => {
@@ -283,18 +285,22 @@ test("log level: warns by default and keeps the level the user chooses", async (
     storage: { "settings.language": "en" },
   });
   await app.press("id:nav-settings");
-  await app.waitFor("id:settings-log-level-card");
+  await app.waitFor("id:settings-logs-card");
   expect(app.storage()[LOG_LEVEL_STORAGE_KEY]).toBeUndefined();
   expect(app.texts()).toContain("Log level");
   expect(app.texts()).toContain("Warning");
 
-  await app.press("id:log-level-info");
+  await app.press("id:settings-log-level");
+  await app.waitFor("role:option[Info]");
+  await app.press("role:option[Info]");
   await app.waitUntil(() => app.storage()[LOG_LEVEL_STORAGE_KEY] === "info");
 
   const reopened = await open(APP_ENTRY, { ...viewport, storage: app.storage() });
   await reopened.press("id:nav-settings");
-  await reopened.waitFor("id:settings-log-level-card");
-  await reopened.press("id:log-level-error");
+  await reopened.waitFor("id:settings-logs-card");
+  await reopened.press("id:settings-log-level");
+  await reopened.waitFor("role:option[Error]");
+  await reopened.press("role:option[Error]");
   await reopened.waitUntil(() => reopened.storage()[LOG_LEVEL_STORAGE_KEY] === "error");
 });
 
@@ -314,14 +320,18 @@ test("log level: a failed write keeps the chosen level and asks to try again", a
     },
   });
   await app.press("id:nav-settings");
-  await app.press("id:log-level-info");
+  await app.press("id:settings-log-level");
+  await app.waitFor("role:option[Info]");
+  await app.press("role:option[Info]");
   await app.waitFor("id:settings-log-level-error");
   expect(app.texts()).toContain(
     "Could not save the log level. Your choice will apply until you close the app.",
   );
 
   fail = false;
-  await app.press("id:log-level-warn");
+  await app.press("id:settings-log-level");
+  await app.waitFor("role:option[Warning]");
+  await app.press("role:option[Warning]");
   await app.waitUntil(() => saved[LOG_LEVEL_STORAGE_KEY] === "warn");
   expect(app.shows("id:settings-log-level-error")).toBe(false);
 });

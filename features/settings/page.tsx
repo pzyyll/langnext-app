@@ -7,6 +7,7 @@ import { Breadcrumb, type BreadcrumbItem } from "../../components/ui/breadcrumb"
 import { Button } from "../../components/ui/button";
 import { Card, SectionHeading } from "../../components/ui/card";
 import { Icon } from "../../components/ui/icon";
+import { Select } from "../../components/ui/select";
 import { Switch } from "../../components/ui/switch";
 import { buildTooltip } from "../../components/ui/tooltip";
 import { canOpenLogsFolder, openLogsFolder } from "../../platform/logs";
@@ -125,17 +126,6 @@ function LanguageOption(props: { value: LanguagePreference; label: string }) {
   );
 }
 
-function LogLevelOption(props: { value: LogLevel; label: string }) {
-  return (
-    <ChoiceOption
-      testID={`log-level-${props.value}`}
-      checked={logLevel() === props.value}
-      label={props.label}
-      onSelect={() => void selectLogLevel(props.value)}
-    />
-  );
-}
-
 function GeneralSection(props: { compact: boolean; os: string }) {
   const logsError = signal(false);
   const openLogs = async () => logsError.set(!(await openLogsFolder()));
@@ -174,44 +164,61 @@ function GeneralSection(props: { compact: boolean; os: string }) {
         </If>
       </Card>
 
-      <Card testID="settings-log-level-card" class={props.compact ? "gap-4 p-4" : "gap-5 p-6"}>
-        <SectionHeading title={t("settings.logLevel.title")} />
-        <RadioGroup accessibilityLabel={t("settings.logLevel.title")} class="flex-row gap-3">
-          <LogLevelOption value="error" label={t("settings.logLevel.error")} />
-          <LogLevelOption value="warn" label={t("settings.logLevel.warning")} />
-          <LogLevelOption value="info" label={t("settings.logLevel.info")} />
-        </RadioGroup>
-        <If when={logLevelError() !== null}>
-          <Text testID="settings-log-level-error" role="alert" class="text-sm text-destructive">
-            {logLevelError()}
-          </Text>
-        </If>
-      </Card>
-
-      <If when={canOpenLogsFolder(props.os)}>
-        <Card testID="settings-open-logs-card" class={props.compact ? "gap-2 p-2" : "gap-2 p-3"}>
-          <View class="flex-row items-center justify-between gap-4 px-3 py-1">
-            <Text class="text-sm font-medium text-card-foreground">{t("settings.logs.label")}</Text>
-            <Button
-              testID="settings-open-logs"
-              variant="outline"
-              size="sm"
-              label={t("settings.logs.open")}
-              accessibilityLabel={t("settings.logs.openLabel")}
-              onPress={() => void openLogs()}
+      <Card testID="settings-logs-card" class={props.compact ? "gap-4 p-4" : "gap-5 p-6"}>
+        <View class="gap-2">
+          <View class="flex-row items-center justify-between gap-4">
+            <Text class="text-sm font-medium text-card-foreground">
+              {t("settings.logLevel.title")}
+            </Text>
+            <Select
+              testID="settings-log-level"
+              items={[
+                { value: "error", title: t("settings.logLevel.error") },
+                { value: "warn", title: t("settings.logLevel.warning") },
+                { value: "info", title: t("settings.logLevel.info") },
+              ]}
+              value={logLevel()}
+              align="end"
+              accessibilityLabel={t("settings.logLevel.title")}
+              triggerClass="w-40"
+              onChange={(value) => {
+                if (value !== null) void selectLogLevel(value as LogLevel);
+              }}
             />
           </View>
-          <If when={logsError()}>
-            <Text
-              testID="settings-logs-error"
-              role="alert"
-              class="px-3 pb-1 text-sm text-destructive"
-            >
-              {t("settings.logs.error")}
+          <If when={logLevelError() !== null}>
+            <Text testID="settings-log-level-error" role="alert" class="text-sm text-destructive">
+              {logLevelError()}
             </Text>
           </If>
-        </Card>
-      </If>
+        </View>
+
+        <If when={canOpenLogsFolder(props.os)}>
+          <View class={props.compact ? "gap-4" : "gap-5"}>
+            <View class="h-px bg-border" />
+            <View class="gap-2">
+              <View class="flex-row items-center justify-between gap-4">
+                <Text class="text-sm font-medium text-card-foreground">
+                  {t("settings.logs.label")}
+                </Text>
+                <Button
+                  testID="settings-open-logs"
+                  variant="outline"
+                  size="sm"
+                  label={t("settings.logs.open")}
+                  accessibilityLabel={t("settings.logs.openLabel")}
+                  onPress={() => void openLogs()}
+                />
+              </View>
+              <If when={logsError()}>
+                <Text testID="settings-logs-error" role="alert" class="text-sm text-destructive">
+                  {t("settings.logs.error")}
+                </Text>
+              </If>
+            </View>
+          </View>
+        </If>
+      </Card>
     </>
   );
 }
