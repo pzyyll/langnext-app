@@ -9,9 +9,15 @@ import {
   type BaiduOcrRecognition,
 } from "./baidu";
 import {
+  createGoogleCloudOcrClient,
+  type GoogleCloudOcrFailureReason,
+  type GoogleCloudOcrRecognition,
+} from "./google-cloud";
+import {
   ocrSettingsStore,
   type OcrAiBinding,
   type OcrBaiduBinding,
+  type OcrGoogleCloudBinding,
   type OcrServiceBinding,
 } from "./settings";
 
@@ -192,6 +198,78 @@ async function recognizeWithBaidu(
   return mapBaiduResult(result);
 }
 
+function hasEnabledGoogleBinding(snapshot: OcrGoogleCloudBinding): boolean {
+  return ocrSettingsStore
+    .enabledBindings()
+    .some(
+      (entry) => entry.kind === "google-cloud" && entry.credentialRef === snapshot.credentialRef,
+    );
+}
+
+async function googleReadiness(binding: OcrGoogleCloudBinding): Promise<OcrReadiness> {
+  if (!hasEnabledGoogleBinding(binding)) {
+    return { ready: false, reason: t("ocr.failure.unconfigured") };
+  }
+  const apiKey = await ocrSettingsStore.readGoogleCloudCredential(binding.credentialRef);
+  if (!apiKey) return { ready: false, reason: t("ocr.failure.unconfigured") };
+  return { ready: true, reason: null };
+}
+
+function googleFailureMessage(failure: GoogleCloudOcrFailureReason): string {
+  switch (failure) {
+    case "image_too_large":
+      return t("ocr.failure.imageTooLarge");
+    case "setup":
+      return t("ocr.failure.googleSetup");
+    case "quota":
+      return t("ocr.failure.googleQuota");
+    case "malformed":
+      return t("ocr.failure.googleResponse");
+    case "timeout":
+      return t("ocr.failure.timeout");
+    case "service":
+      return t("ocr.failure.googleFailed");
+  }
+}
+
+function mapGoogleResult(result: GoogleCloudOcrRecognition): OcrRecognitionOutcome {
+  switch (result.status) {
+    case "recognized":
+      return { status: "recognized", text: result.text };
+    case "no_text":
+      return { status: "no_text" };
+    case "cancelled":
+      return { status: "cancelled" };
+    case "failed":
+      return { status: "failed", message: googleFailureMessage(result.failure) };
+  }
+}
+
+async function recognizeWithGoogle(
+  binding: OcrGoogleCloudBinding,
+  png: Uint8Array,
+  options: RecognizeScreenshotOptions,
+): Promise<OcrRecognitionOutcome> {
+  if (options.signal?.aborted) return { status: "cancelled" };
+  if (!hasEnabledGoogleBinding(binding)) {
+    return { status: "unavailable", reason: t("ocr.failure.unconfigured") };
+  }
+  const apiKey = await ocrSettingsStore.readGoogleCloudCredential(binding.credentialRef);
+  if (options.signal?.aborted) return { status: "cancelled" };
+  if (!apiKey || !hasEnabledGoogleBinding(binding)) {
+    return { status: "unavailable", reason: t("ocr.failure.unconfigured") };
+  }
+
+  const encoded = encodePngForUpload(png);
+  if (isRecognitionOutcome(encoded)) return encoded;
+
+  const result = await createGoogleCloudOcrClient().recognize(
+    { apiKey, imageBase64: encoded.base64 },
+    { signal: options.signal, timeoutMs: options.timeoutMs ?? OCR_TIMEOUT_MS },
+  );
+  return mapGoogleResult(result);
+}
+
 function channelReadiness(binding: OcrServiceBinding): Promise<OcrReadiness> {
   if (binding.kind === "baidu") return baiduReadiness(binding);
   if (binding.kind === "ai") {
@@ -199,7 +277,7 @@ function channelReadiness(binding: OcrServiceBinding): Promise<OcrReadiness> {
       resolved.ok ? { ready: true, reason: null } : { ready: false, reason: resolved.reason },
     );
   }
-  return Promise.resolve({ ready: false, reason: t("ocr.failure.unconfigured") });
+  return googleReadiness(binding);
 }
 
 async function recognizeChannel(
@@ -209,7 +287,7 @@ async function recognizeChannel(
 ): Promise<OcrRecognitionOutcome> {
   if (binding.kind === "baidu") return recognizeWithBaidu(binding, png, options);
   if (binding.kind === "ai") return recognizeWithAi(binding, png, options);
-  return { status: "unavailable", reason: t("ocr.failure.unconfigured") };
+  return recognizeWithGoogle(binding, png, options);
 }
 
 async function recognizeWithAi(

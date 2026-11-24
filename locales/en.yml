@@ -335,6 +335,10 @@ ocr:
     baiduLater: Baidu OCR is busy. Try again later.
     baiduQuota: Check the Baidu OCR quota.
     baiduResponse: Baidu OCR returned an unreadable response. Try again.
+    googleSetup: Check the Vision key, API access, and billing.
+    googleQuota: Check the Google Cloud quota, or try later.
+    googleResponse: Google Cloud Vision returned an unreadable response. Try again.
+    googleFailed: Google Cloud Vision failed. Try again.
     noText: No text was found in the selected area.
     timeout: OCR timed out. Try again.
     malformedAnswer: The OCR model returned an unreadable answer. Try again.

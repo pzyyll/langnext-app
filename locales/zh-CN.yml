@@ -335,6 +335,10 @@ ocr:
     baiduLater: 百度 OCR 正忙，请稍后再试。
     baiduQuota: 请检查百度 OCR 配额。
     baiduResponse: 百度 OCR 返回了无法读取的结果，请重试。
+    googleSetup: 请检查 Vision 密钥、API 权限和结算。
+    googleQuota: 请检查 Google Cloud 配额，或稍后再试。
+    googleResponse: Google Cloud Vision 返回了无法读取的结果。请重试。
+    googleFailed: Google Cloud Vision 失败。请重试。
     noText: 所选区域未发现文字。
     timeout: OCR 超时，请重试。
     malformedAnswer: OCR 模型返回了无法解析的结果，请重试。
