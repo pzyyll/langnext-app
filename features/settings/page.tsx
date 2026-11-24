@@ -195,9 +195,9 @@ function AppearanceSection(props: { compact: boolean }) {
       <Card testID="settings-theme-card" class={props.compact ? "gap-4 p-4" : "gap-5 p-6"}>
         <SectionHeading title={t("settings.theme.title")} />
         <RadioGroup accessibilityLabel={t("settings.theme.title")} class="flex-row gap-3">
+          <ThemeOption value="system" label={t("settings.appearance.system")} />
           <ThemeOption value="light" label={t("settings.appearance.light")} />
           <ThemeOption value="dark" label={t("settings.appearance.dark")} />
-          <ThemeOption value="system" label={t("settings.appearance.system")} />
         </RadioGroup>
         <If when={appearanceError() !== null}>
           <Text role="alert" class="text-sm text-destructive">

@@ -160,6 +160,9 @@ test("settings ui: groups language under General and theme under Appearance in a
   expect(app.shows("id:theme-dark")).toBe(true);
   expect(app.shows("id:settings-general-card")).toBe(false);
   expect(app.texts()).toContain("Theme");
+  const themeLabels = app.texts();
+  expect(themeLabels.indexOf("System")).toBeLessThan(themeLabels.indexOf("Light"));
+  expect(themeLabels.indexOf("Light")).toBeLessThan(themeLabels.indexOf("Dark"));
 
   // Active category stays selected across sidebar destination switches in the same session.
   await app.press("id:nav-models");
