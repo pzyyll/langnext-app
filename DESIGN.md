@@ -1,4 +1,4 @@
-# My Translator Design
+# Langnext Design
 
 ## Quick Translate History
 

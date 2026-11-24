@@ -1,4 +1,4 @@
-# My Translator
+# Langnext
 
 A desktop AI translator built with NSH Mixed. TSX owns the interface and state.
 Rust provides an extension entry for features that need native code.

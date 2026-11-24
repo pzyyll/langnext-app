@@ -234,7 +234,7 @@ export function createAzureSpeechTtsClient(
                 "Ocp-Apim-Subscription-Key": input.apiKey,
                 "Content-Type": "application/ssml+xml",
                 "X-Microsoft-OutputFormat": "audio-24khz-48kbitrate-mono-mp3",
-                "User-Agent": "My Translator",
+                "User-Agent": "Langnext",
               },
               body: document,
               redirect: "error",

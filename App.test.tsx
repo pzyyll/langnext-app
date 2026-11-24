@@ -29,9 +29,9 @@ test("opens About from the app menu and closes it with OK", async () => {
   await app.press("role:button[App menu]");
   await app.waitFor("role:menuitem[About]");
   await app.press("role:menuitem[About]");
-  await app.waitFor("role:dialog[About My Translator]");
+  await app.waitFor("role:dialog[About Langnext]");
   expect(app.shows("role:menuitem[About]")).toBe(false);
-  expect(app.texts()).toContain("My Translator");
+  expect(app.texts()).toContain("Langnext");
   expect(app.texts()).toContain("Version 0.1.0");
 
   await app.press("role:button[OK]");

@@ -1,11 +1,12 @@
 app:
+  name: Langnext
   menu:
     label: 应用菜单
     about: 关于
   about:
-    title: 关于 My Translator
-    label: 关于 My Translator
-    logo: My Translator 图标
+    title: 关于 Langnext
+    label: 关于 Langnext
+    logo: Langnext 图标
     version: 版本 %{version}
 tray:
   quickTranslate: 快速翻译

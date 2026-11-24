@@ -38,7 +38,7 @@ export interface AppShellProps {
 export function buildShellTrayOptions(onQuickTranslate: () => void): TrayOptions {
   return {
     icon: trayIcon,
-    tooltip: "My Translator",
+    tooltip: t("app.name"),
     onClick: () => Window.get("main")?.focus(),
     menu: [
       { label: t("tray.quickTranslate"), onSelect: onQuickTranslate },

@@ -78,7 +78,7 @@ test("azure speech tts: posts escaped ssml and returns the mp3 bytes", async () 
   expect(request.headers["Ocp-Apim-Subscription-Key"]).toBe(API_KEY);
   expect(request.headers["Content-Type"]).toBe("application/ssml+xml");
   expect(request.headers["X-Microsoft-OutputFormat"]).toBe("audio-24khz-48kbitrate-mono-mp3");
-  expect(request.headers["User-Agent"]).toBe("My Translator");
+  expect(request.headers["User-Agent"]).toBe("Langnext");
   expect(request.headers.Authorization).toBeUndefined();
   expect(request.body).toBe(
     '<speak version="1.0" xmlns="http://www.w3.org/2001/10/synthesis" xml:lang="en-US"><voice name="en-US-JennyNeural">A &amp; B &lt; C &gt; D</voice></speak>',

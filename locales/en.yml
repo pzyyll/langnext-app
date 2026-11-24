@@ -1,11 +1,12 @@
 app:
+  name: Langnext
   menu:
     label: App menu
     about: About
   about:
-    title: About My Translator
-    label: About My Translator
-    logo: My Translator logo
+    title: About Langnext
+    label: About Langnext
+    logo: Langnext logo
     version: Version %{version}
 tray:
   quickTranslate: Quick Translate
