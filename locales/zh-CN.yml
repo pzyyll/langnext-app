@@ -719,6 +719,12 @@ quickTranslate:
   pin: 置顶窗口
   unpin: 取消置顶
   close: 关闭快速翻译
+  history: 历史
+  historyLoading: 正在加载历史…
+  historyEmpty: 暂无翻译记录
+  historyLoadError: 无法加载历史。请关闭菜单后重试。
+  historyRestoreError: 无法恢复这条翻译记录。
+  historyResultLanguages: "%{source} → %{target}"
   ocr: 文本识别
   ocrRecognizing: 正在识别文字…
   shortcutUnavailable: 全局快捷键 %{shortcut} 不可用，请通过托盘菜单打开快速翻译。

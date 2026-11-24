@@ -15,6 +15,8 @@ import { t } from "nsh/i18n";
 import { Button } from "../components/ui/button";
 import { Icon } from "../components/ui/icon";
 import { toast } from "../components/ui/toast";
+import { beginHistoryAction } from "../features/quick-translate/history";
+import { QuickTranslateHistoryMenu } from "../features/quick-translate/history-menu";
 import { QuickTranslateLanguageBar } from "../features/quick-translate/language-menu";
 import { QuickTranslateFooter, QuickTranslatePopup } from "../features/quick-translate/popup";
 import {
@@ -227,7 +229,7 @@ function QuickTranslateWindowBody(props: {
         testID="quick-translate-header"
         onLayout={({ bounds }) => headerHeight.set(bounds.size.height)}
         desktop={{ windowDrag: true }}
-        class="shrink-0 flex-row items-center justify-between gap-2 border-b border-border/80"
+        class="shrink-0 flex-row items-center justify-between gap-1 border-b border-border/80"
         // Runtime platform titleBar() insets clear native caption buttons; 16 pt matches the px-4 body spine.
         style={{
           height: Math.max(44, titleBar().height),
@@ -248,7 +250,7 @@ function QuickTranslateWindowBody(props: {
             onTargetOpenChange={(open) => session.notifyOverlayOpenChange("target-language", open)}
           />
         </View>
-        <View desktop={{ windowDrag: false }} class="shrink-0 flex-row items-center gap-1">
+        <View desktop={{ windowDrag: false }} class="shrink-0 flex-row items-center gap-0.5">
           <Button
             testID="quick-translate-auto-toggle"
             variant="brand-ghost"
@@ -307,6 +309,13 @@ function QuickTranslateWindowBody(props: {
               <Icon name="mdi:ocr" tone="muted-foreground" class="size-3.5" />
             </Button>
           </If>
+          <QuickTranslateHistoryMenu
+            available={props.controller.isOpen() && !props.controller.dismissalSuspended()}
+            draftRevision={props.controller.draftRevision}
+            onOpenChange={(open) => session.notifyOverlayOpenChange("history", open)}
+            onRestore={session.handleRestoreHistory}
+            onFocusSource={props.controller.focusSourceInput}
+          />
           <Button
             testID="quick-translate-pin"
             variant="brand-ghost"
@@ -366,7 +375,9 @@ export function QuickTranslateWindow(props: { controller: QuickTranslateControll
     windowOpen: props.controller.isOpen,
     sourceText: props.controller.sourceText,
     sourceDelivery: props.controller.sourceDelivery,
-    onSourceTextChange: (text) => props.controller.setSourceText(text),
+    onSourceTextChange: props.controller.setSourceText,
+    onRestoreSourceText: props.controller.restoreSourceText,
+    beginHistoryAction,
     autoTranslate: props.controller.autoTranslate,
     onOverlayOpenChange: (menuId, open) => props.controller.setMenuOpen(menuId, open),
   });

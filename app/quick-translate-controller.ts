@@ -97,6 +97,9 @@ export interface QuickTranslateController {
   togglePinned: () => void;
   toggleAutoTranslate: () => void;
   setSourceText: (text: string) => void;
+  restoreSourceText: (text: string) => void;
+  draftRevision: () => number;
+  focusSourceInput: () => void;
   setMenuOpen: (menuId: string, open: boolean) => void;
   hasOpenOverlay: () => boolean;
   attachWindow: (win: WindowRef | null) => void;
@@ -188,6 +191,12 @@ export function createQuickTranslateController(
     ocrAbort = null;
     ocrActive = false;
     ocrStateSignal.set(IDLE_OCR_STATE);
+  };
+
+  const replaceDraft = (text: string) => {
+    if (ocrActive || ocrStateSignal().message !== null) cancelOcr();
+    draftGen += 1;
+    sourceSignal.set(text);
   };
 
   const releaseQueuedSelection = () => {
@@ -654,16 +663,18 @@ export function createQuickTranslateController(
     toggleAutoTranslate: options.onToggleAutoTranslate
       ? options.onToggleAutoTranslate
       : () => autoTranslateSignal.set(!autoTranslateSignal()),
-    setSourceText: (text: string) => {
-      if (text === sourceSignal()) {
-        return;
-      }
-      // A user edit or clear supersedes a running read of the screen.
-      if (ocrActive || ocrStateSignal().message !== null) {
-        cancelOcr();
-      }
-      draftGen += 1;
-      sourceSignal.set(text);
+    setSourceText: (text) => {
+      if (text !== sourceSignal()) replaceDraft(text);
+    },
+    restoreSourceText: (text) => {
+      replaceDraft(text);
+      sourceDeliverySignal.set(null);
+    },
+    draftRevision: () => draftGen,
+    focusSourceInput: () => {
+      sourceInputRef?.focus();
+      const end = sourceSignal().length;
+      sourceInputRef?.setSelection(end, end);
     },
     setMenuOpen: (menuId: string, openMenu: boolean) => {
       const current = openMenusSignal();

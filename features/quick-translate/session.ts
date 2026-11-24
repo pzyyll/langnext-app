@@ -1,3 +1,4 @@
+import type { HistoryResult, HistorySnapshot } from "my-translator/native";
 import { batch, cleanup, Clipboard, effect, signal, untracked, type Accessor } from "nsh";
 import { t } from "nsh/i18n";
 import type { SelectItem } from "../../components/ui/select";
@@ -117,6 +118,7 @@ interface ActionLanguages {
   targetLanguage: TargetLanguageId;
   detection: LanguageDetectionSnapshot;
   languageKey: string;
+  recordHistory?: (result: HistoryResult) => void;
 }
 
 export interface QuickTranslateSessionOptions {
@@ -126,6 +128,8 @@ export interface QuickTranslateSessionOptions {
   /** The newest text that arrived as a whole (clipboard, selection, or OCR), with its kind. */
   sourceDelivery?: Accessor<SourceDelivery | null>;
   onSourceTextChange: (text: string) => void;
+  onRestoreSourceText?: (text: string) => void;
+  beginHistoryAction?: (sourceText: string) => (result: HistoryResult) => void;
   autoTranslate?: Accessor<boolean>;
   onOverlayOpenChange?: (menuId: string, open: boolean) => void;
   presetsStore?: Pick<PresetsStore, "load" | "records" | "status">;
@@ -152,6 +156,7 @@ export interface QuickTranslateSession {
   detectSourceLanguage: (signal?: AbortSignal) => Promise<LanguageDetectionResult | null>;
   canSwapLanguages: Accessor<boolean>;
   cards: Accessor<readonly CardViewItem[]>;
+  historySnapshot: Accessor<HistorySnapshot | null>;
   enabledPresets: Accessor<readonly TranslationPreset[]>;
   presetItems: Accessor<SelectItem[]>;
   isAutoTranslate: Accessor<boolean>;
@@ -161,6 +166,7 @@ export interface QuickTranslateSession {
   handleSourceChange: (nextText: string) => void;
   handleSourceSubmit: () => void;
   handleClearSource: () => void;
+  handleRestoreHistory: (snapshot: HistorySnapshot) => void;
   handleSourceLanguageChange: (language: SourceLanguageId) => void;
   handleTargetLanguageChange: (language: TargetLanguageId) => void;
   handleSwapLanguages: () => void;
@@ -221,6 +227,7 @@ export function createQuickTranslateSession(
   }
 
   const cards = signal<CardViewItem[]>([]);
+  const historySnapshot = signal<HistorySnapshot | null>(null);
   const sourceCollapsed = signal(false);
   const sourceLanguage = signal<SourceLanguageId>(AUTO_LANGUAGE);
   const targetLanguage = signal<TargetLanguageId>(AUTO_LANGUAGE);
@@ -255,8 +262,10 @@ export function createQuickTranslateSession(
     const source = sourceLanguage();
     const target = targetLanguage();
     const detection = languageDetectionStore.snapshot();
+    const text = options.sourceText();
     return {
-      text: options.sourceText(),
+      text,
+      recordHistory: options.beginHistoryAction?.(text),
       sourceLanguage: source,
       targetLanguage: target,
       detection,
@@ -520,7 +529,9 @@ export function createQuickTranslateSession(
     trigger: "manual" | "auto",
     action?: ActionLanguages,
   ) => {
-    const card = cards().find((item) => item.id === cardId);
+    const currentCards = cards();
+    const position = currentCards.findIndex((item) => item.id === cardId);
+    const card = currentCards[position];
     const runtime = cardRuntimes.get(cardId);
     if (!card || card.collapsed || !runtime || disposed) {
       return;
@@ -650,6 +661,7 @@ export function createQuickTranslateSession(
         },
         { signal: abort.signal, onText: onStreamedText },
       );
+      if (!isPending()) return;
       if (outcome.ok) {
         finishQuery({
           status: "success",
@@ -658,6 +670,15 @@ export function createQuickTranslateSession(
           sourceLanguage: pair.sourceLanguage,
           targetLanguage: pair.targetLanguage,
         });
+        if (outcome.text.trim().length > 0) {
+          languages.recordHistory?.({
+            position,
+            presetName: preset.name,
+            sourceLanguage: pair.sourceLanguage,
+            targetLanguage: pair.targetLanguage,
+            text: outcome.text,
+          });
+        }
       } else if (outcome.cancelled) {
         finishQuery();
       } else {
@@ -686,6 +707,7 @@ export function createQuickTranslateSession(
   };
 
   const scheduleAutoTranslate = () => {
+    historySnapshot.set(null);
     invalidateAllCards();
     if (!isAutoTranslate()) return;
     if (store.status().kind !== "ready" || enabledPresets().length === 0) return;
@@ -702,6 +724,7 @@ export function createQuickTranslateSession(
 
   const translateDelivery = () => {
     // A delivery replaces a pending typing run, so only one action follows it.
+    historySnapshot.set(null);
     invalidateAllCards();
     const deliverable =
       !disposed &&
@@ -775,6 +798,7 @@ export function createQuickTranslateSession(
   const handleAddPresetCard = (presetId: string) => {
     const preset = enabledPresets().find((item) => item.id === presetId);
     if (!preset) return;
+    historySnapshot.set(null);
     const id = allocateCardId();
     cardRuntimes.set(id, createCardRuntime());
     cards.set([
@@ -939,9 +963,21 @@ export function createQuickTranslateSession(
   };
 
   const handleClearSource = () => {
+    historySnapshot.set(null);
     languageDetection.syncText("");
     options.onSourceTextChange("");
     invalidateAllCards();
+  };
+
+  const handleRestoreHistory = (snapshot: HistorySnapshot) => {
+    batch(() => {
+      invalidateAllCards();
+      languageDetection.cancelPending();
+      languageDetection.syncText(snapshot.sourceText);
+      (options.onRestoreSourceText ?? options.onSourceTextChange)(snapshot.sourceText);
+      sourceCollapsed.set(false);
+      historySnapshot.set(snapshot);
+    });
   };
 
   const runCopyWithFeedback = async (params: {
@@ -1249,6 +1285,7 @@ export function createQuickTranslateSession(
       languageDetection.detect(options.sourceText(), languageDetectionStore.snapshot(), signal),
     canSwapLanguages,
     cards: () => cards(),
+    historySnapshot,
     enabledPresets,
     presetItems,
     isAutoTranslate,
@@ -1256,8 +1293,12 @@ export function createQuickTranslateSession(
     prefsSaveError: () => prefsStore.saveError(),
     canAddPreset: () => store.status().kind === "ready" && enabledPresets().length > 0,
     handleSourceChange,
-    handleSourceSubmit: () => executeAllCards("manual"),
+    handleSourceSubmit: () => {
+      historySnapshot.set(null);
+      executeAllCards("manual");
+    },
     handleClearSource,
+    handleRestoreHistory,
     handleSourceLanguageChange,
     handleTargetLanguageChange,
     handleSwapLanguages,

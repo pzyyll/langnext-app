@@ -1,3 +1,4 @@
+import type { HistoryResult, HistorySnapshot } from "my-translator/native";
 import type { WindowRef, WindowState } from "nsh/desktop";
 import { t } from "nsh/i18n";
 import { expect, open, test } from "nsh/test";
@@ -90,6 +91,156 @@ test("desktop: quick window opens from production tray action, reuses existing w
   expect(app.window("quick-translate").state()?.visible).toBe(true);
   expect(app.window("quick-translate").state()?.focused).toBe(true);
   expect(app.value("id:quick-translate-source")).toBe("Hello quick window");
+});
+
+test("quick history: group multi-card translations and restore with no request or duplicate history", async () => {
+  const saved = new Map<string, HistorySnapshot>();
+  const app = await open(HARNESS_ENTRY, {
+    ...viewport,
+    clock: {},
+    storage: {
+      ...makeSeedStorage({
+        channels: [makeChannel({ adapterId: "openai-compatible", enabled: true })],
+        models: [makeModel({ enabled: true })],
+        credentials: { "ch-1": "sk-test" },
+      }),
+      [PRESETS_STORAGE_KEY]: JSON.stringify({ version: 1, items: [quickPreset] }),
+      [QUICK_TRANSLATE_PREFERENCES_KEY]: popupPreferences({
+        autoTranslate: true,
+        cards: [
+          { id: "card-1", presetId: quickPreset.id },
+          { id: "card-2", presetId: quickPreset.id },
+        ],
+      }),
+      "settings.language": "en",
+    },
+    modules: {
+      "my-translator/native": {
+        "TranslationHistoryNative.record": (
+          id: string,
+          sourceText: string | null,
+          result: HistoryResult,
+        ) => {
+          if (sourceText !== null) saved.set(id, { id, sourceText, results: [] });
+          saved.get(id)?.results.push(result);
+        },
+        "TranslationHistoryNative.listRecent": () =>
+          [...saved.values()]
+            .reverse()
+            .map(({ id, sourceText }) => ({ id, preview: sourceText.replaceAll("\n", " ") })),
+        "TranslationHistoryNative.read": (id: string) => saved.get(id) ?? null,
+      },
+    },
+    network: {
+      "POST https://api.openai.com/v1/chat/completions": {
+        status: 200,
+        body: { choices: [{ message: { content: "Saved translation" } }] },
+      },
+    },
+  });
+  const source = "id:quick-translate-source";
+  const history = "id:quick-translate-history";
+  const original = "Original first line\nOriginal second line";
+  const entry = `role:menuitem[${original.replaceAll("\n", " ")}]`;
+
+  await app.press("id:harness-tray-quick-translate");
+  await app.press(history);
+  await app.waitFor("No translation history");
+  await app.keyboard.press("escape");
+  await app.waitUntil(() => !app.shows("No translation history"));
+  expect(app.window("quick-translate").state()?.visible).toBe(true);
+
+  await app.type(source, original);
+  await app.keyboard.press("enter");
+  await app.waitUntil(() => [...saved.values()][0]?.results.length === 2);
+  expect(saved.size).toBe(1);
+  expect(app.requests()).toHaveLength(2);
+
+  await app.type(source, " Draft not sent yet");
+  await app.press(history);
+  await app.waitFor(entry);
+  expect(app.value(source)).not.toBe(original);
+  await app.keyboard.press("arrowdown");
+  await app.keyboard.press("enter");
+  await app.waitUntil(() => !app.shows(entry));
+  await app.waitFor("id:quick-translate-history-results");
+  expect(app.value(source)).toBe(original);
+  expect(app.texts().filter((text) => text === "Saved translation")).toHaveLength(2);
+  await app.clock!.runFor(AUTO_TRANSLATE_DEBOUNCE_MS + 200);
+  expect(app.requests()).toHaveLength(2);
+  expect(saved.size).toBe(1);
+
+  // Once the menu has closed, Return works from the restored editor without another click.
+  await app.keyboard.press("enter");
+  await app.waitUntil(() => app.requests().length === 4);
+  expect(app.shows("id:quick-translate-history-results")).toBe(false);
+});
+
+test("quick history: discard a late translation when a saved action replaces the draft", async () => {
+  const old: HistorySnapshot = {
+    id: "old",
+    sourceText: "Stored original",
+    results: [
+      {
+        position: 0,
+        presetName: "Removed preset",
+        sourceLanguage: "fr",
+        targetLanguage: "en",
+        text: "Stored result",
+      },
+    ],
+  };
+  let writes = 0;
+  const app = await open(HARNESS_ENTRY, {
+    ...viewport,
+    clock: {},
+    storage: {
+      ...makeSeedStorage({
+        channels: [makeChannel({ adapterId: "openai-compatible", enabled: true })],
+        models: [makeModel({ enabled: true })],
+        credentials: { "ch-1": "sk-test" },
+      }),
+      [PRESETS_STORAGE_KEY]: JSON.stringify({ version: 1, items: [quickPreset] }),
+      [QUICK_TRANSLATE_PREFERENCES_KEY]: popupPreferences(),
+      "settings.language": "en",
+    },
+    modules: {
+      "my-translator/native": {
+        "TranslationHistoryNative.record": () => {
+          writes += 1;
+        },
+        "TranslationHistoryNative.listRecent": () => [{ id: old.id, preview: old.sourceText }],
+        "TranslationHistoryNative.read": () => old,
+      },
+    },
+    network: {
+      "POST https://api.openai.com/v1/chat/completions": {
+        status: 200,
+        delay: 2000,
+        body: { choices: [{ message: { content: "Late result" } }] },
+      },
+    },
+  });
+  const source = "id:quick-translate-source";
+  await app.press("id:harness-tray-quick-translate");
+  await app.type(source, "Pending original");
+  await app.keyboard.press("enter");
+  await app.waitUntil(() => app.requests().length === 1);
+  await app.press("id:quick-translate-history");
+  await app.press("role:menuitem[Stored original]");
+  await app.waitFor("Stored result");
+  expect(app.value(source)).toBe("Stored original");
+  expect(app.texts()).toContain("Removed preset");
+  await app.clock!.runFor(2100);
+  expect(app.texts()).not.toContain("Late result");
+  expect(app.requests()).toHaveLength(1);
+  expect(writes).toBe(0);
+
+  await app.press("id:quick-translate-history-copy");
+  expect(app.clipboard()).toBe("Stored result");
+  await app.type(source, " edited");
+  expect(app.shows("id:quick-translate-history-results")).toBe(false);
+  expect(app.shows("id:quick-translate-card-card-1")).toBe(true);
 });
 
 test("quick window: the Markdown toggle reformats all results without retranslating", async () => {

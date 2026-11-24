@@ -40,6 +40,7 @@ import { googlePreferencesSignature } from "../tts/google-preferences";
 import { playMp3Bytes } from "../tts/playback";
 import { prepareQuickSpeech, quickSpeechFailureMessage } from "../tts/quick-speech";
 import { ttsSettingsStore } from "../tts/settings";
+import { QuickTranslateHistoryResults } from "./history-results";
 import type { CardViewItem, QuickTranslateSession } from "./session";
 import { resolvePresetTemplate } from "./translate";
 
@@ -762,6 +763,7 @@ export function QuickTranslatePopup(props: QuickTranslatePopupProps) {
   const hasSpeakableSource = () => sourceText().trim().length > 0;
   const delivery = () => props.session.sourceDelivery();
   const isSourceCollapsed = () => props.session.sourceCollapsed() && hasSourceText();
+  const showingHistory = () => props.session.historySnapshot() !== null;
   const sourceFirstLine = () => sourceText().split(/\r?\n/, 1)[0] ?? "";
   const sourceHasMultipleLines = () => /\r?\n/.test(sourceText());
   const sourceInputRef = signal<InputRef | null>(null);
@@ -1296,8 +1298,9 @@ export function QuickTranslatePopup(props: QuickTranslatePopupProps) {
     <View class="gap-3 px-4 pt-3.5 pb-3">
       <If
         when={
-          props.session.presetsStatus().kind === "idle" ||
-          props.session.presetsStatus().kind === "loading"
+          !showingHistory() &&
+          (props.session.presetsStatus().kind === "idle" ||
+            props.session.presetsStatus().kind === "loading")
         }
       >
         <Card testID="quick-translate-presets-loading" variant="subtle" class="gap-1.5 p-3">
@@ -1305,7 +1308,7 @@ export function QuickTranslatePopup(props: QuickTranslatePopupProps) {
         </Card>
       </If>
 
-      <If when={props.session.presetsStatus().kind === "error"}>
+      <If when={!showingHistory() && props.session.presetsStatus().kind === "error"}>
         <Card
           testID="quick-translate-presets-error"
           variant="subtle"
@@ -1326,6 +1329,7 @@ export function QuickTranslatePopup(props: QuickTranslatePopupProps) {
 
       <If
         when={
+          !showingHistory() &&
           props.session.presetsStatus().kind === "ready" &&
           props.session.enabledPresets().length === 0
         }
@@ -1404,7 +1408,14 @@ export function QuickTranslatePopup(props: QuickTranslatePopupProps) {
         </Text>
       </If>
 
-      <If when={props.session.cards().length > 0}>
+      <If when={showingHistory()}>
+        <QuickTranslateHistoryResults
+          snapshot={props.session.historySnapshot()}
+          markdownEnabled={props.markdownEnabled ?? false}
+        />
+      </If>
+
+      <If when={!showingHistory() && props.session.cards().length > 0}>
         <View class="gap-2.5">
           <Each of={props.session.cards()} key={(card) => card.id}>
             {(card) => {

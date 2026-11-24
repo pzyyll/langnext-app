@@ -36,6 +36,7 @@ import mdiCloseIcon from "../../assets/icons/mdi--close.svg";
 import mdiContentCopyIcon from "../../assets/icons/mdi--content-copy.svg";
 import mdiFlashIcon from "../../assets/icons/mdi--flash.svg";
 import mdiFlashOutlineIcon from "../../assets/icons/mdi--flash-outline.svg";
+import mdiHistoryIcon from "../../assets/icons/mdi--history.svg";
 import mdiLanguageMarkdownIcon from "../../assets/icons/mdi--language-markdown.svg";
 import mdiLanguageMarkdownOutlineIcon from "../../assets/icons/mdi--language-markdown-outline.svg";
 import mdiLightningBoltOutlineIcon from "../../assets/icons/mdi--lightning-bolt-outline.svg";
@@ -103,6 +104,7 @@ const ICONS = {
   "mdi:content-copy": mdiContentCopyIcon,
   "mdi:flash": mdiFlashIcon,
   "mdi:flash-outline": mdiFlashOutlineIcon,
+  "mdi:history": mdiHistoryIcon,
   "mdi:language-markdown": mdiLanguageMarkdownIcon,
   "mdi:language-markdown-outline": mdiLanguageMarkdownOutlineIcon,
   "mdi:lightning-bolt-outline": mdiLightningBoltOutlineIcon,

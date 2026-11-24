@@ -719,6 +719,12 @@ quickTranslate:
   pin: Pin window
   unpin: Unpin window
   close: Close Quick Translate
+  history: History
+  historyLoading: Loading history…
+  historyEmpty: No translation history
+  historyLoadError: Could not load history. Close the menu and try again.
+  historyRestoreError: Could not restore this translation.
+  historyResultLanguages: "%{source} → %{target}"
   ocr: OCR
   ocrRecognizing: Reading text…
   shortcutUnavailable: Global shortcut %{shortcut} is unavailable. Use the tray icon menu to open Quick Translate.
