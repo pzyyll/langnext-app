@@ -469,9 +469,9 @@ function PresetCardRow(props: PresetCardRowProps) {
             onPress={() => props.onToggleCollapse(props.card().id)}
           >
             <Icon
-              name={props.card().collapsed ? "mdi:chevron-down" : "mdi:chevron-up"}
+              name="mdi:plus"
               tone="muted-foreground"
-              class="size-3.5"
+              class={`size-3.5 ${motion.disclosureIcon} ${props.card().collapsed ? "" : "rotate-45"}`}
             />
           </Button>
         </View>

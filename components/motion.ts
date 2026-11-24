@@ -7,6 +7,7 @@ export const motion = {
   pressScale:
     "transition duration-150 ease-out active:scale-95 motion-reduce:duration-0 motion-reduce:scale-100",
   switchThumb: "transition-transform duration-150 ease-out motion-reduce:duration-0",
+  disclosureIcon: "transition-transform duration-150 ease-out motion-reduce:duration-0",
   tooltip: "transition-opacity duration-150 ease-out motion-reduce:duration-0",
   avatarImage: "transition-opacity duration-150 ease-out motion-reduce:duration-0",
   popup: "transition duration-150 ease-out motion-reduce:duration-0",
