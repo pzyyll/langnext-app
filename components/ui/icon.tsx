@@ -34,6 +34,7 @@ import mdiChevronUpIcon from "../../assets/icons/mdi--chevron-up.svg";
 import mdiCloseCircleIcon from "../../assets/icons/mdi--close-circle.svg";
 import mdiCloseIcon from "../../assets/icons/mdi--close.svg";
 import mdiContentCopyIcon from "../../assets/icons/mdi--content-copy.svg";
+import mdiDeleteOutlineIcon from "../../assets/icons/mdi--delete-outline.svg";
 import mdiFlashIcon from "../../assets/icons/mdi--flash.svg";
 import mdiFlashOutlineIcon from "../../assets/icons/mdi--flash-outline.svg";
 import mdiHistoryIcon from "../../assets/icons/mdi--history.svg";
@@ -102,6 +103,7 @@ const ICONS = {
   "mdi:close": mdiCloseIcon,
   "mdi:close-circle": mdiCloseCircleIcon,
   "mdi:content-copy": mdiContentCopyIcon,
+  "mdi:delete-outline": mdiDeleteOutlineIcon,
   "mdi:flash": mdiFlashIcon,
   "mdi:flash-outline": mdiFlashOutlineIcon,
   "mdi:history": mdiHistoryIcon,

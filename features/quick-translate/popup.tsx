@@ -443,6 +443,16 @@ function PresetCardRow(props: PresetCardRowProps) {
             </KeyboardButton>
           </If>
           <Button
+            testID="quick-translate-remove"
+            variant="ghost"
+            size="icon-xs"
+            tooltip={t("quickTranslate.removeCard")}
+            accessibilityLabel={t("quickTranslate.removeCard")}
+            onPress={() => props.onRemove(props.card().id)}
+          >
+            <Icon name="mdi:delete-outline" tone="muted-foreground" class="size-3.5" />
+          </Button>
+          <Button
             testID="quick-translate-collapse"
             variant="ghost"
             size="icon-xs"
@@ -463,16 +473,6 @@ function PresetCardRow(props: PresetCardRowProps) {
               tone="muted-foreground"
               class="size-3.5"
             />
-          </Button>
-          <Button
-            testID="quick-translate-remove"
-            variant="ghost"
-            size="icon-xs"
-            tooltip={t("quickTranslate.removeCard")}
-            accessibilityLabel={t("quickTranslate.removeCard")}
-            onPress={() => props.onRemove(props.card().id)}
-          >
-            <Icon name="mdi:close" tone="muted-foreground" class="size-3.5" />
           </Button>
         </View>
       </View>
