@@ -5,6 +5,7 @@ import { makeChannel, makeModel, makeSeedStorage } from "../models/__tests__/fix
 import { OCR_MAX_IMAGE_BYTES, recognizeScreenshot } from "./recognize";
 import {
   baiduCredentialStorageKey,
+  googleCloudCredentialStorageKey,
   OCR_STORAGE_KEY,
   type BaiduOcrOperation,
   type OcrServiceKind,
@@ -19,6 +20,9 @@ const PNG_BYTES = Uint8Array.from(Buffer.from(PNG_BASE64, "base64"));
 const VISION_MODEL_ID = "vision-model";
 const BAIDU_PNG_BASE64 = "iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAAAAAA6mKC9AAAAAElFTkSuQmCC";
 const BAIDU_REF = "baidu-ref";
+const GOOGLE_REF = "google-ref";
+const GOOGLE_KEY = "synthetic-vision-key";
+const GOOGLE_ANNOTATE = "https://vision.googleapis.com/v1/images:annotate";
 
 const BAIDU_TOKEN = "POST https://aip.baidubce.com/oauth/2.0/token";
 const BAIDU_OCR =
@@ -29,20 +33,30 @@ function ocrSeedRecord(options: {
   enabled?: Partial<Record<OcrServiceKind, boolean>>;
   aiModelId?: string | null;
   baidu?: { operation: BaiduOcrOperation; credentialRef: string } | null;
+  googleCloud?: { credentialRef: string; apiKey?: string | null } | null;
 }): Record<string, string> {
   const ai = options.aiModelId ? { modelId: options.aiModelId } : null;
   const baidu = options.baidu ?? null;
+  const googleCloud = options.googleCloud ?? null;
+  const enabled: Record<string, boolean> = {
+    ai: options.enabled?.ai ?? ai !== null,
+    baidu: options.enabled?.baidu ?? baidu !== null,
+  };
+  if (options.enabled?.["google-cloud"] !== undefined || googleCloud !== null) {
+    enabled["google-cloud"] = options.enabled?.["google-cloud"] ?? true;
+  }
+  const record: Record<string, unknown> = {
+    version: 4,
+    order: options.order ?? ["ai", "baidu"],
+    enabled,
+    ai,
+    baidu,
+  };
+  if (googleCloud !== null) {
+    record["google-cloud"] = { credentialRef: googleCloud.credentialRef };
+  }
   const extra: Record<string, string> = {
-    [OCR_STORAGE_KEY]: JSON.stringify({
-      version: 4,
-      order: options.order ?? ["ai", "baidu"],
-      enabled: {
-        ai: options.enabled?.ai ?? ai !== null,
-        baidu: options.enabled?.baidu ?? baidu !== null,
-      },
-      ai,
-      baidu,
-    }),
+    [OCR_STORAGE_KEY]: JSON.stringify(record),
   };
   if (baidu) {
     extra[baiduCredentialStorageKey(baidu.credentialRef)] = JSON.stringify({
@@ -50,7 +64,16 @@ function ocrSeedRecord(options: {
       secretKey: "synthetic-secret-key",
     });
   }
+  if (googleCloud !== null && googleCloud.apiKey !== null) {
+    extra[googleCloudCredentialStorageKey(googleCloud.credentialRef)] = JSON.stringify({
+      apiKey: googleCloud.apiKey ?? GOOGLE_KEY,
+    });
+  }
   return extra;
+}
+
+function googleLines(text: string): unknown {
+  return { responses: [{ fullTextAnnotation: { text } }] };
 }
 
 function ocrBindingStorage(modelId: string): Record<string, string> {
@@ -734,4 +757,241 @@ test("ocr recognize: falls back past Baidu local dimension failure to AI and sur
     status: "failed",
     message: t("ocr.failure.baiduQuota"),
   });
+});
+
+function googleStorage(
+  googleCloud: { credentialRef: string; apiKey?: string | null } = { credentialRef: GOOGLE_REF },
+) {
+  return makeSeedStorage({
+    extra: ocrSeedRecord({
+      order: ["google-cloud"],
+      enabled: { ai: false, baidu: false, "google-cloud": true },
+      googleCloud,
+    }),
+  });
+}
+
+test("ocr recognize: a saved Vision binding is ready without requests and returns the lines", async () => {
+  const storage = googleStorage();
+  const ready = await open("./__tests__/recognize-app.tsx", {
+    storage,
+    host: { params: { pngBase64: PNG_BASE64, readinessOnly: true } },
+  });
+  await ready.waitUntil(() => ready.texts()[0] !== "running");
+  expect(JSON.parse(ready.texts()[1]!).readiness).toEqual({ ready: true, reason: null });
+  expect(ready.requests()).toHaveLength(0);
+
+  const app = await open("./__tests__/recognize-app.tsx", {
+    storage,
+    host: { params: { pngBase64: PNG_BASE64 } },
+    network: {
+      ["POST " + GOOGLE_ANNOTATE]: { status: 200, body: googleLines("Hello\n你好") },
+    },
+  });
+  await app.waitUntil(() => app.texts()[0] !== "running");
+  expect(JSON.parse(app.texts()[1]!).outcomes[0]).toEqual({
+    status: "recognized",
+    text: "Hello\n你好",
+  });
+  const requests = app.requests();
+  expect(requests).toHaveLength(1);
+  const request = requests[0]!;
+  expect(request.method).toBe("POST");
+  expect(request.url).toBe(GOOGLE_ANNOTATE);
+  expect(request.url).not.toContain(GOOGLE_KEY);
+  expect(request.headers?.["x-goog-api-key"]).toBe(GOOGLE_KEY);
+  expect(JSON.parse(request.body ?? "")).toEqual({
+    requests: [
+      {
+        image: { content: PNG_BASE64 },
+        features: [{ type: "DOCUMENT_TEXT_DETECTION" }],
+      },
+    ],
+  });
+});
+
+test("ocr recognize: a missing Vision key or a disabled channel sends nothing", async () => {
+  const missing = await open("./__tests__/recognize-app.tsx", {
+    storage: googleStorage({ credentialRef: GOOGLE_REF, apiKey: null }),
+    host: { params: { pngBase64: PNG_BASE64 } },
+    network: { ["POST " + GOOGLE_ANNOTATE]: { status: 200, body: googleLines("Nope") } },
+  });
+  await missing.waitUntil(() => missing.texts()[0] !== "running");
+  const missingResult = JSON.parse(missing.texts()[1]!);
+  expect(missingResult.readiness).toEqual({
+    ready: false,
+    reason: t("ocr.failure.unconfigured"),
+  });
+  expect(missingResult.outcomes[0]).toEqual({
+    status: "unavailable",
+    reason: t("ocr.failure.unconfigured"),
+  });
+  expect(missing.requests()).toHaveLength(0);
+
+  const disabled = await open("./__tests__/recognize-app.tsx", {
+    storage: googleStorage(),
+    host: { params: { pngBase64: PNG_BASE64, disableGoogleCloudBeforeRecognize: true } },
+    network: { ["POST " + GOOGLE_ANNOTATE]: { status: 200, body: googleLines("Nope") } },
+  });
+  await disabled.waitUntil(() => disabled.texts()[0] !== "running");
+  expect(JSON.parse(disabled.texts()[1]!).readiness).toEqual({ ready: true, reason: null });
+  expect(JSON.parse(disabled.texts()[1]!).outcomes[0]).toEqual({
+    status: "unavailable",
+    reason: t("ocr.failure.unconfigured"),
+  });
+  expect(disabled.requests()).toHaveLength(0);
+});
+
+test("ocr recognize: maps Vision failures without exposing provider text", async () => {
+  const cases: { body: unknown; status: number; message: string }[] = [
+    {
+      status: 403,
+      body: {
+        error: {
+          code: 403,
+          message: "SENTINEL-SECRET",
+          details: [{ reason: "API_KEY_INVALID", domain: "googleapis.com" }],
+        },
+      },
+      message: t("ocr.failure.googleSetup"),
+    },
+    {
+      status: 429,
+      body: { error: { code: 429, message: "SENTINEL-SECRET", status: "RESOURCE_EXHAUSTED" } },
+      message: t("ocr.failure.googleQuota"),
+    },
+    {
+      status: 413,
+      body: { error: { code: 413, message: "SENTINEL-SECRET" } },
+      message: t("ocr.failure.imageTooLarge"),
+    },
+    {
+      status: 500,
+      body: { error: { code: 500, message: "SENTINEL-SECRET" } },
+      message: t("ocr.failure.googleFailed"),
+    },
+    {
+      status: 200,
+      body: { responses: [{ error: { message: "SENTINEL-SECRET" } }] },
+      message: t("ocr.failure.googleResponse"),
+    },
+  ];
+  for (const entry of cases) {
+    const app = await open("./__tests__/recognize-app.tsx", {
+      storage: googleStorage(),
+      host: { params: { pngBase64: PNG_BASE64 } },
+      network: { ["POST " + GOOGLE_ANNOTATE]: { status: entry.status, body: entry.body } },
+    });
+    await app.waitUntil(() => app.texts()[0] !== "running");
+    const result = JSON.parse(app.texts()[1]!).outcomes[0];
+    expect(result).toEqual({ status: "failed", message: entry.message });
+    expect(JSON.stringify(result).includes("SENTINEL-SECRET")).toBe(false);
+    expect(app.requests()).toHaveLength(1);
+  }
+});
+
+test("ocr recognize: falls back from primary Vision failure to backup AI", async () => {
+  const storage = visionSeedStorage(
+    ocrSeedRecord({
+      order: ["google-cloud", "ai"],
+      enabled: { ai: true, "google-cloud": true },
+      aiModelId: VISION_MODEL_ID,
+      googleCloud: { credentialRef: GOOGLE_REF },
+    }),
+  );
+  const app = await open("./__tests__/recognize-app.tsx", {
+    storage,
+    host: { params: { pngBase64: PNG_BASE64 } },
+    network: {
+      ["POST " + GOOGLE_ANNOTATE]: {
+        status: 500,
+        body: { error: { code: 500, message: "SENTINEL-SECRET" } },
+      },
+      "POST https://vision.example.com/v1/responses": {
+        status: 200,
+        body: recognitionBody("fallback ai text"),
+      },
+    },
+  });
+  await app.waitUntil(() => app.texts()[0] !== "running");
+  expect(JSON.parse(app.texts()[1]!).outcomes[0]).toEqual({
+    status: "recognized",
+    text: "fallback ai text",
+  });
+  expect(app.requests().map((request) => request.url)).toEqual([
+    GOOGLE_ANNOTATE,
+    "https://vision.example.com/v1/responses",
+  ]);
+});
+
+test("ocr recognize: falls back from primary AI failure to backup Vision", async () => {
+  const storage = visionSeedStorage(
+    ocrSeedRecord({
+      order: ["ai", "google-cloud"],
+      enabled: { ai: true, "google-cloud": true },
+      aiModelId: VISION_MODEL_ID,
+      googleCloud: { credentialRef: GOOGLE_REF },
+    }),
+  );
+  const app = await open("./__tests__/recognize-app.tsx", {
+    storage,
+    host: { params: { pngBase64: PNG_BASE64 } },
+    network: {
+      "POST https://vision.example.com/v1/responses": { status: 500, body: { error: "busy" } },
+      ["POST " + GOOGLE_ANNOTATE]: { status: 200, body: googleLines("vision fallback") },
+    },
+  });
+  await app.waitUntil(() => app.texts()[0] !== "running");
+  expect(JSON.parse(app.texts()[1]!).outcomes[0]).toEqual({
+    status: "recognized",
+    text: "vision fallback",
+  });
+  expect(app.requests().map((request) => request.url)).toEqual([
+    "https://vision.example.com/v1/responses",
+    GOOGLE_ANNOTATE,
+  ]);
+});
+
+test("ocr recognize: Vision no-text and cancellation do not call the backup", async () => {
+  const storage = visionSeedStorage(
+    ocrSeedRecord({
+      order: ["google-cloud", "ai"],
+      enabled: { ai: true, "google-cloud": true },
+      aiModelId: VISION_MODEL_ID,
+      googleCloud: { credentialRef: GOOGLE_REF },
+    }),
+  );
+  const noText = await open("./__tests__/recognize-app.tsx", {
+    storage,
+    host: { params: { pngBase64: PNG_BASE64 } },
+    network: {
+      ["POST " + GOOGLE_ANNOTATE]: { status: 200, body: googleLines("  \n") },
+      "POST https://vision.example.com/v1/responses": {
+        status: 200,
+        body: recognitionBody("should not run"),
+      },
+    },
+  });
+  await noText.waitUntil(() => noText.texts()[0] !== "running");
+  expect(JSON.parse(noText.texts()[1]!).outcomes[0]).toEqual({ status: "no_text" });
+  expect(noText.requests().some((request) => request.url.includes("vision.example.com"))).toBe(
+    false,
+  );
+
+  const cancelled = await open("./__tests__/recognize-app.tsx", {
+    storage,
+    host: { params: { pngBase64: PNG_BASE64, abortAfterMs: 20 } },
+    network: {
+      ["POST " + GOOGLE_ANNOTATE]: { status: 200, body: googleLines("late"), delay: 2_000 },
+      "POST https://vision.example.com/v1/responses": {
+        status: 200,
+        body: recognitionBody("should not run"),
+      },
+    },
+  });
+  await cancelled.waitUntil(() => cancelled.texts()[0] !== "running");
+  expect(JSON.parse(cancelled.texts()[1]!).outcomes[0]).toEqual({ status: "cancelled" });
+  expect(cancelled.requests().some((request) => request.url.includes("vision.example.com"))).toBe(
+    false,
+  );
 });

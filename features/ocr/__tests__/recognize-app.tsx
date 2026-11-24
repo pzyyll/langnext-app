@@ -16,6 +16,8 @@ interface HarnessParams {
   readinessOnly?: boolean;
   /** Disable Baidu right after checking readiness to verify mid-capture toggle safety. */
   disableBaiduBeforeRecognize?: boolean;
+  /** Disable Google Cloud Vision after readiness and before upload. */
+  disableGoogleCloudBeforeRecognize?: boolean;
   timeoutMs?: number;
   abortAfterMs?: number;
 }
@@ -61,6 +63,9 @@ function RecognizeHarnessApp() {
       if (!params.readinessOnly) {
         if (params.disableBaiduBeforeRecognize) {
           await ocrSettingsStore.setEnabled("baidu", false);
+        }
+        if (params.disableGoogleCloudBeforeRecognize) {
+          await ocrSettingsStore.setEnabled("google-cloud", false);
         }
         outcomes.push(
           await recognizeScreenshot(bindings, bytes, {

@@ -127,12 +127,15 @@ settings:
       backup: 备用
     ai: 多模态模型
     baidu: 百度 OCR
+    google-cloud: Google Cloud Vision
+    configured: 已配置
     model: 模型
     mode: 模式
     apiKey: API Key
     secretKey: Secret Key
     savedKeys: "•••••••••"
     keysUnreadable: 无法读取已保存的百度密钥。请同时填写两项。
+    googleKeyUnreadable: 无法读取已保存的 Google Cloud Vision 密钥。请重新填写。
     operation:
       general_basic: 标准版
       accurate_basic: 高精度版
@@ -150,6 +153,7 @@ settings:
       modelIdBlank: 请为 OCR 选择模型。
       baiduKeysRequired: 请同时填写 API Key 和 Secret Key。
       baiduOperationInvalid: 请选择百度 OCR 模式。
+      googleCloudKeyRequired: 请填写 Google Cloud Vision API Key。
       channelUnconfigured: 请先配置此渠道再启用。
   tts:
     channel: Google Cloud TTS
@@ -338,6 +342,10 @@ ocr:
     baiduLater: 百度 OCR 正忙，请稍后再试。
     baiduQuota: 请检查百度 OCR 配额。
     baiduResponse: 百度 OCR 返回了无法读取的结果，请重试。
+    googleSetup: 请检查 Vision 密钥、API 权限和结算。
+    googleQuota: 请检查 Google Cloud 配额，或稍后再试。
+    googleResponse: Google Cloud Vision 返回了无法读取的结果。请重试。
+    googleFailed: Google Cloud Vision 失败。请重试。
     noText: 所选区域未发现文字。
     timeout: OCR 超时，请重试。
     malformedAnswer: OCR 模型返回了无法解析的结果，请重试。

@@ -17,6 +17,7 @@ import {
 } from "nsh";
 import { t } from "nsh/i18n";
 import baiduCloudIcon from "../../assets/icons/baidu-cloud.svg";
+import googleCloudIcon from "../../assets/icons/google-cloud.svg";
 import { motion } from "../../components/motion";
 import { Avatar, type AvatarSize } from "../../components/ui/avatar";
 import { Badge } from "../../components/ui/badge";
@@ -66,23 +67,32 @@ function focusTarget(node: ViewRef | null | undefined) {
   setAccessibilityFocus(node);
 }
 
+function OcrChannelMark(props: { src: typeof baiduCloudIcon; size?: AvatarSize }) {
+  return (
+    <Avatar
+      size={props.size ?? "md"}
+      accessibilityLabel=""
+      fallback={
+        <Image src={props.src} accessibilityElementsHidden={true} class="size-4 overflow-hidden" />
+      }
+    />
+  );
+}
+
 function OcrChannelAvatar(props: { kind: OcrServiceKind; size?: AvatarSize }) {
   return (
     <If
       when={props.kind === "baidu"}
-      else={<Avatar size={props.size ?? "md"} icon="cube-outline" accessibilityLabel="" />}
+      else={
+        <If
+          when={props.kind === "google-cloud"}
+          else={<Avatar size={props.size ?? "md"} icon="cube-outline" accessibilityLabel="" />}
+        >
+          <OcrChannelMark src={googleCloudIcon} size={props.size} />
+        </If>
+      }
     >
-      <Avatar
-        size={props.size ?? "md"}
-        accessibilityLabel=""
-        fallback={
-          <Image
-            src={baiduCloudIcon}
-            accessibilityElementsHidden={true}
-            class="size-4 overflow-hidden"
-          />
-        }
-      />
+      <OcrChannelMark src={baiduCloudIcon} size={props.size} />
     </If>
   );
 }
@@ -161,6 +171,7 @@ interface OcrChannelListProps {
   compact: boolean;
   platformOs: string;
   credentialState: CredentialState;
+  googleCredentialState: CredentialState;
   busy: boolean;
   listError: string | null;
   onClearError: () => void;
@@ -190,6 +201,7 @@ function OcrChannelList(props: OcrChannelListProps) {
   const offsets: Record<OcrServiceKind, AnimatedValue> = {
     ai: createAnimatedValue(0),
     baidu: createAnimatedValue(0),
+    "google-cloud": createAnimatedValue(0),
   };
   const rowSlots: Partial<Record<OcrServiceKind, { top: number; height: number }>> = {};
   const removeRefs: Partial<Record<OcrServiceKind, ViewRef>> = {};
@@ -204,10 +216,11 @@ function OcrChannelList(props: OcrChannelListProps) {
   const isBusy = () => props.busy || mutating() || animating();
   const name = (kind: OcrServiceKind) => t(`settings.ocr.${kind}`);
 
-  const isConfigured = (kind: OcrServiceKind): boolean =>
-    kind === "ai"
-      ? ocrSettingsStore.savedAiBinding() !== null
-      : ocrSettingsStore.savedBaiduBinding() !== null;
+  const isConfigured = (kind: OcrServiceKind): boolean => {
+    if (kind === "ai") return ocrSettingsStore.savedAiBinding() !== null;
+    if (kind === "baidu") return ocrSettingsStore.savedBaiduBinding() !== null;
+    return ocrSettingsStore.savedGoogleCloudBinding() !== null;
+  };
 
   const channelRole = (kind: OcrServiceKind): "primary" | "backup" | null => {
     const enabledOrder = order().filter((item) => ocrSettingsStore.isEnabled(item));
@@ -228,6 +241,15 @@ function OcrChannelList(props: OcrChannelListProps) {
       return info.available
         ? { text: info.label, toneClass: "text-muted-foreground" }
         : { text: info.reason ?? info.label, toneClass: "text-warning" };
+    }
+    if (kind === "google-cloud") {
+      if (ocrSettingsStore.savedGoogleCloudBinding() === null) {
+        return { text: t("settings.ocr.notConfigured"), toneClass: "text-muted-foreground" };
+      }
+      if (props.googleCredentialState === "missing") {
+        return { text: t("settings.ocr.googleKeyUnreadable"), toneClass: "text-destructive" };
+      }
+      return { text: t("settings.ocr.configured"), toneClass: "text-muted-foreground" };
     }
     const saved = ocrSettingsStore.savedBaiduBinding();
     if (saved === null) {
@@ -673,6 +695,7 @@ interface OcrChannelDetailProps {
   kind: OcrServiceKind;
   compact: boolean;
   credentialState: CredentialState;
+  googleCredentialState: CredentialState;
   onManageModels?: () => void;
 }
 
@@ -711,7 +734,12 @@ function OcrChannelDetail(props: OcrChannelDetailProps) {
     props.kind === "baidu" &&
     ocrSettingsStore.savedBaiduBinding() !== null &&
     props.credentialState === "readable";
-  const savedKeysPlaceholder = () => (canKeepKeys() ? t("settings.ocr.savedKeys") : undefined);
+  const canKeepGoogleKey = () =>
+    props.kind === "google-cloud" &&
+    ocrSettingsStore.savedGoogleCloudBinding() !== null &&
+    props.googleCredentialState === "readable";
+  const savedKeysPlaceholder = () =>
+    canKeepKeys() || canKeepGoogleKey() ? t("settings.ocr.savedKeys") : undefined;
 
   const modelItems = (): SelectItem[] =>
     modelChoices().map((choice) => ({ value: choice.id, title: choice.label }));
@@ -737,6 +765,14 @@ function OcrChannelDetail(props: OcrChannelDetailProps) {
     if (props.kind === "ai") {
       const modelId = eligibleModelId();
       return modelId === null ? null : { kind: "ai", modelId };
+    }
+    if (props.kind === "google-cloud") {
+      const apiKey = apiKeyDraft().trim();
+      if (apiKey.length > 0) {
+        return { kind: "google-cloud", credentials: { kind: "replace", apiKey } };
+      }
+      if (canKeepGoogleKey()) return { kind: "google-cloud", credentials: { kind: "keep" } };
+      return null;
     }
     const apiKey = apiKeyDraft().trim();
     const secretKey = secretKeyDraft().trim();
@@ -774,6 +810,7 @@ function OcrChannelDetail(props: OcrChannelDetailProps) {
           secretKeyField?.blur();
         }
       }
+      if (result.binding.kind === "google-cloud" && mounted) apiKeyField?.blur();
       toast.success(t("settings.ocr.saved"));
     } finally {
       saving.set(false);
@@ -900,6 +937,26 @@ function OcrChannelDetail(props: OcrChannelDetailProps) {
           </FormField>
         </If>
 
+        <If when={props.kind === "google-cloud"}>
+          <FormField label={t("settings.ocr.apiKey")}>
+            <Input
+              testID="settings-ocr-google-api-key"
+              ref={(node) => {
+                apiKeyField = node;
+              }}
+              value={apiKeyDraft()}
+              placeholder={savedKeysPlaceholder()}
+              masked={true}
+              disabled={saving()}
+              accessibilityLabel={t("settings.ocr.apiKey")}
+              onChange={(value) => {
+                error.set(null);
+                apiKeyDraft.set(value);
+              }}
+            />
+          </FormField>
+        </If>
+
         <If when={props.kind === "baidu" && props.credentialState === "missing"}>
           <Text
             testID="settings-ocr-baidu-keys-missing"
@@ -907,6 +964,15 @@ function OcrChannelDetail(props: OcrChannelDetailProps) {
             class="text-sm text-destructive"
           >
             {t("settings.ocr.keysUnreadable")}
+          </Text>
+        </If>
+        <If when={props.kind === "google-cloud" && props.googleCredentialState === "missing"}>
+          <Text
+            testID="settings-ocr-google-key-missing"
+            role="alert"
+            class="text-sm text-destructive"
+          >
+            {t("settings.ocr.googleKeyUnreadable")}
           </Text>
         </If>
 
@@ -934,6 +1000,7 @@ function OcrChannelDetail(props: OcrChannelDetailProps) {
 /** Settings section for prioritized OCR channels and their per-channel configuration pages. */
 export function OcrSection(props: OcrSectionProps) {
   const credentialState = signal<CredentialState>("unknown");
+  const googleCredentialState = signal<CredentialState>("unknown");
   const addDialogOpen = signal(false);
   const addingChannel = signal(false);
   const listBusy = signal(false);
@@ -964,6 +1031,19 @@ export function OcrSection(props: OcrSectionProps) {
     void ocrSettingsStore.readBaiduCredentials(ref).then((pair) => {
       if (ocrSettingsStore.savedBaiduBinding()?.credentialRef !== ref) return;
       credentialState.set(pair ? "readable" : "missing");
+    });
+  });
+
+  effect(() => {
+    const saved = ocrSettingsStore.savedGoogleCloudBinding();
+    if (saved === null) {
+      googleCredentialState.set("unknown");
+      return;
+    }
+    const ref = saved.credentialRef;
+    void ocrSettingsStore.readGoogleCloudCredential(ref).then((apiKey) => {
+      if (ocrSettingsStore.savedGoogleCloudBinding()?.credentialRef !== ref) return;
+      googleCredentialState.set(apiKey ? "readable" : "missing");
     });
   });
 
@@ -1028,6 +1108,7 @@ export function OcrSection(props: OcrSectionProps) {
                 kind={kind()}
                 compact={props.compact}
                 credentialState={credentialState()}
+                googleCredentialState={googleCredentialState()}
                 onManageModels={props.onManageModels}
               />
             )}
@@ -1038,6 +1119,7 @@ export function OcrSection(props: OcrSectionProps) {
           compact={props.compact}
           platformOs={props.platformOs}
           credentialState={credentialState()}
+          googleCredentialState={googleCredentialState()}
           busy={addingChannel()}
           listError={listError()}
           onClearError={() => listError.set(null)}

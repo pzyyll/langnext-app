@@ -127,12 +127,15 @@ settings:
       backup: Backup
     ai: LLM
     baidu: Baidu OCR
+    google-cloud: Google Cloud Vision
+    configured: Configured
     model: Model
     mode: Mode
     apiKey: API Key
     secretKey: Secret Key
     savedKeys: "•••••••••"
     keysUnreadable: The saved Baidu keys could not be read. Enter both keys.
+    googleKeyUnreadable: The saved Google Cloud Vision key could not be read. Enter it again.
     operation:
       general_basic: General Basic
       accurate_basic: Accurate Basic
@@ -150,6 +153,7 @@ settings:
       modelIdBlank: Choose a model for OCR.
       baiduKeysRequired: Enter both the API Key and the Secret Key.
       baiduOperationInvalid: Choose a Baidu OCR mode.
+      googleCloudKeyRequired: Enter a Google Cloud Vision API key.
       channelUnconfigured: Configure this channel before enabling it.
   tts:
     channel: Google Cloud TTS
@@ -338,6 +342,10 @@ ocr:
     baiduLater: Baidu OCR is busy. Try again later.
     baiduQuota: Check the Baidu OCR quota.
     baiduResponse: Baidu OCR returned an unreadable response. Try again.
+    googleSetup: Check the Vision key, API access, and billing.
+    googleQuota: Check the Google Cloud quota, or try later.
+    googleResponse: Google Cloud Vision returned an unreadable response. Try again.
+    googleFailed: Google Cloud Vision failed. Try again.
     noText: No text was found in the selected area.
     timeout: OCR timed out. Try again.
     malformedAnswer: The OCR model returned an unreadable answer. Try again.

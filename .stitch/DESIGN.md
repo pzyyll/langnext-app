@@ -188,6 +188,10 @@ Recorded before editing the OCR settings TSX to match the Language Detection cha
 | Enable switch and drag reorder (2+ channels)                        | Existing `motion.switchThumb` (150ms easeOut) and `REORDER_SETTLE_MS` (180ms easeOut) pan settle. Reduced motion sets values immediately.                                       |
 | Detail validation, save confirmation                                | Inline error and save toast (`motion.toastTransition`, `motion.toastStack`). Reduced motion removes toast movement.                                                             |
 
+### Google Cloud Vision OCR
+
+Recorded before editing the OCR settings TSX to add the Google Cloud Vision channel. The row, detail, switch, and reorder reuse the OCR channel inventory above. This change adds no motion. Field text and validation errors stay instant, including with reduced motion.
+
 ### Channel connection test
 
 Recorded before editing the channel editor header. Every entry reuses an existing token or the shared tooltip.
