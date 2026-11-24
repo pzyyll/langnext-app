@@ -540,7 +540,7 @@ test("desktop: quick window remains available while main window is hidden and re
       .texts()
       .some((text) =>
         text.includes(
-          `shortcuts=${DEFAULT_QUICK_TRANSLATE_SHORTCUT},${DEFAULT_SCREENSHOT_TRANSLATE_SHORTCUT},${DEFAULT_SELECTION_TRANSLATE_SHORTCUT}|tray=Quick Translate,Exit`,
+          `shortcuts=${DEFAULT_QUICK_TRANSLATE_SHORTCUT},${DEFAULT_SCREENSHOT_TRANSLATE_SHORTCUT},${DEFAULT_SELECTION_TRANSLATE_SHORTCUT}|tray=Quick Translate,Screenshot Translate,Exit`,
         ),
       ),
   );
@@ -548,7 +548,9 @@ test("desktop: quick window remains available while main window is hidden and re
 
   await app.press("id:nav-settings");
   await app.press("id:language-zh-CN");
-  await app.waitUntil(() => app.texts().some((text) => text.includes("tray=快速翻译,退出")));
+  await app.waitUntil(() =>
+    app.texts().some((text) => text.includes("tray=快速翻译,截图翻译,退出")),
+  );
   expect(app.texts().join(" ")).toContain("|reg=3|");
 
   await app.press("id:harness-hide-main-tray-flow");
@@ -800,6 +802,8 @@ test("desktop: quick window warns and keeps tray fallback when global shortcut r
   });
   await nonWindows.waitFor("id:harness-metrics");
   expect(nonWindows.texts().join(" ")).toContain("reg=0|");
+  // Screen selection is Windows-only, so the tray offers no Screenshot Translate item.
+  expect(nonWindows.texts().join(" ")).toContain("tray=Quick Translate,Exit");
 });
 
 test("quick placement: window controller corrects shifted initial bounds once and never moves after user drag", async () => {
@@ -1750,6 +1754,27 @@ test("screenshot shortcut: missing OCR setup shows recovery without capturing", 
   );
   expect(app.texts().some((text) => text.includes("ocrCap=0|"))).toBe(true);
   expect(app.requests()).toHaveLength(0);
+});
+
+test("tray: Screenshot Translate starts the region selection and opens Quick Translate after the crop", async () => {
+  const app = await open(HARNESS_ENTRY, {
+    ...viewport,
+    storage: ocrSeed({ [HARNESS_OCR_CAPTURE_KEY]: "wait" }),
+    network: ocrRoutes(JSON.stringify({ text: OCR_TEXT }), 500),
+  });
+  await app.waitUntil(() =>
+    app.texts().some((text) => text.includes("tray=Quick Translate,Screenshot Translate,Exit")),
+  );
+
+  await app.press("id:harness-tray-screenshot-translate");
+  await app.waitUntil(() => app.texts().some((text) => text.includes("ocrCap=1|")));
+  expect(app.window("quick-translate").state()).toBeNull();
+  expect(app.requests()).toHaveLength(0);
+
+  await app.press("id:harness-finish-capture");
+  await app.waitFor("id:quick-translate-ocr-busy");
+  await app.waitUntil(() => app.value("id:quick-translate-source") === OCR_TEXT);
+  await app.waitFor("翻译结果");
 });
 
 test("quick ocr: replaces the draft with the recognized text and translates once", async () => {

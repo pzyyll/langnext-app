@@ -10,6 +10,7 @@ app:
     version: 版本 %{version}
 tray:
   quickTranslate: 快速翻译
+  screenshotTranslate: 截图翻译
   exit: 退出
 nav:
   label: 主导航

@@ -14,6 +14,7 @@ import type { TranslationShortcutBinding } from "../features/settings/shortcuts"
 import { silentLaunch } from "../features/settings/silent-launch";
 import { transparency } from "../features/settings/transparency";
 import type { DoubleCopyBinding } from "../platform/quick-translate";
+import { canCaptureScreen } from "../platform/screen-capture";
 import {
   createQuickTranslateController,
   QuickTranslateWindow,
@@ -34,14 +35,27 @@ export interface AppShellProps {
   quickTranslateOptions?: QuickTranslateControllerOptions;
 }
 
+export interface ShellTrayOptions {
+  /** Opens the Quick Translate popup over the clipboard text. */
+  onQuickTranslate: () => void;
+  /** Starts the Screenshot Translate region selection. */
+  onScreenshotTranslate: () => void;
+  /** Hides the Screenshot Translate item where the platform has no screen selection. */
+  canScreenshotTranslate: boolean;
+}
+
 /** Builds system tray configuration using the active locale. */
-export function buildShellTrayOptions(onQuickTranslate: () => void): TrayOptions {
+export function buildShellTrayOptions(options: ShellTrayOptions): TrayOptions {
   return {
     icon: trayIcon,
     tooltip: t("app.name"),
     onClick: () => Window.get("main")?.focus(),
     menu: [
-      { label: t("tray.quickTranslate"), onSelect: onQuickTranslate },
+      { label: t("tray.quickTranslate"), onSelect: options.onQuickTranslate },
+      options.canScreenshotTranslate && {
+        label: t("tray.screenshotTranslate"),
+        onSelect: options.onScreenshotTranslate,
+      },
       { label: t("tray.exit"), onSelect: () => Application.quit() },
     ],
   };
@@ -50,15 +64,20 @@ export function buildShellTrayOptions(onQuickTranslate: () => void): TrayOptions
 export function AppShell(props: AppShellProps = {}) {
   const quickTranslate = createQuickTranslateController(props.quickTranslateOptions);
   const trayApi = props.trayModule ?? Tray;
+  const currentOs = props.platformOs ?? platform.os;
 
   // The popup's global press monitor runs only while it is open: disposal closes it.
   cleanup(() => quickTranslate.close());
 
   effect(() => {
-    trayApi.set(buildShellTrayOptions(() => quickTranslate.open()));
+    trayApi.set(
+      buildShellTrayOptions({
+        onQuickTranslate: () => quickTranslate.open(),
+        onScreenshotTranslate: () => void quickTranslate.startOcr(),
+        canScreenshotTranslate: canCaptureScreen(currentOs),
+      }),
+    );
   });
-
-  const currentOs = props.platformOs ?? platform.os;
   const shortcuts = registerTranslationShortcuts(quickTranslate, props.globalShortcut, currentOs);
   registerQuickTranslateDoubleCopy(
     quickTranslate,

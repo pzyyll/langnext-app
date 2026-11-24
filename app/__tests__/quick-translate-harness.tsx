@@ -75,12 +75,15 @@ function QuickTranslateHarness(config: {
   const ocrCaptureCaption = signal("");
   const mainHidden = signal(false);
 
-  const invokeTrayQuickTranslate = () => {
+  const invokeTrayItem = (label: string) => {
     const entry = (latestTray?.menu ?? [])
       .filter(isActionMenuItem)
-      .find((item) => item.label === t("tray.quickTranslate"));
+      .find((item) => item.label === label);
     entry?.onSelect?.();
   };
+
+  const invokeTrayQuickTranslate = () => invokeTrayItem(t("tray.quickTranslate"));
+  const invokeTrayScreenshotTranslate = () => invokeTrayItem(t("tray.screenshotTranslate"));
 
   let finishSelection: ((result: SelectionTextRead) => void) | undefined;
   const selectionReadCount = signal(0);
@@ -210,6 +213,12 @@ function QuickTranslateHarness(config: {
           label="Harness Tray QT"
           size="sm"
           onPress={invokeTrayQuickTranslate}
+        />
+        <Button
+          testID="harness-tray-screenshot-translate"
+          label="Harness Tray Screenshot"
+          size="sm"
+          onPress={invokeTrayScreenshotTranslate}
         />
         <Button
           testID="harness-hide-main-tray-flow"
