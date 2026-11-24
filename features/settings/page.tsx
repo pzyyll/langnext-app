@@ -164,14 +164,15 @@ function GeneralSection(props: { compact: boolean; os: string }) {
         </If>
       </Card>
 
-      <Card testID="settings-logs-card" class={props.compact ? "gap-4 p-4" : "gap-5 p-6"}>
+      <Card testID="settings-logs-card" class={props.compact ? "gap-2 p-2" : "gap-2 p-3"}>
         <View class="gap-2">
-          <View class="flex-row items-center justify-between gap-4">
+          <View class="flex-row items-center justify-between gap-4 px-3 py-0.5">
             <Text class="text-sm font-medium text-card-foreground">
               {t("settings.logLevel.title")}
             </Text>
             <Select
               testID="settings-log-level"
+              size="sm"
               items={[
                 { value: "error", title: t("settings.logLevel.error") },
                 { value: "warn", title: t("settings.logLevel.warning") },
@@ -187,17 +188,21 @@ function GeneralSection(props: { compact: boolean; os: string }) {
             />
           </View>
           <If when={logLevelError() !== null}>
-            <Text testID="settings-log-level-error" role="alert" class="text-sm text-destructive">
+            <Text
+              testID="settings-log-level-error"
+              role="alert"
+              class="px-3 pb-1 text-sm text-destructive"
+            >
               {logLevelError()}
             </Text>
           </If>
         </View>
 
         <If when={canOpenLogsFolder(props.os)}>
-          <View class={props.compact ? "gap-4" : "gap-5"}>
-            <View class="h-px bg-border" />
+          <View class="gap-2">
+            <View class="mx-3 h-px bg-border" />
             <View class="gap-2">
-              <View class="flex-row items-center justify-between gap-4">
+              <View class="flex-row items-center justify-between gap-4 px-3 py-0.5">
                 <Text class="text-sm font-medium text-card-foreground">
                   {t("settings.logs.label")}
                 </Text>
@@ -211,7 +216,11 @@ function GeneralSection(props: { compact: boolean; os: string }) {
                 />
               </View>
               <If when={logsError()}>
-                <Text testID="settings-logs-error" role="alert" class="text-sm text-destructive">
+                <Text
+                  testID="settings-logs-error"
+                  role="alert"
+                  class="px-3 pb-1 text-sm text-destructive"
+                >
                   {t("settings.logs.error")}
                 </Text>
               </If>
