@@ -3277,10 +3277,24 @@ test("back-translation: lifetime closes completed lower area without closing for
 
   await app.press("id:quick-translate-card-card-1 >> id:quick-translate-back-translate");
   await app.waitFor("id:quick-translate-card-card-1 >> id:quick-translate-back-translation-text");
+  expect(app.shows(`role:button[${t("quickTranslate.backTranslate")}]`)).toBe(true);
+  expect(app.texts()).not.toContain(t("quickTranslate.backTranslate"));
+  await app.hover("id:quick-translate-card-card-1 >> id:quick-translate-copy");
+  await app.hover("id:quick-translate-card-card-1 >> id:quick-translate-back-translate");
+  await app.waitFor(`text:${t("quickTranslate.closeBackTranslation")}`);
   expect(app.requests()).toHaveLength(2);
 
-  // Repeated activation while open must not create another request.
+  // Clicking the selected back-translate icon button toggles the embedded card closed while keeping memory.
   await app.press("id:quick-translate-card-card-1 >> id:quick-translate-back-translate");
+  await app.waitUntil(
+    () => !app.shows("id:quick-translate-card-card-1 >> id:quick-translate-back-translation"),
+  );
+  expect(app.shows(`role:button[${t("quickTranslate.backTranslate")}]`)).toBe(true);
+  expect(app.requests()).toHaveLength(2);
+
+  // Clicking Back-translate again reopens from memory without making a request.
+  await app.press("id:quick-translate-card-card-1 >> id:quick-translate-back-translate");
+  await app.waitFor("id:quick-translate-card-card-1 >> text:Hello");
   expect(app.requests()).toHaveLength(2);
 
   await app.press("id:quick-translate-card-card-1 >> id:quick-translate-close-back-translation");
@@ -3291,7 +3305,7 @@ test("back-translation: lifetime closes completed lower area without closing for
   expect(app.texts()).toContain("Bonjour");
   expect(app.texts()).not.toContain("Hello");
 
-  // Reopening a completed lower result makes no request.
+  // Reopening after Close makes no request either.
   await app.press("id:quick-translate-card-card-1 >> id:quick-translate-back-translate");
   await app.waitFor("id:quick-translate-card-card-1 >> text:Hello");
   expect(app.requests()).toHaveLength(2);
@@ -3460,6 +3474,87 @@ test("back-translation: lifetime handles reverse failure, blank response, close-
     "id:quick-translate-card-card-1 >> id:quick-translate-retry-back-translation",
   );
   await blankReverseApp.waitFor("id:quick-translate-card-card-1 >> text:Good morning");
+});
+
+test("back-translation: lifetime retries a completed result without retranslating the forward card or re-detecting", async () => {
+  let translateCalls = 0;
+  const app = await open(POPUP_HARNESS, {
+    ...viewport,
+    storage: seedAutoPair([false]),
+    network: {
+      [DETECT_URL]: { status: 200, body: { choices: [{ message: { content: "fr" } }] } },
+      [TRANSLATE_URL]: () => {
+        translateCalls += 1;
+        if (translateCalls === 1) {
+          return { status: 200, body: { choices: [{ message: { content: "早上好" } }] } };
+        }
+        if (translateCalls === 2) {
+          return { status: 200, body: { choices: [{ message: { content: "Bonjour encore" } }] } };
+        }
+        if (translateCalls === 3) {
+          return {
+            status: 200,
+            delay: 700,
+            body: { choices: [{ message: { content: "Bonjour retried" } }] },
+          };
+        }
+        if (translateCalls === 4) {
+          return { status: 500, body: { error: { message: "retry fail" } } };
+        }
+        return { status: 200, body: { choices: [{ message: { content: "Bonjour fresh" } }] } };
+      },
+    },
+  });
+
+  await app.waitFor("id:quick-translate-card-card-1");
+  await app.type("id:quick-translate-source", "Bonjour");
+  await app.keyboard.press("enter");
+  await app.waitFor("id:quick-translate-card-card-1 >> id:quick-translate-back-translate");
+
+  await app.press("id:quick-translate-card-card-1 >> id:quick-translate-back-translate");
+  await app.waitFor("id:quick-translate-card-card-1 >> text:Bonjour encore");
+  expect(
+    app.shows("id:quick-translate-card-card-1 >> id:quick-translate-retry-back-translation"),
+  ).toBe(true);
+  expect(
+    app.shows("id:quick-translate-card-card-1 >> id:quick-translate-close-back-translation"),
+  ).toBe(true);
+
+  await app.press("id:quick-translate-card-card-1 >> id:quick-translate-copy-back-translation");
+  expect(app.shows(`role:button[${t("quickTranslate.backTranslationCopied")}]`)).toBe(true);
+
+  await app.press("id:quick-translate-card-card-1 >> id:quick-translate-retry-back-translation");
+  await app.waitFor(
+    `id:quick-translate-card-card-1 >> text:${t("quickTranslate.backTranslating")}`,
+  );
+  expect(
+    app.shows("id:quick-translate-card-card-1 >> id:quick-translate-retry-back-translation"),
+  ).toBe(false);
+  expect(app.texts()).toContain("早上好");
+
+  await app.waitFor("id:quick-translate-card-card-1 >> text:Bonjour retried");
+  expect(
+    app.shows("id:quick-translate-card-card-1 >> id:quick-translate-retry-back-translation"),
+  ).toBe(true);
+  expect(app.shows(`role:button[${t("quickTranslate.backTranslationCopied")}]`)).toBe(false);
+  expect(requestsTo(app, DETECT_URL)).toHaveLength(1);
+  expect(translateBodies(app)).toHaveLength(3);
+  expect(translateBodies(app)[2]!.messages[1]!.content).toBe("早上好");
+
+  await app.press("id:quick-translate-card-card-1 >> id:quick-translate-close-back-translation");
+  await app.press("id:quick-translate-card-card-1 >> id:quick-translate-back-translate");
+  await app.waitFor("id:quick-translate-card-card-1 >> text:Bonjour retried");
+  expect(translateBodies(app)).toHaveLength(3);
+
+  await app.press("id:quick-translate-card-card-1 >> id:quick-translate-retry-back-translation");
+  await app.waitFor("id:quick-translate-card-card-1 >> id:quick-translate-back-translation-error");
+  expect(
+    app.shows("id:quick-translate-card-card-1 >> id:quick-translate-close-back-translation"),
+  ).toBe(true);
+  await app.press("id:quick-translate-card-card-1 >> id:quick-translate-close-back-translation");
+  await app.press("id:quick-translate-card-card-1 >> id:quick-translate-back-translate");
+  await app.waitFor("id:quick-translate-card-card-1 >> text:Bonjour fresh");
+  expect(translateBodies(app)).toHaveLength(5);
 });
 
 const BACK_TRANSLATION_ALPHA_PRESET = makePreset({
@@ -4171,7 +4266,7 @@ test("back-translation: speech handles Auto stored language, player replacement,
   expect(errApp.shows("id:quick-translate-speak-back-translation-error")).toBe(false);
 });
 
-test("back-translation: keyboard Tab and Enter/Space open, speak, copy, and close while returning focus to reply", async () => {
+test("back-translation: keyboard Tab and Enter/Space open, speak, copy, retry, and close while returning focus to reply", async () => {
   let aiCalls = 0;
   const app = await open(POPUP_HARNESS, {
     ...viewport,
@@ -4182,7 +4277,14 @@ test("back-translation: keyboard Tab and Enter/Space open, speak, copy, and clos
         return {
           status: 200,
           body: {
-            choices: [{ message: { content: aiCalls === 1 ? "Bonjour" : "Hello keyboard" } }],
+            choices: [
+              {
+                message: {
+                  content:
+                    aiCalls === 1 ? "Bonjour" : aiCalls === 2 ? "Hello keyboard" : "Hello retried",
+                },
+              },
+            ],
           },
         };
       },
@@ -4195,7 +4297,7 @@ test("back-translation: keyboard Tab and Enter/Space open, speak, copy, and clos
   await app.keyboard.press("enter");
   await app.waitFor("id:quick-translate-card-card-1 >> id:quick-translate-back-translate");
 
-  // Tab from source input past source actions, card header controls, and upper speak/copy to reply.
+  // Tab from source input past source actions, card header controls, and upper speak/copy to the back-translate pill.
   for (let step = 0; step < 11; step += 1) {
     await app.keyboard.press("tab");
   }
@@ -4203,9 +4305,11 @@ test("back-translation: keyboard Tab and Enter/Space open, speak, copy, and clos
   await app.waitFor("id:quick-translate-card-card-1 >> id:quick-translate-speak-back-translation");
   expect(app.requests().filter((r) => r.url.includes("chat/completions"))).toHaveLength(2);
 
-  // Tab past upper Retry (1) to lower Speak (2), activate with Space, then cancel loading with Space.
-  await app.keyboard.press("tab");
-  await app.keyboard.press("tab");
+  // Shift+Tab from the active pill walks back past upper Copy (1), upper Speak (2),
+  // embedded Close (3), embedded Retry (4), embedded Copy (5) to embedded Speak (6).
+  for (let step = 0; step < 6; step += 1) {
+    await app.keyboard.press("shift+tab");
+  }
   await app.keyboard.press("space");
   await app.waitFor(`id:quick-translate-card-card-1 >> role:button[${t("common.cancel")}]`);
   await app.keyboard.press("space");
@@ -4213,13 +4317,14 @@ test("back-translation: keyboard Tab and Enter/Space open, speak, copy, and clos
     `id:quick-translate-card-card-1 >> role:button[${t("quickTranslate.speakBackTranslation")}]`,
   );
 
-  // Tab to lower Copy, activate with Enter.
+  // Tab to embedded Copy, activate with Enter.
   await app.keyboard.press("tab");
   await app.keyboard.press("enter");
   expect(app.clipboard()).toBe("Hello keyboard");
   expect(app.shows(`role:button[${t("quickTranslate.backTranslationCopied")}]`)).toBe(true);
 
-  // Tab to lower Close, activate with Enter; focus returns to reply (Space reopens without request).
+  // Tab past embedded Retry (1) to embedded Close (2), activate with Enter; focus returns to the pill (Space reopens without request).
+  await app.keyboard.press("tab");
   await app.keyboard.press("tab");
   await app.keyboard.press("enter");
   await app.waitUntil(
@@ -4228,6 +4333,14 @@ test("back-translation: keyboard Tab and Enter/Space open, speak, copy, and clos
   await app.keyboard.press("space");
   await app.waitFor("id:quick-translate-card-card-1 >> text:Hello keyboard");
   expect(app.requests().filter((r) => r.url.includes("chat/completions"))).toHaveLength(2);
+
+  // From focused active pill, Shift+Tab across upper Copy (1), upper Speak (2), embedded Close (3) to embedded Retry (4).
+  for (let step = 0; step < 4; step += 1) {
+    await app.keyboard.press("shift+tab");
+  }
+  await app.keyboard.press("enter");
+  await app.waitFor("id:quick-translate-card-card-1 >> text:Hello retried");
+  expect(app.requests().filter((r) => r.url.includes("chat/completions"))).toHaveLength(3);
 });
 
 test("back-translation: renders zh-CN localization across states and actions", async () => {
@@ -4261,15 +4374,24 @@ test("back-translation: renders zh-CN localization across states and actions", a
 
   await app.press("id:quick-translate-card-card-1 >> id:quick-translate-back-translate");
   await app.waitFor("id:quick-translate-card-card-1 >> id:quick-translate-back-translation-error");
+  expect(app.shows("role:button[回译]")).toBe(true);
   expect(app.shows("role:button[重试回译]")).toBe(true);
   expect(app.shows("role:button[关闭回译]")).toBe(true);
 
   await app.press("id:quick-translate-card-card-1 >> id:quick-translate-retry-back-translation");
   await app.waitFor("id:quick-translate-card-card-1 >> text:正在回译…");
   await app.waitFor("id:quick-translate-card-card-1 >> id:quick-translate-copy-back-translation");
+  expect(app.shows("role:button[回译]")).toBe(true);
+  expect(app.texts()).not.toContain("回译");
+  expect(app.texts()).not.toContain("已回译");
   expect(app.shows("role:button[朗读回译文]")).toBe(true);
   expect(app.shows("role:button[复制回译文]")).toBe(true);
+  expect(app.shows("role:button[关闭回译]")).toBe(true);
+  expect(app.shows("role:button[重试回译]")).toBe(true);
 
   await app.press("id:quick-translate-card-card-1 >> id:quick-translate-copy-back-translation");
   expect(app.shows("role:button[已复制回译文]")).toBe(true);
+
+  await app.press("id:quick-translate-card-card-1 >> id:quick-translate-close-back-translation");
+  await app.waitFor("role:button[回译]");
 });

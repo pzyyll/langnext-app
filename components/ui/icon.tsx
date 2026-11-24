@@ -26,6 +26,7 @@ import lightningIcon from "../../assets/icons/lightning.svg";
 import markdownOutlineIcon from "../../assets/icons/markdown-outline.svg";
 import markdownSolidIcon from "../../assets/icons/markdown-solid.svg";
 import mdiArrowCollapseIcon from "../../assets/icons/mdi--arrow-collapse.svg";
+import mdiArrowULeftTopIcon from "../../assets/icons/mdi--arrow-u-left-top.svg";
 import mdiCheckIcon from "../../assets/icons/mdi--check.svg";
 import mdiChevronDownIcon from "../../assets/icons/mdi--chevron-down.svg";
 import mdiChevronRightIcon from "../../assets/icons/mdi--chevron-right.svg";
@@ -45,7 +46,6 @@ import mdiPinOutlineIcon from "../../assets/icons/mdi--pin-outline.svg";
 import mdiPinIcon from "../../assets/icons/mdi--pin.svg";
 import mdiPlusIcon from "../../assets/icons/mdi--plus.svg";
 import mdiRefreshIcon from "../../assets/icons/mdi--refresh.svg";
-import mdiReplyOutlineIcon from "../../assets/icons/mdi--reply-outline.svg";
 import mdiStopCircleOutlineIcon from "../../assets/icons/mdi--stop-circle-outline.svg";
 import mdiStopIcon from "../../assets/icons/mdi--stop.svg";
 import mdiSwapHorizontalIcon from "../../assets/icons/mdi--swap-horizontal.svg";
@@ -93,6 +93,7 @@ const ICONS = {
   "markdown-outline": markdownOutlineIcon,
   "markdown-solid": markdownSolidIcon,
   "mdi:arrow-collapse": mdiArrowCollapseIcon,
+  "mdi:arrow-u-left-top": mdiArrowULeftTopIcon,
   "mdi:check": mdiCheckIcon,
   "mdi:chevron-down": mdiChevronDownIcon,
   "mdi:chevron-right": mdiChevronRightIcon,
@@ -112,7 +113,6 @@ const ICONS = {
   "mdi:pin-outline": mdiPinOutlineIcon,
   "mdi:plus": mdiPlusIcon,
   "mdi:refresh": mdiRefreshIcon,
-  "mdi:reply-outline": mdiReplyOutlineIcon,
   "mdi:stop": mdiStopIcon,
   "mdi:stop-circle-outline": mdiStopCircleOutlineIcon,
   "mdi:swap-horizontal": mdiSwapHorizontalIcon,

@@ -68,14 +68,15 @@ function buildTemplateItems(preset: TranslationPreset | null): SelectItem[] {
 }
 
 /** Shared icon-only retry trigger used across card failures, result actions, and preset reload. */
-function RetryIconButton(props: { testID: string; onPress: () => void }) {
+function RetryIconButton(props: { testID: string; label?: string; onPress: () => void }) {
+  const label = () => props.label ?? t("common.retry");
   return (
     <Button
       testID={props.testID}
       size="icon-xs"
       variant="ghost"
-      tooltip={t("common.retry")}
-      accessibilityLabel={t("common.retry")}
+      tooltip={label()}
+      accessibilityLabel={label()}
       onPress={() => props.onPress()}
     >
       <Icon name="mdi:refresh" tone="muted-foreground" class="size-3.5" />
@@ -332,6 +333,7 @@ function PresetCardRow(props: PresetCardRowProps) {
     );
   };
   const backTranslation = () => props.card().backTranslation;
+  const isBackTranslationOpen = () => backTranslation().status !== "closed";
 
   const presetName = () => resolvedPreset()?.name ?? t("quickTranslate.presetPlaceholder");
 
@@ -509,124 +511,13 @@ function PresetCardRow(props: PresetCardRowProps) {
 
         <If when={result().status === "success"}>
           <View>
-            <View class="flex-row items-center justify-between gap-2 border-t border-border/60 px-2 py-1.5">
-              <View class="flex-row items-center gap-0.5">
-                <If
-                  when={(() => {
-                    const res = props.card().result;
-                    return res.status === "success" && res.text.trim().length > 0;
-                  })()}
-                >
-                  <SpeakerButton
-                    testID="quick-translate-speak-result"
-                    disabled={props.speakState().disabled}
-                    tooltip={props.speakState().tooltip}
-                    label={props.speakState().label}
-                    icon={props.speakState().icon}
-                    onPress={() => props.onSpeak()}
-                  />
-                </If>
-                <Button
-                  testID="quick-translate-copy"
-                  size="icon-xs"
-                  variant="ghost"
-                  tooltip={
-                    props.card().copied ? t("quickTranslate.copied") : t("quickTranslate.copy")
-                  }
-                  accessibilityLabel={
-                    props.card().copied ? t("quickTranslate.copied") : t("quickTranslate.copy")
-                  }
-                  onPress={() => props.onCopy(props.card().id)}
-                >
-                  <Icon
-                    name={props.card().copied ? "mdi:check" : "mdi:content-copy"}
-                    tone={props.card().copied ? "success" : "muted-foreground"}
-                    class="size-3.5"
-                  />
-                </Button>
-                <If when={canBackTranslate()}>
-                  <Button
-                    testID="quick-translate-back-translate"
-                    ref={(node) => {
-                      backTranslateNode = node;
-                    }}
-                    size="icon-xs"
-                    variant="ghost"
-                    tooltip={t("quickTranslate.backTranslate")}
-                    accessibilityLabel={t("quickTranslate.backTranslate")}
-                    onPress={() => props.onBackTranslate(props.card().id)}
-                  >
-                    <Icon name="mdi:reply-outline" tone="muted-foreground" class="size-3.5" />
-                  </Button>
-                </If>
-              </View>
-              <RetryIconButton
-                testID="quick-translate-retry"
-                onPress={() => props.onRetry(props.card().id)}
-              />
-            </View>
-            <If when={props.speakError() !== null}>
-              <View class="px-3 pb-2.5">
-                <Text
-                  testID="quick-translate-speak-result-error"
-                  role="alert"
-                  class="text-xs text-destructive"
-                >
-                  {props.speakError() ?? ""}
-                </Text>
-              </View>
-            </If>
-            <If when={props.card().copyError !== null}>
-              <View class="px-3 pb-2.5">
-                <Text
-                  testID="quick-translate-copy-error"
-                  role="alert"
-                  class="text-xs text-destructive"
-                >
-                  {props.card().copyError ?? ""}
-                </Text>
-              </View>
-            </If>
-            <If when={backTranslation().status !== "closed"}>
-              <View testID="quick-translate-back-translation" class="border-t border-border/60">
-                <If when={backTranslation().status === "loading"}>
-                  <View class="px-3 py-2.5">
-                    <Text
-                      testID="quick-translate-back-translation-status"
-                      class="text-xs text-muted-foreground"
-                    >
-                      {t("quickTranslate.backTranslating")}
-                    </Text>
-                  </View>
-                </If>
-                <If when={backTranslation().status === "success"}>
-                  <View class="min-w-0 px-3 py-2.5">
-                    <TranslationOutput
-                      testID="quick-translate-back-translation-text"
-                      text={(() => {
-                        const bt = backTranslation();
-                        return bt.status === "success" ? bt.text : "";
-                      })()}
-                      markdownEnabled={props.markdownEnabled}
-                      streaming={false}
-                    />
-                  </View>
-                </If>
-                <If when={backTranslation().status === "error"}>
-                  <View class="px-3 py-2.5">
-                    <Text
-                      testID="quick-translate-back-translation-error"
-                      role="alert"
-                      class="text-xs text-destructive"
-                    >
-                      {(() => {
-                        const bt = backTranslation();
-                        return bt.status === "error" ? bt.message : "";
-                      })()}
-                    </Text>
-                  </View>
-                </If>
-                <View class="flex-row items-center justify-between gap-2 border-t border-border/60 px-2 py-1.5">
+            <If when={isBackTranslationOpen()}>
+              <View
+                testID="quick-translate-back-translation"
+                class="mx-3 mb-2.5 rounded-lg border border-border/80 bg-muted/45"
+              >
+                <View class="flex-row items-center justify-between gap-2 pt-1.5 pr-1.5 pb-1 pl-2.5">
+                  <Icon name="mdi:arrow-u-left-top" tone="brand" class="size-3.5 shrink-0" />
                   <View class="flex-row items-center gap-0.5">
                     <If
                       when={(() => {
@@ -677,19 +568,17 @@ function PresetCardRow(props: PresetCardRowProps) {
                         />
                       </Button>
                     </If>
-                  </View>
-                  <View class="flex-row items-center gap-0.5">
-                    <If when={backTranslation().status === "error"}>
-                      <Button
+                    <If
+                      when={
+                        backTranslation().status === "error" ||
+                        backTranslation().status === "success"
+                      }
+                    >
+                      <RetryIconButton
                         testID="quick-translate-retry-back-translation"
-                        size="icon-xs"
-                        variant="ghost"
-                        tooltip={t("quickTranslate.retryBackTranslation")}
-                        accessibilityLabel={t("quickTranslate.retryBackTranslation")}
+                        label={t("quickTranslate.retryBackTranslation")}
                         onPress={() => props.onRetryBackTranslation(props.card().id)}
-                      >
-                        <Icon name="mdi:refresh" tone="muted-foreground" class="size-3.5" />
-                      </Button>
+                      />
                     </If>
                     <Button
                       testID="quick-translate-close-back-translation"
@@ -706,8 +595,39 @@ function PresetCardRow(props: PresetCardRowProps) {
                     </Button>
                   </View>
                 </View>
-                <If when={props.backTranslationSpeakError() !== null}>
-                  <View class="px-3 pb-2.5">
+                <View class="min-w-0 gap-1.5 px-2.5 pb-2.5">
+                  <If when={backTranslation().status === "loading"}>
+                    <Text
+                      testID="quick-translate-back-translation-status"
+                      class="text-xs text-muted-foreground"
+                    >
+                      {t("quickTranslate.backTranslating")}
+                    </Text>
+                  </If>
+                  <If when={backTranslation().status === "success"}>
+                    <TranslationOutput
+                      testID="quick-translate-back-translation-text"
+                      text={(() => {
+                        const bt = backTranslation();
+                        return bt.status === "success" ? bt.text : "";
+                      })()}
+                      markdownEnabled={props.markdownEnabled}
+                      streaming={false}
+                    />
+                  </If>
+                  <If when={backTranslation().status === "error"}>
+                    <Text
+                      testID="quick-translate-back-translation-error"
+                      role="alert"
+                      class="text-xs text-destructive"
+                    >
+                      {(() => {
+                        const bt = backTranslation();
+                        return bt.status === "error" ? bt.message : "";
+                      })()}
+                    </Text>
+                  </If>
+                  <If when={props.backTranslationSpeakError() !== null}>
                     <Text
                       testID="quick-translate-speak-back-translation-error"
                       role="alert"
@@ -715,15 +635,13 @@ function PresetCardRow(props: PresetCardRowProps) {
                     >
                       {props.backTranslationSpeakError() ?? ""}
                     </Text>
-                  </View>
-                </If>
-                <If
-                  when={(() => {
-                    const bt = backTranslation();
-                    return bt.status === "success" && bt.copyError !== null;
-                  })()}
-                >
-                  <View class="px-3 pb-2.5">
+                  </If>
+                  <If
+                    when={(() => {
+                      const bt = backTranslation();
+                      return bt.status === "success" && bt.copyError !== null;
+                    })()}
+                  >
                     <Text
                       testID="quick-translate-copy-back-translation-error"
                       role="alert"
@@ -734,8 +652,95 @@ function PresetCardRow(props: PresetCardRowProps) {
                         return bt.status === "success" ? (bt.copyError ?? "") : "";
                       })()}
                     </Text>
-                  </View>
+                  </If>
+                </View>
+              </View>
+            </If>
+            <View class="flex-row items-center justify-between gap-2 border-t border-border/60 px-2 py-1.5">
+              <View class="flex-row items-center gap-0.5">
+                <If
+                  when={(() => {
+                    const res = props.card().result;
+                    return res.status === "success" && res.text.trim().length > 0;
+                  })()}
+                >
+                  <SpeakerButton
+                    testID="quick-translate-speak-result"
+                    disabled={props.speakState().disabled}
+                    tooltip={props.speakState().tooltip}
+                    label={props.speakState().label}
+                    icon={props.speakState().icon}
+                    onPress={() => props.onSpeak()}
+                  />
                 </If>
+                <Button
+                  testID="quick-translate-copy"
+                  size="icon-xs"
+                  variant="ghost"
+                  tooltip={
+                    props.card().copied ? t("quickTranslate.copied") : t("quickTranslate.copy")
+                  }
+                  accessibilityLabel={
+                    props.card().copied ? t("quickTranslate.copied") : t("quickTranslate.copy")
+                  }
+                  onPress={() => props.onCopy(props.card().id)}
+                >
+                  <Icon
+                    name={props.card().copied ? "mdi:check" : "mdi:content-copy"}
+                    tone={props.card().copied ? "success" : "muted-foreground"}
+                    class="size-3.5"
+                  />
+                </Button>
+                <If when={canBackTranslate()}>
+                  <Button
+                    testID="quick-translate-back-translate"
+                    ref={(node) => {
+                      backTranslateNode = node;
+                    }}
+                    size="icon-xs"
+                    variant="brand-ghost"
+                    selected={isBackTranslationOpen()}
+                    tooltip={
+                      isBackTranslationOpen()
+                        ? t("quickTranslate.closeBackTranslation")
+                        : t("quickTranslate.backTranslate")
+                    }
+                    accessibilityLabel={t("quickTranslate.backTranslate")}
+                    onPress={() => props.onBackTranslate(props.card().id)}
+                  >
+                    <Icon
+                      name="mdi:arrow-u-left-top"
+                      tone={isBackTranslationOpen() ? "brand" : "muted-foreground"}
+                      class="size-3.5"
+                    />
+                  </Button>
+                </If>
+              </View>
+              <RetryIconButton
+                testID="quick-translate-retry"
+                onPress={() => props.onRetry(props.card().id)}
+              />
+            </View>
+            <If when={props.speakError() !== null}>
+              <View class="px-3 pb-2.5">
+                <Text
+                  testID="quick-translate-speak-result-error"
+                  role="alert"
+                  class="text-xs text-destructive"
+                >
+                  {props.speakError() ?? ""}
+                </Text>
+              </View>
+            </If>
+            <If when={props.card().copyError !== null}>
+              <View class="px-3 pb-2.5">
+                <Text
+                  testID="quick-translate-copy-error"
+                  role="alert"
+                  class="text-xs text-destructive"
+                >
+                  {props.card().copyError ?? ""}
+                </Text>
               </View>
             </If>
           </View>

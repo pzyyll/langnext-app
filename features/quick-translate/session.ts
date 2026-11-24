@@ -1101,7 +1101,14 @@ export function createQuickTranslateSession(
     }
     const existing = runtime.backTranslation;
     if (existing && existing.forwardQuery === forwardQuery) {
-      if (existing.open) return;
+      if (existing.open) {
+        closeBackTranslationRuntime(runtime);
+        updateCard(cardId, (item) => ({
+          ...item,
+          backTranslation: { status: "closed" },
+        }));
+        return;
+      }
       if (existing.state.status === "success") {
         existing.open = true;
         updateCard(cardId, (item) => ({
@@ -1156,7 +1163,7 @@ export function createQuickTranslateSession(
       card.result.status !== "success" ||
       !bt ||
       !bt.open ||
-      bt.state.status !== "error" ||
+      (bt.state.status !== "error" && bt.state.status !== "success") ||
       bt.forwardQuery !== forwardQuery
     ) {
       return;
@@ -1171,6 +1178,10 @@ export function createQuickTranslateSession(
     const preset =
       store.records().find((item) => item.id === card.presetId) ?? runtime.context?.preset;
     if (!preset) {
+      clearBackTranslationCopyTimer(bt);
+      bt.copied = false;
+      bt.copyError = null;
+      bt.copyEpoch += 1;
       bt.state = { status: "error", message: t("quickTranslate.error.noEnabledPresets") };
       updateCard(cardId, (item) => ({
         ...item,
