@@ -67,7 +67,7 @@ function focusTarget(node: ViewRef | null | undefined) {
   setAccessibilityFocus(node);
 }
 
-function OcrChannelMark(props: { src: string; size?: AvatarSize }) {
+function OcrChannelMark(props: { src: typeof baiduCloudIcon; size?: AvatarSize }) {
   return (
     <Avatar
       size={props.size ?? "md"}
