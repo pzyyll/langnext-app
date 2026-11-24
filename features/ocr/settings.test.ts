@@ -2,6 +2,7 @@ import { expect, test } from "nsh/test";
 import {
   baiduCredentialStorageKey,
   createOcrSettingsStore,
+  googleCloudCredentialStorageKey,
   OCR_STORAGE_KEY,
   type BaiduOcrOperation,
   type OcrServiceBinding,
@@ -61,7 +62,7 @@ test("ocr store: starts with no added channels and every kind available", async 
   const store = createOcrSettingsStore(mem.storage);
 
   expect(store.channelOrder()).toEqual([]);
-  expect(store.availableChannels()).toEqual(["ai", "baidu"]);
+  expect(store.availableChannels()).toEqual(["ai", "baidu", "google-cloud"]);
   expect(store.isEnabled("ai")).toBe(false);
   expect(store.isEnabled("baidu")).toBe(false);
   expect(store.enabledBindings()).toEqual([]);
@@ -72,7 +73,7 @@ test("ocr store: starts with no added channels and every kind available", async 
   await store.load();
   expect(store.loadError()).toBeNull();
   expect(store.channelOrder()).toEqual([]);
-  expect(store.availableChannels()).toEqual(["ai", "baidu"]);
+  expect(store.availableChannels()).toEqual(["ai", "baidu", "google-cloud"]);
   expect(store.enabledBindings()).toEqual([]);
   expect(mem.getSetCalls()).toBe(0);
 });
@@ -84,13 +85,13 @@ test("ocr store: adds channels without enabling them and persists the added orde
 
   expect((await store.addChannel("baidu")).ok).toBe(true);
   expect(store.channelOrder()).toEqual(["baidu"]);
-  expect(store.availableChannels()).toEqual(["ai"]);
+  expect(store.availableChannels()).toEqual(["ai", "google-cloud"]);
   expect(store.isEnabled("baidu")).toBe(false);
   expect(store.enabledBindings()).toEqual([]);
 
   expect((await store.addChannel("ai")).ok).toBe(true);
   expect(store.channelOrder()).toEqual(["baidu", "ai"]);
-  expect(store.availableChannels()).toEqual([]);
+  expect(store.availableChannels()).toEqual(["google-cloud"]);
 
   // Re-adding an already added channel is a no-op without writing again.
   const writes = mem.getSetCalls();
@@ -100,15 +101,16 @@ test("ocr store: adds channels without enabling them and persists the added orde
   expect(JSON.parse(mem.backing[OCR_STORAGE_KEY]!)).toEqual({
     version: 4,
     order: ["baidu", "ai"],
-    enabled: { ai: false, baidu: false },
+    enabled: { ai: false, baidu: false, "google-cloud": false },
     ai: null,
     baidu: null,
+    "google-cloud": null,
   });
 
   const reopened = createOcrSettingsStore(mem.storage);
   await reopened.load();
   expect(reopened.channelOrder()).toEqual(["baidu", "ai"]);
-  expect(reopened.availableChannels()).toEqual([]);
+  expect(reopened.availableChannels()).toEqual(["google-cloud"]);
 });
 
 test("ocr store: removes a channel with its binding and Baidu credential, and offers it again", async () => {
@@ -121,11 +123,11 @@ test("ocr store: removes a channel with its binding and Baidu credential, and of
   const baidu = await saveBaidu(store, FIRST_KEYS);
   await store.save(VISION_BINDING);
   expect(store.channelOrder()).toEqual(["ai", "baidu"]);
-  expect(store.availableChannels()).toEqual([]);
+  expect(store.availableChannels()).toEqual(["google-cloud"]);
 
   expect((await store.removeChannel("baidu")).ok).toBe(true);
   expect(store.channelOrder()).toEqual(["ai"]);
-  expect(store.availableChannels()).toEqual(["baidu"]);
+  expect(store.availableChannels()).toEqual(["baidu", "google-cloud"]);
   expect(store.savedBaiduBinding()).toBeNull();
   expect(store.isEnabled("baidu")).toBe(false);
   expect(store.enabledBindings()).toEqual([VISION_BINDING]);
@@ -145,7 +147,7 @@ test("ocr store: removes a channel with its binding and Baidu credential, and of
   const reopened = createOcrSettingsStore(mem.storage);
   await reopened.load();
   expect(reopened.channelOrder()).toEqual([]);
-  expect(reopened.availableChannels()).toEqual(["ai", "baidu"]);
+  expect(reopened.availableChannels()).toEqual(["ai", "baidu", "google-cloud"]);
 });
 
 test("ocr store: saves one AI binding, auto-enables it, and restores it from storage", async () => {
@@ -167,7 +169,7 @@ test("ocr store: saves one AI binding, auto-enables it, and restores it from sto
   const result = await store1.save(VISION_BINDING);
   expect(result.ok).toBe(true);
   expect(store1.channelOrder()).toEqual(["ai"]);
-  expect(store1.availableChannels()).toEqual(["baidu"]);
+  expect(store1.availableChannels()).toEqual(["baidu", "google-cloud"]);
   expect(store1.isEnabled("ai")).toBe(true);
   expect(store1.isEnabled("baidu")).toBe(false);
   expect(store1.enabledBindings()).toEqual([VISION_BINDING]);
@@ -186,9 +188,10 @@ test("ocr store: saves one AI binding, auto-enables it, and restores it from sto
   expect(JSON.parse(mem.backing[OCR_STORAGE_KEY]!)).toEqual({
     version: 4,
     order: ["ai"],
-    enabled: { ai: true, baidu: false },
+    enabled: { ai: true, baidu: false, "google-cloud": false },
     ai: { modelId: "vision-model" },
     baidu: null,
+    "google-cloud": null,
   });
 });
 
@@ -395,9 +398,10 @@ test("ocr store: saves a Baidu binding by reference and restores the credential 
   expect(JSON.parse(raw)).toEqual({
     version: 4,
     order: ["baidu"],
-    enabled: { ai: false, baidu: true },
+    enabled: { ai: false, baidu: true, "google-cloud": false },
     ai: null,
     baidu: { operation: "accurate", credentialRef: ref },
+    "google-cloud": null,
   });
   expect(JSON.parse(mem.backing[`settings.ocr.credentials.${ref}`]!)).toEqual({
     apiKey,
@@ -745,4 +749,258 @@ test("ocr store: readBaiduCredentials returns null when the pair is missing, inv
 
   mem.setGetError(new Error("unavailable"));
   expect(await store.readBaiduCredentials("missing-ref")).toBeNull();
+});
+
+const VISION_KEY = "synthetic-vision-key";
+const NEXT_VISION_KEY = "replacement-vision-key";
+
+function twoChannelRecord(): string {
+  return JSON.stringify({
+    version: 4,
+    order: ["baidu", "ai"],
+    enabled: { ai: false, baidu: true },
+    ai: { modelId: "vision-model" },
+    baidu: { operation: "accurate", credentialRef: "baidu-ref" },
+  });
+}
+
+test("ocr store: loads a two-channel record without inserting Google Cloud", async () => {
+  const raw = twoChannelRecord();
+  const mem = createMemoryStorage({
+    [OCR_STORAGE_KEY]: raw,
+    [baiduCredentialStorageKey("baidu-ref")]: JSON.stringify(FIRST_KEYS),
+  });
+  const store = createOcrSettingsStore(mem.storage);
+
+  await store.load();
+
+  expect(store.loadError()).toBeNull();
+  expect(store.channelOrder()).toEqual(["baidu", "ai"]);
+  expect(store.availableChannels()).toEqual(["google-cloud"]);
+  expect(store.isEnabled("google-cloud")).toBe(false);
+  expect(store.isEnabled("baidu")).toBe(true);
+  expect(store.isEnabled("ai")).toBe(false);
+  expect(store.savedGoogleCloudBinding()).toBeNull();
+  expect(store.enabledBindings().map((binding) => binding.kind)).toEqual(["baidu"]);
+  expect(mem.getSetCalls()).toBe(0);
+  expect(mem.backing[OCR_STORAGE_KEY]).toBe(raw);
+  expect(mem.getGets().some((key) => key.startsWith("settings.ocr.googleCloudKeys."))).toBe(false);
+});
+
+test("ocr store: first Vision save enables Google Cloud without changing the other channels", async () => {
+  const mem = createMemoryStorage({
+    [OCR_STORAGE_KEY]: twoChannelRecord(),
+    [baiduCredentialStorageKey("baidu-ref")]: JSON.stringify(FIRST_KEYS),
+  });
+  const store = createOcrSettingsStore(mem.storage);
+  await store.load();
+
+  const saved = await store.save({
+    kind: "google-cloud",
+    credentials: { kind: "replace", apiKey: `  ${VISION_KEY}  ` },
+  });
+
+  expect(saved.ok).toBe(true);
+  if (!saved.ok || saved.binding.kind !== "google-cloud") {
+    throw new Error("expected a Google Cloud binding");
+  }
+  expect(store.channelOrder()).toEqual(["baidu", "ai", "google-cloud"]);
+  expect(store.isEnabled("baidu")).toBe(true);
+  expect(store.isEnabled("ai")).toBe(false);
+  expect(store.isEnabled("google-cloud")).toBe(true);
+  expect(store.savedGoogleCloudBinding()).toEqual(saved.binding);
+  expect(JSON.stringify(saved.binding)).not.toContain(VISION_KEY);
+  expect(mem.backing[OCR_STORAGE_KEY]).not.toContain(VISION_KEY);
+  expect(
+    JSON.parse(mem.backing[googleCloudCredentialStorageKey(saved.binding.credentialRef)]!),
+  ).toEqual({
+    apiKey: VISION_KEY,
+  });
+
+  const getsBeforeLoad = mem.getGets().length;
+  const reloaded = createOcrSettingsStore(mem.storage);
+  await reloaded.load();
+  expect(reloaded.channelOrder()).toEqual(["baidu", "ai", "google-cloud"]);
+  expect(reloaded.isEnabled("google-cloud")).toBe(true);
+  expect(reloaded.savedGoogleCloudBinding()).toEqual(saved.binding);
+  expect(
+    mem
+      .getGets()
+      .slice(getsBeforeLoad)
+      .some((key) => key.startsWith("settings.ocr.googleCloudKeys.")),
+  ).toBe(false);
+  expect(await reloaded.readGoogleCloudCredential(saved.binding.credentialRef)).toBe(VISION_KEY);
+});
+
+test("ocr store: replacing a Vision key keeps order and a disabled channel, and drops the old key", async () => {
+  const mem = createMemoryStorage();
+  const store = createOcrSettingsStore(mem.storage);
+  const first = await store.save({
+    kind: "google-cloud",
+    credentials: { kind: "replace", apiKey: VISION_KEY },
+  });
+  if (!first.ok || first.binding.kind !== "google-cloud") throw new Error("expected a binding");
+  expect(await store.setEnabled("google-cloud", false)).toEqual({ ok: true });
+  await store.addChannel("ai");
+
+  const second = await store.save({
+    kind: "google-cloud",
+    credentials: { kind: "replace", apiKey: NEXT_VISION_KEY },
+  });
+  if (!second.ok || second.binding.kind !== "google-cloud") throw new Error("expected a binding");
+
+  expect(second.binding.credentialRef).not.toBe(first.binding.credentialRef);
+  expect(store.isEnabled("google-cloud")).toBe(false);
+  expect(store.channelOrder()).toEqual(["google-cloud", "ai"]);
+  expect(store.enabledBindings()).toEqual([]);
+  expect(mem.backing[googleCloudCredentialStorageKey(first.binding.credentialRef)]).toBeUndefined();
+  expect(await store.readGoogleCloudCredential(second.binding.credentialRef)).toBe(NEXT_VISION_KEY);
+  expect(JSON.stringify(store.savedGoogleCloudBinding())).not.toContain(NEXT_VISION_KEY);
+});
+
+test("ocr store: a failed Vision key write keeps the previous key", async () => {
+  const mem = createMemoryStorage();
+  const store = createOcrSettingsStore(mem.storage);
+  const first = await store.save({
+    kind: "google-cloud",
+    credentials: { kind: "replace", apiKey: VISION_KEY },
+  });
+  if (!first.ok || first.binding.kind !== "google-cloud") throw new Error("expected a binding");
+  const before = mem.backing[OCR_STORAGE_KEY];
+
+  mem.failSetOnCall(mem.getSetCalls() + 1);
+  const result = await store.save({
+    kind: "google-cloud",
+    credentials: { kind: "replace", apiKey: NEXT_VISION_KEY },
+  });
+
+  expect(result.ok).toBe(false);
+  if (result.ok) throw new Error("expected a rejected save");
+  expect(result.key).toBe("storage_write_failed");
+  expect(mem.backing[OCR_STORAGE_KEY]).toBe(before);
+  expect(await store.readGoogleCloudCredential(first.binding.credentialRef)).toBe(VISION_KEY);
+  expect(JSON.stringify(mem.backing)).not.toContain(NEXT_VISION_KEY);
+});
+
+test("ocr store: a failed Vision record write drops the new key and keeps the old one", async () => {
+  const mem = createMemoryStorage();
+  const store = createOcrSettingsStore(mem.storage);
+  const first = await store.save({
+    kind: "google-cloud",
+    credentials: { kind: "replace", apiKey: VISION_KEY },
+  });
+  if (!first.ok || first.binding.kind !== "google-cloud") throw new Error("expected a binding");
+  const before = mem.backing[OCR_STORAGE_KEY];
+
+  mem.failSetOnCall(mem.getSetCalls() + 2);
+  const result = await store.save({
+    kind: "google-cloud",
+    credentials: { kind: "replace", apiKey: NEXT_VISION_KEY },
+  });
+
+  expect(result.ok).toBe(false);
+  if (result.ok) throw new Error("expected a rejected save");
+  expect(result.key).toBe("storage_write_failed");
+  expect(store.savedGoogleCloudBinding()).toEqual(first.binding);
+  expect(mem.backing[OCR_STORAGE_KEY]).toBe(before);
+  expect(await store.readGoogleCloudCredential(first.binding.credentialRef)).toBe(VISION_KEY);
+  expect(JSON.stringify(mem.backing)).not.toContain(NEXT_VISION_KEY);
+});
+
+test("ocr store: disabling Google Cloud leaves its key, and reorder persists", async () => {
+  const mem = createMemoryStorage();
+  const store = createOcrSettingsStore(mem.storage);
+  await store.addChannel("ai");
+  const saved = await store.save({
+    kind: "google-cloud",
+    credentials: { kind: "replace", apiKey: VISION_KEY },
+  });
+  if (!saved.ok || saved.binding.kind !== "google-cloud") throw new Error("expected a binding");
+  expect(store.channelOrder()).toEqual(["ai", "google-cloud"]);
+
+  expect(await store.setEnabled("google-cloud", false)).toEqual({ ok: true });
+  expect(store.isEnabled("google-cloud")).toBe(false);
+  expect(await store.readGoogleCloudCredential(saved.binding.credentialRef)).toBe(VISION_KEY);
+
+  expect(await store.moveChannelTo("google-cloud", 0)).toEqual({ ok: true });
+  expect(store.channelOrder()).toEqual(["google-cloud", "ai"]);
+
+  const reloaded = createOcrSettingsStore(mem.storage);
+  await reloaded.load();
+  expect(reloaded.channelOrder()).toEqual(["google-cloud", "ai"]);
+  expect(reloaded.isEnabled("google-cloud")).toBe(false);
+  expect(reloaded.savedGoogleCloudBinding()).toEqual(saved.binding);
+  expect(await reloaded.readGoogleCloudCredential(saved.binding.credentialRef)).toBe(VISION_KEY);
+});
+
+test("ocr store: rejects a blank or spaced Vision key and requires a readable key to keep it", async () => {
+  const mem = createMemoryStorage();
+  const store = createOcrSettingsStore(mem.storage);
+
+  for (const apiKey of ["", "   ", "vision key", "vision\nkey"]) {
+    const rejected = await store.save({
+      kind: "google-cloud",
+      credentials: { kind: "replace", apiKey },
+    });
+    expect(rejected.ok).toBe(false);
+    if (rejected.ok) throw new Error("expected a rejected save");
+    expect(rejected.key).toBe("google_cloud_key_required");
+  }
+  expect(mem.getSetCalls()).toBe(0);
+  expect(store.savedGoogleCloudBinding()).toBeNull();
+
+  const saved = await store.save({
+    kind: "google-cloud",
+    credentials: { kind: "replace", apiKey: "AIza-synthetic" },
+  });
+  if (!saved.ok || saved.binding.kind !== "google-cloud") throw new Error("expected a binding");
+  mem.backing[googleCloudCredentialStorageKey(saved.binding.credentialRef)] = JSON.stringify({
+    apiKey: "has space",
+  });
+  const kept = await store.save({ kind: "google-cloud", credentials: { kind: "keep" } });
+  expect(kept.ok).toBe(false);
+  if (kept.ok) throw new Error("expected a rejected save");
+  expect(kept.key).toBe("google_cloud_key_required");
+  expect(store.savedGoogleCloudBinding()).toEqual(saved.binding);
+});
+
+test("ocr store: removing Google Cloud deletes its key and a cleanup warning has no secret", async () => {
+  const mem = createMemoryStorage();
+  const store = createOcrSettingsStore(mem.storage);
+  const saved = await store.save({
+    kind: "google-cloud",
+    credentials: { kind: "replace", apiKey: VISION_KEY },
+  });
+  if (!saved.ok || saved.binding.kind !== "google-cloud") throw new Error("expected a binding");
+
+  expect((await store.removeChannel("google-cloud")).ok).toBe(true);
+  expect(store.channelOrder()).toEqual([]);
+  expect(store.savedGoogleCloudBinding()).toBeNull();
+  expect(mem.backing[googleCloudCredentialStorageKey(saved.binding.credentialRef)]).toBeUndefined();
+
+  const again = await store.save({
+    kind: "google-cloud",
+    credentials: { kind: "replace", apiKey: VISION_KEY },
+  });
+  if (!again.ok || again.binding.kind !== "google-cloud") throw new Error("expected a binding");
+  mem.setRemoveError(new Error("could not delete " + VISION_KEY));
+  const warnings: string[] = [];
+  const originalWarn = console.warn;
+  console.warn = (...args: unknown[]) => {
+    warnings.push(args.map((part) => String(part)).join(" "));
+  };
+  try {
+    const replaced = await store.save({
+      kind: "google-cloud",
+      credentials: { kind: "replace", apiKey: NEXT_VISION_KEY },
+    });
+    expect(replaced.ok).toBe(true);
+  } finally {
+    console.warn = originalWarn;
+  }
+  const warningText = warnings.join(" ");
+  expect(warningText.length).toBeGreaterThan(0);
+  expect(warningText).not.toContain(VISION_KEY);
+  expect(warningText).not.toContain(NEXT_VISION_KEY);
+  expect(warningText).not.toContain("could not delete");
 });

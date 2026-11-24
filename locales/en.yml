@@ -121,6 +121,8 @@ settings:
       backup: Backup
     ai: LLM
     baidu: Baidu OCR
+    google-cloud: Google Cloud Vision
+    configured: Configured
     model: Model
     mode: Mode
     apiKey: API Key
@@ -144,6 +146,7 @@ settings:
       modelIdBlank: Choose a model for OCR.
       baiduKeysRequired: Enter both the API Key and the Secret Key.
       baiduOperationInvalid: Choose a Baidu OCR mode.
+      googleCloudKeyRequired: Enter a Google Cloud Vision API key.
       channelUnconfigured: Configure this channel before enabling it.
   tts:
     channel: Google Cloud TTS

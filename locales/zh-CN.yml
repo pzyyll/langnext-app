@@ -121,6 +121,8 @@ settings:
       backup: 备用
     ai: 多模态模型
     baidu: 百度 OCR
+    google-cloud: Google Cloud Vision
+    configured: 已配置
     model: 模型
     mode: 模式
     apiKey: API Key
@@ -144,6 +146,7 @@ settings:
       modelIdBlank: 请为 OCR 选择模型。
       baiduKeysRequired: 请同时填写 API Key 和 Secret Key。
       baiduOperationInvalid: 请选择百度 OCR 模式。
+      googleCloudKeyRequired: 请填写 Google Cloud Vision API Key。
       channelUnconfigured: 请先配置此渠道再启用。
   tts:
     channel: Google Cloud TTS

@@ -192,6 +192,26 @@ async function recognizeWithBaidu(
   return mapBaiduResult(result);
 }
 
+function channelReadiness(binding: OcrServiceBinding): Promise<OcrReadiness> {
+  if (binding.kind === "baidu") return baiduReadiness(binding);
+  if (binding.kind === "ai") {
+    return resolveAiOcr(binding).then((resolved) =>
+      resolved.ok ? { ready: true, reason: null } : { ready: false, reason: resolved.reason },
+    );
+  }
+  return Promise.resolve({ ready: false, reason: t("ocr.failure.unconfigured") });
+}
+
+async function recognizeChannel(
+  binding: OcrServiceBinding,
+  png: Uint8Array,
+  options: RecognizeScreenshotOptions,
+): Promise<OcrRecognitionOutcome> {
+  if (binding.kind === "baidu") return recognizeWithBaidu(binding, png, options);
+  if (binding.kind === "ai") return recognizeWithAi(binding, png, options);
+  return { status: "unavailable", reason: t("ocr.failure.unconfigured") };
+}
+
 async function recognizeWithAi(
   binding: OcrAiBinding,
   png: Uint8Array,
@@ -254,12 +274,7 @@ export async function checkOcrReadiness(
   }
   let firstReason: string | null = null;
   for (const binding of bindings) {
-    const readiness =
-      binding.kind === "baidu"
-        ? await baiduReadiness(binding)
-        : await resolveAiOcr(binding).then((resolved) =>
-            resolved.ok ? { ready: true, reason: null } : { ready: false, reason: resolved.reason },
-          );
+    const readiness = await channelReadiness(binding);
     if (readiness.ready) return { ready: true, reason: null };
     firstReason ??= readiness.reason;
   }
@@ -290,10 +305,7 @@ export async function recognizeScreenshot(
   for (const binding of bindings) {
     if (options.signal?.aborted) return { status: "cancelled" };
 
-    const outcome =
-      binding.kind === "baidu"
-        ? await recognizeWithBaidu(binding, png, options)
-        : await recognizeWithAi(binding, png, options);
+    const outcome = await recognizeChannel(binding, png, options);
 
     if (
       outcome.status === "recognized" ||
