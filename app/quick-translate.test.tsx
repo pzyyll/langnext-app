@@ -1,4 +1,4 @@
-import type { HistoryResult, HistorySnapshot } from "my-translator/native";
+import type { HistoryResult, HistorySnapshot } from "langnext/native";
 import type { WindowRef, WindowState } from "nsh/desktop";
 import { t } from "nsh/i18n";
 import { expect, open, test } from "nsh/test";
@@ -115,7 +115,7 @@ test("quick history: group multi-card translations and restore with no request o
       "settings.language": "en",
     },
     modules: {
-      "my-translator/native": {
+      "langnext/native": {
         "TranslationHistoryNative.record": (
           id: string,
           sourceText: string | null,
@@ -205,7 +205,7 @@ test("quick history: discard a late translation when a saved action replaces the
       "settings.language": "en",
     },
     modules: {
-      "my-translator/native": {
+      "langnext/native": {
         "TranslationHistoryNative.record": () => {
           writes += 1;
         },

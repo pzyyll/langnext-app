@@ -1,4 +1,4 @@
-use my_translator::screen_capture::{CaptureCrop, DesktopPoint, MonitorRect, resolve_capture_rect};
+use langnext::screen_capture::{CaptureCrop, DesktopPoint, MonitorRect, resolve_capture_rect};
 
 /// 1920 × 1080 primary display at the virtual desktop origin.
 const PRIMARY: MonitorRect = MonitorRect::new(0, 0, 1920, 1080);

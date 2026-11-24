@@ -180,7 +180,7 @@ mod tests {
             let ordinal = NEXT.fetch_add(1, Ordering::Relaxed);
             let stamp = SystemTime::now().duration_since(UNIX_EPOCH).unwrap();
             Self(std::env::temp_dir().join(format!(
-                "my-translator-history-{}-{}-{ordinal}",
+                "langnext-history-{}-{}-{ordinal}",
                 std::process::id(),
                 stamp.as_nanos()
             )))

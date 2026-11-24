@@ -965,7 +965,7 @@ fn platform_start_raw_input(
         .name("quick-translate-raw-input".into())
         .spawn(move || {
             let class_id = NEXT_RAW_INPUT_CLASS_ID.fetch_add(1, Ordering::Relaxed);
-            let class_name: Vec<u16> = format!("MyTranslatorRawInput_{class_id}\0")
+            let class_name: Vec<u16> = format!("LangnextRawInput_{class_id}\0")
                 .encode_utf16()
                 .collect();
 

@@ -36,10 +36,10 @@ const EM_SETSEL: u32 = 177;
 
 const FIXTURE_TEXT: &str = "alpha SELECTED beta";
 const SELECTED_TEXT: &str = "SELECTED";
-const CLASS_NAME: &str = "MyTranslatorSelectionFixture";
-const COVER_CLASS_NAME: &str = "MyTranslatorSelectionCover";
-const COPY_CLASS_NAME: &str = "MyTranslatorCopyOnlyFixture";
-const COPY_PROBE_CLASS_NAME: &str = "MyTranslatorCopyProbeFixture";
+const CLASS_NAME: &str = "LangnextSelectionFixture";
+const COVER_CLASS_NAME: &str = "LangnextSelectionCover";
+const COPY_CLASS_NAME: &str = "LangnextCopyOnlyFixture";
+const COPY_PROBE_CLASS_NAME: &str = "LangnextCopyProbeFixture";
 const COPY_PROBE_WAITING: isize = 1;
 const COPY_PROBE_SEEN: isize = 2;
 

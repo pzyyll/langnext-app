@@ -10,7 +10,7 @@ pub mod selection_text;
 mod translation_history;
 
 /// Registers the application's native exports with NSH.
-#[native_module("my-translator/native")]
+#[native_module("langnext/native")]
 fn native(registry: &mut Registry) {
     registry.module::<app_paths::AppPathsNative>();
     registry.module::<quick_translate::QuickTranslateNative>();

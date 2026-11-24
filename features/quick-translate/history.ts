@@ -1,4 +1,4 @@
-import { TranslationHistoryNative, type HistoryResult } from "my-translator/native";
+import { TranslationHistoryNative, type HistoryResult } from "langnext/native";
 import { createLogger } from "../../services/log";
 
 const log = createLogger("quick-translate/history");

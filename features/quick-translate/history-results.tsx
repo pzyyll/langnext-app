@@ -1,4 +1,4 @@
-import type { HistoryResult, HistorySnapshot } from "my-translator/native";
+import type { HistoryResult, HistorySnapshot } from "langnext/native";
 import { Clipboard, signal, Text, View } from "nsh";
 import { t } from "nsh/i18n";
 import { Button } from "../../components/ui/button";

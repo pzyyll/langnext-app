@@ -238,7 +238,7 @@ test("logs: opens the logs folder and reports a folder that cannot open", async 
   const opened = await open(APP_ENTRY, {
     ...viewport,
     storage: { "settings.language": "en" },
-    modules: { "my-translator/native": { "AppPathsNative.openLogsFolder": () => true } },
+    modules: { "langnext/native": { "AppPathsNative.openLogsFolder": () => true } },
   });
   await opened.press("id:nav-settings");
   await opened.waitFor("id:settings-open-logs-card");
@@ -248,7 +248,7 @@ test("logs: opens the logs folder and reports a folder that cannot open", async 
   const failed = await open(APP_ENTRY, {
     ...viewport,
     storage: { "settings.language": "en" },
-    modules: { "my-translator/native": { "AppPathsNative.openLogsFolder": () => false } },
+    modules: { "langnext/native": { "AppPathsNative.openLogsFolder": () => false } },
   });
   await failed.press("id:nav-settings");
   await failed.press("id:settings-open-logs");
@@ -259,7 +259,7 @@ test("logs: opens the logs folder and reports a folder that cannot open", async 
     ...viewport,
     width: 720,
     storage: { "settings.language": "en" },
-    modules: { "my-translator/native": { "AppPathsNative.openLogsFolder": () => true } },
+    modules: { "langnext/native": { "AppPathsNative.openLogsFolder": () => true } },
   });
   await narrow.press("id:nav-settings");
   expect(narrow.shows("id:settings-open-logs")).toBe(true);

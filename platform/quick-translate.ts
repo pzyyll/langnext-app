@@ -1,4 +1,4 @@
-import type { CursorAnchor, DoubleCopyEvent, PointerPress } from "my-translator/native";
+import type { CursorAnchor, DoubleCopyEvent, PointerPress } from "langnext/native";
 import type { Bounds, Point, Size } from "nsh";
 import type { Display, DisplayId, WindowRef, WindowState } from "nsh/desktop";
 

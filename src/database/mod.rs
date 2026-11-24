@@ -5,7 +5,7 @@ use std::path::Path;
 use nsh_core::prelude::{blocking, data_dir};
 use rusqlite::{Connection, TransactionBehavior};
 
-const DATABASE_FILE: &str = "my-translator.sqlite3";
+const DATABASE_FILE: &str = "langnext.sqlite3";
 const USER_VERSION_PRAGMA: &str = "user_version";
 const MIGRATIONS: &[&str] = &[include_str!("migrations/0001_translation_history.sql")];
 

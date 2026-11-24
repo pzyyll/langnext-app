@@ -1,4 +1,4 @@
-import { QuickTranslateNative } from "my-translator/native";
+import { QuickTranslateNative } from "langnext/native";
 import type { CursorAnchorPoint, DoubleCopyBinding, PointerPressBinding } from "./quick-translate";
 
 /** Reads the physical cursor monitor anchor on Windows; returns null elsewhere or on query failure. */

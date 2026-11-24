@@ -1,6 +1,6 @@
 {
   "name": "Langnext",
-  "id": "com.dev.mytranslator",
+  "id": "com.dev.langnext",
   "icon": "assets/logos/icon.png",
   "singleInstance": true,
   "version": "0.1.0",

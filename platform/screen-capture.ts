@@ -1,5 +1,5 @@
 import { platform } from "nsh";
-import { ScreenCaptureNative } from "my-translator/native";
+import { ScreenCaptureNative } from "langnext/native";
 
 /** Instruction line and theme colors the native selection overlay draws. */
 export interface ScreenCaptureOverlayConfig {

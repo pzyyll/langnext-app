@@ -1,4 +1,4 @@
-import type { HistoryResult, HistorySnapshot } from "my-translator/native";
+import type { HistoryResult, HistorySnapshot } from "langnext/native";
 import { batch, cleanup, Clipboard, effect, signal, untracked, type Accessor } from "nsh";
 import { t } from "nsh/i18n";
 import type { SelectItem } from "../../components/ui/select";

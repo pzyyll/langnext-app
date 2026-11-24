@@ -1,5 +1,5 @@
 import { platform } from "nsh";
-import { SelectionTextNative } from "my-translator/native";
+import { SelectionTextNative } from "langnext/native";
 
 /** How one on-demand selection read ended. Only `selected` carries text. */
 export type SelectionTextRead =

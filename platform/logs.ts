@@ -1,4 +1,4 @@
-import { AppPathsNative } from "my-translator/native";
+import { AppPathsNative } from "langnext/native";
 import { createLogger } from "../services/log";
 
 const log = createLogger("platform/logs");

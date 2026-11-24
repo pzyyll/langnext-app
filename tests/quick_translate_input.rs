@@ -1,7 +1,7 @@
 use std::cell::Cell;
 use std::time::{Duration, Instant};
 
-use my_translator::quick_translate::{
+use langnext::quick_translate::{
     DoubleCopyDecision, DoubleCopyRecognizer, Modifiers, VK_C, settle_clipboard_copy,
 };
 
