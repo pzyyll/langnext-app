@@ -3,7 +3,10 @@ import type { WindowRef, WindowState } from "nsh/desktop";
 import { t } from "nsh/i18n";
 import { expect, open, test } from "nsh/test";
 import { makeChannel, makeModel, makeSeedStorage } from "../features/models/__tests__/fixtures";
-import { baiduCredentialStorageKey } from "../features/ocr/settings";
+import {
+  baiduCredentialStorageKey,
+  googleCloudCredentialStorageKey,
+} from "../features/ocr/settings";
 import { PRESETS_STORAGE_KEY } from "../features/presets/store";
 import type { TranslationPreset } from "../features/presets/types";
 import { QUICK_TRANSLATE_PREFERENCES_KEY } from "../features/quick-translate/preferences";
@@ -2227,6 +2230,130 @@ test("quick ocr: falls back from primary Baidu quota failure to backup AI and tr
     "https://api.openai.com/v1/chat/completions",
   ]);
   expect(app.texts()).toContain("翻译结果");
+});
+
+const GOOGLE_REF = "qt-google-ref";
+const GOOGLE_KEY = "synthetic-vision-key";
+const GOOGLE_ANNOTATE = "https://vision.googleapis.com/v1/images:annotate";
+
+function googleOcrSeed(extra: Record<string, string> = {}) {
+  return ocrSeed({
+    [OCR_STORAGE_KEY]: JSON.stringify({
+      version: 4,
+      order: ["google-cloud"],
+      enabled: { ai: false, baidu: false, "google-cloud": true },
+      ai: null,
+      baidu: null,
+      "google-cloud": { credentialRef: GOOGLE_REF },
+    }),
+    [googleCloudCredentialStorageKey(GOOGLE_REF)]: JSON.stringify({ apiKey: GOOGLE_KEY }),
+    ...extra,
+  });
+}
+
+function googleOcrRoutes(options: { text?: string; delay?: number; fail?: boolean } = {}) {
+  const body = options.fail
+    ? { error: { code: 500, message: "SENTINEL-SECRET" } }
+    : { responses: [{ fullTextAnnotation: { text: options.text ?? OCR_TEXT } }] };
+  return {
+    ["POST " + GOOGLE_ANNOTATE]: {
+      status: options.fail ? 500 : 200,
+      body,
+      ...(options.delay === undefined ? {} : { delay: options.delay }),
+    },
+    "POST https://api.openai.com/v1/chat/completions": {
+      status: 200,
+      body: { choices: [{ message: { content: "翻译结果" } }] },
+    },
+  };
+}
+
+test("quick ocr: Vision replaces the draft and translates the text once", async () => {
+  const app = await open(HARNESS_ENTRY, {
+    ...viewport,
+    storage: googleOcrSeed(),
+    network: googleOcrRoutes(),
+  });
+
+  await app.press("id:harness-tray-quick-translate");
+  await app.waitFor("id:quick-translate-source");
+  await app.press("id:quick-translate-pin");
+  await app.type("id:quick-translate-source", "old draft");
+
+  await app.press(OCR_BUTTON);
+  await app.waitUntil(() => app.value("id:quick-translate-source") === OCR_TEXT);
+  await app.waitUntil(() =>
+    app.requests().some((request) => request.url.includes("api.openai.com")),
+  );
+
+  const uploads = app.requests().filter((request) => request.url === GOOGLE_ANNOTATE);
+  expect(uploads).toHaveLength(1);
+  expect(uploads[0]!.url).not.toContain(GOOGLE_KEY);
+  expect(uploads[0]!.headers?.["x-goog-api-key"]).toBe(GOOGLE_KEY);
+  expect(JSON.parse(uploads[0]!.body!).requests[0].features).toEqual([
+    { type: "DOCUMENT_TEXT_DETECTION" },
+  ]);
+  const translations = app.requests().filter((request) => request.url.includes("api.openai.com"));
+  expect(translations).toHaveLength(1);
+  const translation = translations[0]!.body ?? "";
+  expect(JSON.parse(translation).messages[1].content).toBe(OCR_TEXT);
+  expect(translation.includes(GOOGLE_KEY)).toBe(false);
+  expect(app.texts().join(" ").includes(GOOGLE_KEY)).toBe(false);
+  expect(app.texts()).toContain("翻译结果");
+});
+
+test("quick ocr: Vision cancellation, a late result, and a service failure keep the draft", async () => {
+  const cancelled = await open(HARNESS_ENTRY, {
+    ...viewport,
+    storage: googleOcrSeed({ [HARNESS_OCR_CAPTURE_KEY]: "cancel" }),
+    network: googleOcrRoutes(),
+  });
+  await cancelled.press("id:harness-tray-quick-translate");
+  await cancelled.waitFor("id:quick-translate-source");
+  await cancelled.type("id:quick-translate-source", "kept draft");
+  await cancelled.press(OCR_BUTTON);
+  await cancelled.waitUntil(() => cancelled.texts().some((line) => line.includes("ocrCap=1")));
+  await cancelled.waitUntil(() => cancelled.window("quick-translate").state()?.visible === true);
+  expect(cancelled.value("id:quick-translate-source")).toBe("kept draft");
+  expect(cancelled.requests()).toHaveLength(0);
+
+  const late = await open(HARNESS_ENTRY, {
+    ...viewport,
+    storage: googleOcrSeed(),
+    network: googleOcrRoutes({ delay: 400 }),
+  });
+  await late.press("id:harness-tray-quick-translate");
+  await late.waitFor("id:quick-translate-source");
+  await late.press(OCR_BUTTON);
+  await late.waitUntil(() => late.requests().some((request) => request.url === GOOGLE_ANNOTATE));
+  expect(late.enabled("id:quick-translate-source")).toBe(false);
+  await late.window("quick-translate").pressClose();
+  await late.waitUntil(() => late.window("quick-translate").state()?.visible !== true);
+  await late.keyboard.press(DEFAULT_QUICK_TRANSLATE_SHORTCUT);
+  await late.waitFor("id:quick-translate-source");
+  await late.wait(500);
+  expect(late.value("id:quick-translate-source")).toBe("");
+  expect(late.requests().filter((request) => request.url.includes("api.openai.com"))).toHaveLength(
+    0,
+  );
+  expect(late.texts().join("\n")).not.toContain(OCR_TEXT);
+
+  const failed = await open(HARNESS_ENTRY, {
+    ...viewport,
+    storage: googleOcrSeed(),
+    network: googleOcrRoutes({ fail: true }),
+  });
+  await failed.press("id:harness-tray-quick-translate");
+  await failed.waitFor("id:quick-translate-source");
+  await failed.type("id:quick-translate-source", "kept draft");
+  await failed.press(OCR_BUTTON);
+  await failed.waitFor("id:quick-translate-source-toolbar >> id:quick-translate-ocr-status");
+  expect(failed.texts()).toContain(t("ocr.failure.googleFailed"));
+  expect(failed.texts().some((line) => line.includes("SENTINEL-SECRET"))).toBe(false);
+  expect(failed.value("id:quick-translate-source")).toBe("kept draft");
+  expect(
+    failed.requests().filter((request) => request.url.includes("api.openai.com")),
+  ).toHaveLength(0);
 });
 
 const QUICK_TTS_URL = "POST " + GOOGLE_CLOUD_TTS_URL;
