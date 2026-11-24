@@ -3,6 +3,7 @@
 use nsh_core::prelude::*;
 
 pub mod app_paths;
+mod database;
 pub mod quick_translate;
 pub mod screen_capture;
 pub mod selection_text;
