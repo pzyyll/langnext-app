@@ -51,15 +51,20 @@ aligned. pnpm provides development tools only; it is not the app runtime.
 ## Logging
 
 App code logs through `createLogger` in `services/log.ts`; native code logs through the
-`log` crate. NSH writes every line to the app's rolling log and to the platform's log.
+`log` crate. A packaged build writes the kept lines to the app's rolling log and to the
+platform's log; a development host prints them to the terminal.
 
 - **File**: `logs/app.log` in the app data directory
   (`%APPDATA%\com.dev.langnext\logs\app.log` on Windows). It rolls over at 5 MiB and
   keeps three older files, `app.1.log` to `app.3.log`.
-- **Levels**: `warn` and `error` always reach the file, `info` from the app reaches it in
-  every build, and `debug` needs `RUST_LOG`. Raise it with `RUST_LOG=debug mise run dev`,
-  or limit it with `RUST_LOG=langnext=debug`.
-- **Development**: `nsh run` (`mise run dev`) also prints every kept line to the terminal.
+- **Levels**: `Settings → General → Log level` sets the lowest level the app's TypeScript
+  log calls write: `Error`, `Warning` or `Info` (`Warning` by default). `debug` lines stay
+  outside that setting: NSH keeps them only with `RUST_LOG=debug`, in a packaged build.
+- **Native lines**: Rust lines follow NSH's own filter, not the setting: `RUST_LOG` where
+  NSH reads it, else `warn` and `error` in a packaged build.
+- **Development**: `nsh run` (`mise run dev`) prints the kept lines to the terminal. The
+  Windows development host caps its log at `info` and does not read `RUST_LOG`, so `debug`
+  lines do not appear there.
 - **Path**: `logFile()` (or `process.logFile`) returns the file's path, `null` where the
   lines go to the platform's log only. `Settings → General → Logs → Open folder` opens
   the folder that holds it.

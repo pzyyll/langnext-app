@@ -68,6 +68,12 @@ settings:
   silentLaunch:
     label: Silent launch
     error: Could not save silent launch. Try again.
+  logLevel:
+    title: Log level
+    error: Error
+    warning: Warning
+    info: Info
+    saveError: Could not save the log level. Your choice will apply until you close the app.
   logs:
     label: Logs
     open: Open folder

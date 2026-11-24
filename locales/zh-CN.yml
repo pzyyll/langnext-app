@@ -68,6 +68,12 @@ settings:
   silentLaunch:
     label: 静默启动
     error: 无法保存静默启动设置，请重试。
+  logLevel:
+    title: 日志等级
+    error: 错误
+    warning: 警告
+    info: 信息
+    saveError: 无法保存日志等级。本次选择将在关闭应用前生效。
   logs:
     label: 日志
     open: 打开文件夹

@@ -16,6 +16,7 @@ import { googleSampleText } from "../tts/google-samples";
 import { GOOGLE_VOICE_FAMILIES, GOOGLE_VOICE_PRICING } from "../tts/google-voices";
 import { TTS_STORAGE_KEY, ttsCredentialStorageKey } from "../tts/settings";
 import { googleFamilyPricingLines } from "./google-tts-fields";
+import { LOG_LEVEL_STORAGE_KEY } from "./log-level";
 import { SELECTION_COPY_STORAGE_KEY } from "./selection-copy";
 import { SILENT_LAUNCH_STORAGE_KEY } from "./silent-launch";
 
@@ -274,6 +275,55 @@ test("logs: opens the logs folder and reports a folder that cannot open", async 
   });
   await mac.press("id:nav-settings");
   expect(mac.shows("id:settings-open-logs-card")).toBe(false);
+});
+
+test("log level: warns by default and keeps the level the user chooses", async () => {
+  const app = await open(APP_ENTRY, {
+    ...viewport,
+    storage: { "settings.language": "en" },
+  });
+  await app.press("id:nav-settings");
+  await app.waitFor("id:settings-log-level-card");
+  expect(app.storage()[LOG_LEVEL_STORAGE_KEY]).toBeUndefined();
+  expect(app.texts()).toContain("Log level");
+  expect(app.texts()).toContain("Warning");
+
+  await app.press("id:log-level-info");
+  await app.waitUntil(() => app.storage()[LOG_LEVEL_STORAGE_KEY] === "info");
+
+  const reopened = await open(APP_ENTRY, { ...viewport, storage: app.storage() });
+  await reopened.press("id:nav-settings");
+  await reopened.waitFor("id:settings-log-level-card");
+  await reopened.press("id:log-level-error");
+  await reopened.waitUntil(() => reopened.storage()[LOG_LEVEL_STORAGE_KEY] === "error");
+});
+
+test("log level: a failed write keeps the chosen level and asks to try again", async () => {
+  const saved: Record<string, string> = { "settings.language": "en" };
+  let fail = true;
+  const app = await open(APP_ENTRY, {
+    ...viewport,
+    modules: {
+      nsh: {
+        "Storage.getItem": async (key: string) => saved[key] ?? null,
+        "Storage.setItem": async (key: string, value: string) => {
+          if (key === LOG_LEVEL_STORAGE_KEY && fail) throw new Error("Storage unavailable");
+          saved[key] = value;
+        },
+      },
+    },
+  });
+  await app.press("id:nav-settings");
+  await app.press("id:log-level-info");
+  await app.waitFor("id:settings-log-level-error");
+  expect(app.texts()).toContain(
+    "Could not save the log level. Your choice will apply until you close the app.",
+  );
+
+  fail = false;
+  await app.press("id:log-level-warn");
+  await app.waitUntil(() => saved[LOG_LEVEL_STORAGE_KEY] === "warn");
+  expect(app.shows("id:settings-log-level-error")).toBe(false);
 });
 
 test("settings ui: resizes the settings split divider and persists width independently", async () => {

@@ -1,5 +1,6 @@
-import { expect, test } from "nsh/test";
+import { beforeEach, expect, test } from "nsh/test";
 import { createHttpLog, HTTP_LOG_PAYLOAD_LIMIT } from "./http-log";
+import { setLogLevel } from "./log";
 
 type Level = "debug" | "info" | "warn" | "error";
 
@@ -23,6 +24,8 @@ function capture(level: Level): Captured {
     },
   };
 }
+
+beforeEach(() => setLogLevel("info"));
 
 test("http-log: the request line keeps the endpoint and its body waits for debug", () => {
   const httpLog = createHttpLog("ocr/baidu");

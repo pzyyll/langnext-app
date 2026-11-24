@@ -13,6 +13,7 @@ import { presetsStore } from "./features/presets/store";
 import { loadQuickTranslatePreferences } from "./features/quick-translate/preferences";
 import { loadAppearance } from "./features/settings/appearance";
 import { loadLanguage } from "./features/settings/language";
+import { loadLogLevel } from "./features/settings/log-level";
 import { loadSelectionCopy } from "./features/settings/selection-copy";
 import { loadSilentLaunch } from "./features/settings/silent-launch";
 import { loadTransparency } from "./features/settings/transparency";
@@ -21,6 +22,7 @@ import { createLogger, logFile } from "./services/log";
 const log = createLogger("app");
 
 async function startApp() {
+  await loadLogLevel();
   log.info(`Started on ${platform.os}; logs go to ${logFile() ?? "the platform's log"}`);
   initializeAiModules();
   try {

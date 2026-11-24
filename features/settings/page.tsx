@@ -10,12 +10,14 @@ import { Icon } from "../../components/ui/icon";
 import { Switch } from "../../components/ui/switch";
 import { buildTooltip } from "../../components/ui/tooltip";
 import { canOpenLogsFolder, openLogsFolder } from "../../platform/logs";
+import { logLevel, type LogLevel } from "../../services/log";
 import { languageDetectionStore, type LanguageDetectorKind } from "../language-detection/settings";
 import { ocrSettingsStore, type OcrServiceKind } from "../ocr/settings";
 import { ttsSettingsStore } from "../tts/settings";
 import { appearance, appearanceError, selectAppearance, type Appearance } from "./appearance";
 import { language, languageError, selectLanguage, type LanguagePreference } from "./language";
 import { LanguageDetectionSection } from "./language-detection-section";
+import { logLevelError, selectLogLevel } from "./log-level";
 import { OcrSection } from "./ocr-section";
 import { ShortcutsSection } from "./shortcuts-section";
 import { TtsSection, type TtsChannelId } from "./tts-section";
@@ -123,6 +125,17 @@ function LanguageOption(props: { value: LanguagePreference; label: string }) {
   );
 }
 
+function LogLevelOption(props: { value: LogLevel; label: string }) {
+  return (
+    <ChoiceOption
+      testID={`log-level-${props.value}`}
+      checked={logLevel() === props.value}
+      label={props.label}
+      onSelect={() => void selectLogLevel(props.value)}
+    />
+  );
+}
+
 function GeneralSection(props: { compact: boolean; os: string }) {
   const logsError = signal(false);
   const openLogs = async () => logsError.set(!(await openLogsFolder()));
@@ -157,6 +170,20 @@ function GeneralSection(props: { compact: boolean; os: string }) {
             class="px-3 pb-1 text-sm text-destructive"
           >
             {silentLaunchError()}
+          </Text>
+        </If>
+      </Card>
+
+      <Card testID="settings-log-level-card" class={props.compact ? "gap-4 p-4" : "gap-5 p-6"}>
+        <SectionHeading title={t("settings.logLevel.title")} />
+        <RadioGroup accessibilityLabel={t("settings.logLevel.title")} class="flex-row gap-3">
+          <LogLevelOption value="error" label={t("settings.logLevel.error")} />
+          <LogLevelOption value="warn" label={t("settings.logLevel.warning")} />
+          <LogLevelOption value="info" label={t("settings.logLevel.info")} />
+        </RadioGroup>
+        <If when={logLevelError() !== null}>
+          <Text testID="settings-log-level-error" role="alert" class="text-sm text-destructive">
+            {logLevelError()}
           </Text>
         </If>
       </Card>

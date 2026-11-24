@@ -1,5 +1,5 @@
 import { expect, test } from "nsh/test";
-import { createLogger } from "./log";
+import { createLogger, setLogLevel } from "./log";
 
 type Level = "debug" | "info" | "warn" | "error";
 
@@ -24,16 +24,23 @@ function capture(level: Level): Captured {
   };
 }
 
-test("log: every level writes through its own console method with the scope prefix", () => {
+test("log: the level keeps its line and louder ones, and debug stays with RUST_LOG", () => {
   const logger = createLogger("models/store");
   const levels: Level[] = ["debug", "info", "warn", "error"];
   const captured = levels.map(capture);
   try {
     logger.debug("queued", 1);
-    logger.info("loaded");
+    logger.info("hidden");
     logger.warn("kept the defaults");
     logger.error("gave up");
+
+    setLogLevel("info");
+    logger.info("loaded");
+
+    setLogLevel("error");
+    logger.warn("also hidden");
   } finally {
+    setLogLevel("warn");
     for (const entry of captured) entry.restore();
   }
 

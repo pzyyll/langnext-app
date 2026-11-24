@@ -1,5 +1,6 @@
-import { expect, test } from "nsh/test";
+import { beforeEach, expect, test } from "nsh/test";
 import { createHttpFetch, type HttpRequestInit } from "./http";
+import { setLogLevel } from "./log";
 
 type Level = "debug" | "info" | "warn" | "error";
 
@@ -34,6 +35,8 @@ function call(body?: string, signal = new AbortController().signal): HttpRequest
     signal,
   };
 }
+
+beforeEach(() => setLogLevel("info"));
 
 test("http transport: logs the request, the status, and the body the caller reads", async () => {
   const info = capture("info");
