@@ -129,6 +129,7 @@ settings:
     secretKey: Secret Key
     savedKeys: "•••••••••"
     keysUnreadable: The saved Baidu keys could not be read. Enter both keys.
+    googleKeyUnreadable: The saved Google Cloud Vision key could not be read. Enter it again.
     operation:
       general_basic: General Basic
       accurate_basic: Accurate Basic

@@ -6,7 +6,11 @@ import {
   LANGUAGE_DETECTION_STORAGE_KEY,
 } from "../language-detection/settings";
 import { makeChannel, makeModel, makeSeedStorage } from "../models/__tests__/fixtures";
-import { baiduCredentialStorageKey, OCR_STORAGE_KEY } from "../ocr/settings";
+import {
+  baiduCredentialStorageKey,
+  googleCloudCredentialStorageKey,
+  OCR_STORAGE_KEY,
+} from "../ocr/settings";
 import { GOOGLE_CLOUD_TTS_URL, TTS_SAMPLE_TEXT } from "../tts/google-cloud";
 import {
   DEFAULT_GOOGLE_VOICE_PREFERENCES,
@@ -1258,9 +1262,10 @@ test("ocr settings: starts empty, adds AI from the empty state, and configures i
   expect(JSON.parse(app.storage()[OCR_STORAGE_KEY]!)).toEqual({
     version: 4,
     order: ["ai"],
-    enabled: { ai: true, baidu: false },
+    enabled: { ai: true, baidu: false, "google-cloud": false },
     ai: { modelId: "m-vision" },
     baidu: null,
+    "google-cloud": null,
   });
   expect(app.requests()).toHaveLength(0);
 
@@ -1567,13 +1572,13 @@ test("ocr settings: saves Baidu keys on detail page and restores a blank form", 
   const saved = JSON.parse(app.storage()[OCR_STORAGE_KEY]!) as {
     version: number;
     order: string[];
-    enabled: { ai: boolean; baidu: boolean };
+    enabled: { ai: boolean; baidu: boolean; "google-cloud": boolean };
     ai: unknown;
     baidu: { operation: string; credentialRef: string };
   };
   expect(saved.version).toBe(4);
   expect(saved.order).toEqual(["baidu"]);
-  expect(saved.enabled).toEqual({ ai: false, baidu: true });
+  expect(saved.enabled).toEqual({ ai: false, baidu: true, "google-cloud": false });
   expect(saved.ai).toBeNull();
   expect(saved.baidu.operation).toBe("accurate");
   expect(JSON.stringify(saved).includes("synthetic")).toBe(false);
@@ -1616,6 +1621,108 @@ test("ocr settings: saves Baidu keys on detail page and restores a blank form", 
   expect(reopened.texts()).toContain("模式");
 });
 
+test("ocr settings: saves a Vision key without showing it, then keeps it through toggle and reorder", async () => {
+  const visionKey = "synthetic-vision-key";
+  const app = await open(APP_ENTRY, { ...viewport, storage: makeSeedStorage({}) });
+  await app.press("id:nav-settings");
+  await app.press("id:settings-nav-ocr");
+  await app.waitFor("id:settings-ocr-empty-channel-google-cloud");
+  expect(app.texts()).toContain("Google Cloud Vision");
+
+  await app.press("id:settings-ocr-empty-channel-google-cloud");
+  await app.waitFor("id:settings-ocr-detail-card");
+  expect(app.shows("id:settings-ocr-google-api-key")).toBe(true);
+  expect(app.shows("id:settings-ocr-baidu-api-key")).toBe(false);
+  expect(app.shows("id:settings-ocr-baidu-operation")).toBe(false);
+  expect(app.shows("id:settings-ocr-model")).toBe(false);
+  expect(app.enabled("id:settings-ocr-save")).toBe(false);
+
+  await app.type("id:settings-ocr-google-api-key", "  " + visionKey + "  ");
+  expect(app.enabled("id:settings-ocr-save")).toBe(true);
+  await app.press("id:settings-ocr-save");
+  await app.waitUntil(() => Boolean(app.storage()[OCR_STORAGE_KEY]));
+
+  const saved = JSON.parse(app.storage()[OCR_STORAGE_KEY]!) as {
+    order: string[];
+    enabled: Record<string, boolean>;
+    "google-cloud": { credentialRef: string } | null;
+  };
+  expect(saved.order).toEqual(["google-cloud"]);
+  expect(saved.enabled["google-cloud"]).toBe(true);
+  expect(JSON.stringify(saved).includes(visionKey)).toBe(false);
+  expect(app.texts().join(" ").includes(visionKey)).toBe(false);
+  expect(app.value("id:settings-ocr-google-api-key")).toBe("");
+  const credentialRef = saved["google-cloud"]?.credentialRef;
+  if (!credentialRef) throw new Error("expected a Vision credential ref");
+  expect(JSON.parse(app.storage()[googleCloudCredentialStorageKey(credentialRef)]!)).toEqual({
+    apiKey: visionKey,
+  });
+
+  await app.press("id:settings-ocr-breadcrumb-root");
+  await app.waitFor("id:settings-ocr-card");
+  expect(app.texts()).toContain("Configured");
+  await app.press("id:settings-ocr-add");
+  await app.waitFor("id:settings-ocr-option-ai");
+  await app.press("id:settings-ocr-option-ai");
+  await app.waitFor("id:settings-ocr-detail-card");
+  await app.press("id:settings-ocr-breadcrumb-root");
+  await app.waitFor("id:settings-ocr-card");
+  await app.drag("id:settings-ocr-row-ai", { x: 0, y: -80 });
+  await app.waitUntil(() => JSON.parse(app.storage()[OCR_STORAGE_KEY]!).order[0] === "ai");
+  await app.press("id:settings-ocr-toggle-google-cloud");
+  await app.waitUntil(
+    () => JSON.parse(app.storage()[OCR_STORAGE_KEY]!).enabled["google-cloud"] === false,
+  );
+  expect(app.storage()[googleCloudCredentialStorageKey(credentialRef)]).toBe(
+    JSON.stringify({ apiKey: visionKey }),
+  );
+  expect(app.texts().join(" ").includes(visionKey)).toBe(false);
+
+  await app.press("id:settings-ocr-channel-google-cloud");
+  await app.waitFor("id:settings-ocr-google-api-key");
+  expect(app.value("id:settings-ocr-google-api-key")).toBe("");
+  expect(app.enabled("id:settings-ocr-save")).toBe(true);
+  expect(app.shows("id:settings-ocr-baidu-operation")).toBe(false);
+});
+
+test("ocr settings: an unreadable Vision key does not change the Baidu summary", async () => {
+  const baiduRef = "baidu-ref";
+  const googleRef = "google-ref";
+  const app = await open(APP_ENTRY, {
+    ...viewport,
+    storage: makeSeedStorage({
+      extra: {
+        [OCR_STORAGE_KEY]: JSON.stringify({
+          version: 4,
+          order: ["baidu", "google-cloud"],
+          enabled: { ai: false, baidu: true, "google-cloud": true },
+          ai: null,
+          baidu: { operation: "accurate", credentialRef: baiduRef },
+          "google-cloud": { credentialRef: googleRef },
+        }),
+        [baiduCredentialStorageKey(baiduRef)]: JSON.stringify({
+          apiKey: "synthetic-api-key",
+          secretKey: "synthetic-secret-key",
+        }),
+        [googleCloudCredentialStorageKey(googleRef)]: "not-json",
+      },
+    }),
+  });
+  await app.press("id:nav-settings");
+  await app.press("id:settings-nav-ocr");
+  await app.waitFor("id:settings-ocr-summary-google-cloud");
+  expect(app.texts()).toContain("Accurate with Location");
+  expect(app.texts()).toContain(
+    "The saved Google Cloud Vision key could not be read. Enter it again.",
+  );
+  expect(app.texts()).not.toContain("The saved Baidu keys could not be read. Enter both keys.");
+
+  await app.press("id:settings-ocr-channel-google-cloud");
+  await app.waitFor("id:settings-ocr-google-key-missing");
+  expect(app.shows("id:settings-ocr-baidu-operation")).toBe(false);
+  expect(app.enabled("id:settings-ocr-save")).toBe(false);
+});
+
 test("ocr settings: removes channels, confirms saved configs, and re-offers the picker", async () => {
   const ref = "removable-baidu-ref";
   const app = await open(APP_ENTRY, {
@@ -1648,7 +1755,7 @@ test("ocr settings: removes channels, confirms saved configs, and re-offers the 
   await app.press("id:nav-settings");
   await app.press("id:settings-nav-ocr");
   await app.waitFor("id:settings-ocr-card");
-  expect(app.shows("id:settings-ocr-add")).toBe(false);
+  expect(app.shows("id:settings-ocr-add")).toBe(true);
 
   // A configured channel confirms before removing.
   await app.press("id:settings-ocr-remove-ai");

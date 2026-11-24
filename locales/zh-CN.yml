@@ -129,6 +129,7 @@ settings:
     secretKey: Secret Key
     savedKeys: "•••••••••"
     keysUnreadable: 无法读取已保存的百度密钥。请同时填写两项。
+    googleKeyUnreadable: 无法读取已保存的 Google Cloud Vision 密钥。请重新填写。
     operation:
       general_basic: 标准版
       accurate_basic: 高精度版
