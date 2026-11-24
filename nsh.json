@@ -10,9 +10,9 @@
   "tailwind": {
     "radius": { "sidebar": 12 },
     "shadow": {
-      "card": "0 2px 8px rgb(0 0 0 / 0.06), 0 1px 2px rgb(0 0 0 / 0.04)",
+      "card": "0 2px 8px rgb(15 23 42 / 0.06), 0 1px 2px rgb(15 23 42 / 0.04)",
       "card-dark": "0 4px 12px rgb(0 0 0 / 0.34), 0 1px 3px rgb(0 0 0 / 0.24)",
-      "control": "0 1px 2px rgb(0 0 0 / 0.04)"
+      "control": "0 1px 2px rgb(15 23 42 / 0.04)"
     }
   },
   "appearance": "system",
