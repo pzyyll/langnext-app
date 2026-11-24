@@ -24,31 +24,33 @@ function capture(level: Level): Captured {
   };
 }
 
-test("http-log: the request line keeps the endpoint and masks its credentials", () => {
+test("http-log: the request line keeps the endpoint and its body waits for debug", () => {
   const httpLog = createHttpLog("ocr/baidu");
+  const cameraUrl = "https://aip.baidubce.com/rest/2.0/ocr/v1/general?access_token=abc123";
+  const tokenUrl = "https://aip.baidubce.com/oauth/2.0/token";
   const info = capture("info");
+  const debug = capture("debug");
   try {
+    httpLog.request("POST", cameraUrl, '{"api_key":"key-1","image":"AA=="}');
     httpLog.request(
       "POST",
-      "https://aip.baidubce.com/rest/2.0/ocr/v1/general?access_token=abc123",
-      '{"api_key":"key-1","image":"AA=="}',
-    );
-    httpLog.request(
-      "POST",
-      "https://aip.baidubce.com/oauth/2.0/token",
+      tokenUrl,
       "grant_type=client_credentials&client_id=id-1&client_secret=s3cret",
     );
   } finally {
     info.restore();
+    debug.restore();
   }
 
+  const maskedUrl = cameraUrl.replace("abc123", "***");
   expect(info.calls).toEqual([
+    [`[ocr/baidu] request POST ${maskedUrl}`],
+    [`[ocr/baidu] request POST ${tokenUrl}`],
+  ]);
+  expect(debug.calls).toEqual([
+    [`[ocr/baidu] request body POST ${maskedUrl} body={"api_key":"***","image":"AA=="}`],
     [
-      "[ocr/baidu] request POST https://aip.baidubce.com/rest/2.0/ocr/v1/general?access_token=***" +
-        ' body={"api_key":"***","image":"AA=="}',
-    ],
-    [
-      "[ocr/baidu] request POST https://aip.baidubce.com/oauth/2.0/token" +
+      `[ocr/baidu] request body POST ${tokenUrl}` +
         " body=grant_type=client_credentials&client_id=id-1&client_secret=***",
     ],
   ]);
@@ -56,50 +58,52 @@ test("http-log: the request line keeps the endpoint and masks its credentials", 
 
 test("http-log: a 2xx answer is info and a rejected answer is an error", () => {
   const httpLog = createHttpLog("ai/http");
+  const url = "https://api.openai.com/v1/chat/completions";
   const info = capture("info");
   const error = capture("error");
-  const url = "https://api.openai.com/v1/chat/completions";
+  const debug = capture("debug");
   try {
     httpLog.response("POST", url, 200, { choices: [{ message: { content: "hi" } }] });
     httpLog.response("POST", url, 400, { error: { message: "bad model" } });
   } finally {
     info.restore();
     error.restore();
+    debug.restore();
   }
 
-  expect(info.calls).toEqual([
-    [`[ai/http] response 200 POST ${url} body={"choices":[{"message":{"content":"hi"}}]}`],
-  ]);
-  expect(error.calls).toEqual([
-    [`[ai/http] response 400 POST ${url} body={"error":{"message":"bad model"}}`],
+  expect(info.calls).toEqual([[`[ai/http] response 200 POST ${url}`]]);
+  expect(error.calls).toEqual([[`[ai/http] response 400 POST ${url}`]]);
+  expect(debug.calls).toEqual([
+    [`[ai/http] response body 200 POST ${url} body={"choices":[{"message":{"content":"hi"}}]}`],
+    [`[ai/http] response body 400 POST ${url} body={"error":{"message":"bad model"}}`],
   ]);
 });
 
-test("http-log: the failure line keeps the provider category and the answer body", () => {
+test("http-log: the failure line keeps the provider category, its body waits for debug", () => {
   const httpLog = createHttpLog("ai/http");
+  const url = "https://api.openai.com/v1/chat/completions";
   const error = capture("error");
+  const debug = capture("debug");
   const failure = Object.assign(new Error("rejected"), {
     name: "ProviderProtocolError",
     kind: "invalid_request",
     status: 400,
   });
   try {
-    httpLog.failure(
-      "POST",
-      "https://api.openai.com/v1/chat/completions",
-      failure,
-      '{"message":"no such model"}',
-    );
+    httpLog.failure("POST", url, failure, '{"message":"no such model"}');
   } finally {
     error.restore();
+    debug.restore();
   }
 
   expect(error.calls).toEqual([
     [
-      "[ai/http] failure POST https://api.openai.com/v1/chat/completions" +
-        " error=ProviderProtocolError: rejected kind=invalid_request status=400" +
-        ' body={"message":"no such model"}',
+      `[ai/http] failure POST ${url}` +
+        " error=ProviderProtocolError: rejected kind=invalid_request status=400",
     ],
+  ]);
+  expect(debug.calls).toEqual([
+    [`[ai/http] failure body POST ${url} body={"message":"no such model"}`],
   ]);
 });
 
@@ -124,16 +128,18 @@ test("http-log: a cancelled request is debug, never an error", () => {
 
 test("http-log: a long payload keeps its head and states the dropped size", () => {
   const httpLog = createHttpLog("ai/http");
+  const url = "https://api.example.com/v1";
   const info = capture("info");
+  const debug = capture("debug");
   try {
-    httpLog.request("POST", "https://api.example.com/v1", "x".repeat(HTTP_LOG_PAYLOAD_LIMIT + 10));
+    httpLog.request("POST", url, "x".repeat(HTTP_LOG_PAYLOAD_LIMIT + 10));
   } finally {
     info.restore();
+    debug.restore();
   }
 
-  expect(info.calls).toEqual([
-    [
-      `[ai/http] request POST https://api.example.com/v1 body=${"x".repeat(HTTP_LOG_PAYLOAD_LIMIT)}…(+10 chars)`,
-    ],
+  expect(info.calls).toEqual([[`[ai/http] request POST ${url}`]]);
+  expect(debug.calls).toEqual([
+    [`[ai/http] request body POST ${url} body=${"x".repeat(HTTP_LOG_PAYLOAD_LIMIT)}…(+10 chars)`],
   ]);
 });

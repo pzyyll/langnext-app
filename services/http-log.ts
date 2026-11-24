@@ -1,5 +1,5 @@
 // ABOUTME: Writes one log line per outbound HTTP call: request, response, and failure.
-// ABOUTME: Shortens long payloads and masks credential fields so lines stay readable and safe.
+// ABOUTME: Keeps every payload on a debug line, shortened and with credentials masked.
 import { createLogger } from "./log";
 
 /** Longest payload kept in one line; callers that stream cap their capture at this length. */
@@ -17,11 +17,11 @@ const MASK_DEPTH = 10;
 
 /** Request, response, and failure lines for one HTTP client; every line names its method and URL. */
 export interface HttpLog {
-  /** Writes the outgoing call with its serialized body. */
+  /** Writes the outgoing call; its body follows on a debug line. */
   request(method: string, url: string, body?: string | null): void;
-  /** Writes the answer; a status outside 2xx is an error line. */
+  /** Writes the answer, an error line outside 2xx; its body follows on a debug line. */
   response(method: string, url: string, status: number, body?: unknown): void;
-  /** Writes a call that threw, with the error and the answer body when it was read. */
+  /** Writes a call that threw; the answer body, when read, follows on a debug line. */
   failure(method: string, url: string, error: unknown, body?: string | null): void;
 }
 
@@ -135,20 +135,23 @@ export function createHttpLog(scope: string): HttpLog {
   const call = (method: string, url: string) => `${method} ${maskUrl(url)}`;
   return {
     request: (method, url, body) => {
-      const payload = body === undefined || body === null ? "" : ` body=${describeBody(body)}`;
-      log.info(`request ${call(method, url)}${payload}`);
+      log.info(`request ${call(method, url)}`);
+      if (body === undefined || body === null) return;
+      log.debug(`request body ${call(method, url)} body=${describeBody(body)}`);
     },
     response: (method, url, status, body) => {
-      const payload = body === undefined ? "" : ` body=${describeValue(body)}`;
-      const line = `response ${status} ${call(method, url)}${payload}`;
+      const line = `response ${status} ${call(method, url)}`;
       if (status >= 200 && status < 300) log.info(line);
       else log.error(line);
+      if (body === undefined) return;
+      log.debug(`response body ${status} ${call(method, url)} body=${describeValue(body)}`);
     },
     failure: (method, url, error, body) => {
-      const payload = body === undefined || body === null ? "" : ` body=${describeBody(body)}`;
-      const line = `failure ${call(method, url)} error=${describeError(error)}${payload}`;
+      const line = `failure ${call(method, url)} error=${describeError(error)}`;
       if (cancelled(error)) log.debug(line);
       else log.error(line);
+      if (body === undefined || body === null) return;
+      log.debug(`failure body ${call(method, url)} body=${describeBody(body)}`);
     },
   };
 }
