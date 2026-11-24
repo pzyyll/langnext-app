@@ -1355,6 +1355,7 @@ export function QuickTranslatePopup(props: QuickTranslatePopupProps) {
                 variant="frameless"
                 class="min-w-0 flex-1"
                 autoFocus
+                disabled={ocrRecognizing()}
                 submitBehavior="submit"
                 fontScale="stepped"
                 initialFontStep={sourceFontStep()}

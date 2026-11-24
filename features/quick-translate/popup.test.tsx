@@ -2028,6 +2028,7 @@ test("quick popup: separates header detection status from OCR status priority in
   });
 
   await app.waitFor("id:quick-translate-source");
+  expect(app.enabled("id:quick-translate-source")).toBe(true);
   expect(app.shows("id:quick-translate-source-toolbar >> id:quick-translate-ocr-status")).toBe(
     false,
   );
@@ -2053,9 +2054,14 @@ test("quick popup: separates header detection status from OCR status priority in
   );
   expect(app.shows("id:quick-translate-source-detection")).toBe(false);
 
-  // 3. Entering OCR recognizing leaves header Detecting intact and shows busy below source.
+  // 3. Entering OCR recognizing leaves header Detecting intact, shows busy below source, and
+  //    makes the source wait for the answer.
   await app.press("id:harness-ocr-recognizing");
   await app.waitFor("id:quick-translate-source-toolbar >> id:quick-translate-ocr-busy");
+  expect(app.enabled("id:quick-translate-source")).toBe(false);
+  // The field keeps its text but takes no edits until recognition ends.
+  await expect(app.type("id:quick-translate-source", "x")).rejects.toThrow("is not editable");
+  expect(app.value("id:quick-translate-source")).toBe("Bonjour");
   expect(app.texts()).toContain(t("quickTranslate.ocrRecognizing"));
   expect(
     app.shows(
@@ -2066,9 +2072,10 @@ test("quick popup: separates header detection status from OCR status priority in
     false,
   );
 
-  // 4. Entering OCR error replaces busy inside the source toolbar.
+  // 4. Entering OCR error replaces busy inside the source toolbar and frees the source.
   await app.press("id:harness-ocr-error");
   await app.waitFor("id:quick-translate-source-toolbar >> id:quick-translate-ocr-status");
+  expect(app.enabled("id:quick-translate-source")).toBe(true);
   expect(app.texts()).toContain(t("ocr.failure.malformedAnswer"));
   expect(app.shows("id:quick-translate-source-toolbar >> id:quick-translate-ocr-busy")).toBe(false);
 

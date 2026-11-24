@@ -257,7 +257,8 @@ export function Textarea(props: TextareaProps) {
           autoFocus={props.autoFocus}
           submitBehavior={props.submitBehavior ?? "newline"}
           disabled={props.disabled}
-          readonly={props.readonly}
+          // A disabled field takes no edits either: platforms keep text fields editable.
+          readonly={props.readonly || props.disabled}
           onChange={({ value }) => props.onChange?.(value)}
           onFocus={() => props.onFocus?.()}
           onSubmit={({ text }) => props.onSubmit?.(text)}

@@ -1882,32 +1882,33 @@ test("quick ocr: a provider failure keeps the draft and never imports partial te
   );
 });
 
-test("quick ocr: typing during recognition wins over the late answer, and repeat presses wait", async () => {
+test("quick ocr: the source waits for the answer, and the answer replaces the draft", async () => {
   const app = await open(HARNESS_ENTRY, {
     ...viewport,
     storage: ocrSeed(),
     network: ocrRoutes(JSON.stringify({ text: OCR_TEXT }), 1_200),
   });
+  const source = "id:quick-translate-source";
 
   await app.press("id:harness-tray-quick-translate");
-  await app.waitFor("id:quick-translate-source");
+  await app.waitFor(source);
+  await app.type(source, "kept draft");
 
   await app.press(OCR_BUTTON);
-  await app.waitUntil(() => app.texts().some((line) => line.includes("ocrCap=1")));
+  await app.waitFor("id:quick-translate-source-toolbar >> id:quick-translate-ocr-busy");
 
-  // While the model reads the crop, the action is disabled: one session at a time.
-  await app.waitFor(OCR_BUTTON);
+  // One OCR session at a time: neither the action nor the source takes input until the answer.
   expect(app.enabled(OCR_BUTTON)).toBe(false);
+  expect(app.enabled(source)).toBe(false);
+  await expect(app.type(source, "typed instead")).rejects.toThrow("is not editable");
+  expect(app.value(source)).toBe("kept draft");
 
-  await app.waitFor("id:quick-translate-source");
-  await app.type("id:quick-translate-source", "typed instead");
-  await app.wait(1_400);
-
-  expect(app.value("id:quick-translate-source")).toBe("typed instead");
-  expect(app.texts().some((line) => line.includes("ocrCap=1"))).toBe(true);
-  expect(app.requests().filter((request) => request.url.includes("api.openai.com"))).toHaveLength(
-    0,
-  );
+  await app.waitUntil(() => app.value(source) === OCR_TEXT);
+  expect(app.enabled(source)).toBe(true);
+  expect(app.enabled(OCR_BUTTON)).toBe(true);
+  const translations = app.requests().filter((request) => request.url.includes("api.openai.com"));
+  expect(translations).toHaveLength(1);
+  expect(JSON.parse(translations[0]!.body!).messages[1].content).toBe(OCR_TEXT);
 });
 
 test("quick ocr: a valid double copy ends recognition and translates the copied text", async () => {
@@ -2162,14 +2163,15 @@ test("quick ocr: Baidu cancellation, a late result, and a quota error keep the d
   await late.press("id:harness-tray-quick-translate");
   await late.waitFor("id:quick-translate-source");
   await late.press(OCR_BUTTON);
-  await late.waitUntil(() => late.texts().some((line) => line.includes("ocrCap=1")));
-  await late.waitFor("id:quick-translate-source");
-  await late.type("id:quick-translate-source", "typed instead");
-  await late.wait(1_400);
-  expect(late.value("id:quick-translate-source")).toBe("typed instead");
-  expect(late.requests().filter((request) => request.url.includes("api.openai.com"))).toHaveLength(
-    0,
-  );
+  await late.waitFor("id:quick-translate-source-toolbar >> id:quick-translate-ocr-busy");
+  expect(late.enabled("id:quick-translate-source")).toBe(false);
+  await late.waitUntil(() => late.value("id:quick-translate-source") === OCR_TEXT);
+  expect(late.enabled("id:quick-translate-source")).toBe(true);
+  const lateTranslations = late
+    .requests()
+    .filter((request) => request.url.includes("api.openai.com"));
+  expect(lateTranslations).toHaveLength(1);
+  expect(JSON.parse(lateTranslations[0]!.body!).messages[1].content).toBe(OCR_TEXT);
 
   const quota = await open(HARNESS_ENTRY, {
     ...viewport,
