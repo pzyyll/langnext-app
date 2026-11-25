@@ -48,6 +48,7 @@ settings:
     languageDetection: Language Detection
     ocr: OCR
     tts: Text-to-Speech
+    wordbook: Wordbook
   theme:
     title: Theme
   appearance:
@@ -330,6 +331,43 @@ settings:
       detectorUnconfigured: Configure this detector before enabling it.
       preferenceInvalid: Choose a supported language.
       preferencesIdentical: The native language and the target language must differ.
+  wordbook:
+    provider: Anki
+    enable: Enable Anki
+    prerequisite: Start Anki Desktop with AnkiConnect before testing the connection.
+    key: API key
+    keyPlaceholder: Optional
+    keyHelp: A saved key stays on this computer and is not encrypted.
+    testConnection: Test connection
+    checking: Checking the connection…
+    profile: Profile
+    deck: Deck
+    noteType: Note type
+    sourceField: Source field
+    translationField: Translation field
+    save: Save
+    saved: Saved
+    choose: Choose
+    incompatible: This note type cannot be used. Choose another.
+    discardTitle: Discard unsaved Wordbook edits?
+    discardDescription: The Anki choices you have not saved will be lost.
+    discardConfirm: Discard
+    removeKey: Remove saved key
+    failure:
+      unreachable: Start Anki Desktop and check that AnkiConnect is enabled.
+      unauthorized: Check the API key.
+      forbidden: Check the API key and AnkiConnect access.
+      unavailable: Check that AnkiConnect is installed and up to date.
+      noCollection: Open an Anki profile, then test the connection again.
+      staleSession: Test the connection again.
+      malformed: Anki sent an unexpected reply. Test the connection again.
+      timeout: Anki did not answer. Test the connection again.
+    error:
+      storageReadFailed: Could not read the saved Wordbook settings.
+      storageMalformed: The saved Wordbook settings are unreadable.
+      storageWriteFailed: Could not save the Wordbook settings. Check storage and try again.
+      targetIncomplete: Choose a complete Anki destination before enabling it.
+      credentialUnreadable: The saved Anki key could not be read. Enter it again.
 ocr:
   capture:
     instruction: Drag to select · Tab switches display · Space and Enter confirm · Esc cancels
@@ -787,6 +825,25 @@ quickTranslate:
   speakPlayback: Could not play the audio. Try again.
   copy: Copy
   copied: Copied
+  ankiAdd: Add to Anki
+  ankiAdding: Adding…
+  ankiAdded: Added to Anki
+  ankiError:
+    unreachable: Start Anki Desktop and check that AnkiConnect is enabled.
+    unauthorized: Check the API key.
+    forbidden: Check the API key and AnkiConnect access.
+    unavailable: Check that AnkiConnect is installed and up to date.
+    noCollection: Open the configured Anki profile, then try again.
+    staleSession: Open Wordbook and test the connection again.
+    malformed: Anki sent an unexpected reply. Try again.
+    timeout: Anki did not answer. Try again.
+    profileMismatch: Open the configured Anki profile, then try again.
+    missingTarget: Recheck the destination in Wordbook.
+    incompatible: Recheck the note type in Wordbook.
+    notCurrent: The destination changed. Try again.
+    duplicate: This source already exists. Its translation was not changed.
+    rejected: Anki could not create the card. Check the selected note type.
+    unconfirmed: Could not confirm the add. Check Anki before trying again.
   backTranslate: Back-translate
   backTranslating: Back-translating…
   closeBackTranslation: Close back-translation

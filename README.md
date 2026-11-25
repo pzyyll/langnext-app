@@ -99,6 +99,21 @@ Quick Translate runs in a compact floating panel (`420 × 360` points, available
 
 See [system architecture](docs/specs/system-architecture.md) for the selected scope.
 
+## Wordbook
+
+Wordbook saves one Quick Translate result to a local Anki deck. It stays off until you save a destination and turn it on. The app does not migrate older settings, and it does not turn Wordbook on by itself.
+
+1. Install the AnkiConnect add-on in Anki Desktop. Its code is `2055492159`.
+2. Keep Anki Desktop open, with a profile and a normal deck.
+3. Open **Settings → Integrations → Wordbook**.
+4. Enter an API key only when AnkiConnect requires one. A saved key stays in local NSH Storage and is not encrypted.
+5. Select **Test connection**. Choose the deck, the note type, and the translation field. The first field of the note type is the source field.
+6. Select **Save**, then turn on **Enable Anki**.
+
+The app sends Anki requests only to `http://127.0.0.1:8765`. On a complete forward result, select **Add to Anki**. That press sends the card's source text and its translation. It does not send history, a back-translation, or another card. If the source already exists in the chosen deck and note type, Anki does not change it.
+
+The app does not claim support for a specific Anki or AnkiConnect version, or for a desktop target that has not been checked with Anki open.
+
 ## Language detection
 
 Language detection resolves an **Automatic** source or target into a concrete

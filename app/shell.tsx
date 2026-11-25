@@ -168,6 +168,7 @@ export function AppShell(props: AppShellProps = {}) {
             <SettingsPage
               platformOs={currentOs}
               onNavigateToModels={selectModels}
+              onRegisterLeaveGuard={registerLeaveGuard}
               shortcuts={shortcuts?.settings}
             />
           </PageSurface>

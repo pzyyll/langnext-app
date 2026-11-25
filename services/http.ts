@@ -33,6 +33,8 @@ export interface CreateHttpFetchOptions {
   scope: string;
   /** Set false when the caller maps errors itself and writes its own failure line. */
   logFailures?: boolean;
+  /** Set false to keep request and response bodies out of the log. Defaults to true. */
+  logBodies?: boolean;
 }
 
 /** Only network calls are logged; `asset:` and `data:` reads stay out of the log. */
@@ -42,16 +44,17 @@ const NETWORK_URL = /^https?:\/\//i;
 const TEXTUAL_BODY = /(?:json|xml|text\/)/i;
 
 /**
- * Wraps the fetch boundary so every call logs its method, URL, status, and failure, and so every
- * response body the caller reads is logged at debug level.
+ * Wraps the fetch boundary so every call logs its method, URL, status, and failure. A response
+ * body the caller reads is logged at debug level unless logBodies is false.
  */
 export function createHttpFetch(options: CreateHttpFetchOptions): FetchLike {
   const httpLog = createHttpLog(options.scope);
+  const logBodies = options.logBodies !== false;
   const send: FetchLike =
     options.fetchImpl ?? ((url: string, init: HttpRequestInit) => fetch(url, init));
   return async (url, init) => {
     const logged = NETWORK_URL.test(url);
-    if (logged) httpLog.request(init.method, url, init.body);
+    if (logged) httpLog.request(init.method, url, logBodies ? init.body : undefined);
     let response: HttpResponseLike;
     try {
       response = await send(url, init);
@@ -63,6 +66,7 @@ export function createHttpFetch(options: CreateHttpFetchOptions): FetchLike {
     }
     if (!logged) return response;
     httpLog.response(init.method, url, response.status);
+    if (!logBodies) return response;
     return watchResponse(response, init.method, url, httpLog);
   };
 }

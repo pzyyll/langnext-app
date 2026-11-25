@@ -30,6 +30,8 @@ import {
   createQuickTranslateSession,
   type QuickTranslateSession,
 } from "../features/quick-translate/session";
+import { createAnkiClient } from "../features/wordbook/anki-client";
+import { wordbookSettingsStore } from "../features/wordbook/settings";
 import { selectionCopyEnabled } from "../features/settings/selection-copy";
 import {
   createTranslationShortcutSetting,
@@ -419,6 +421,25 @@ export function QuickTranslateWindow(props: { controller: QuickTranslateControll
     beginHistoryAction,
     autoTranslate: props.controller.autoTranslate,
     onOverlayOpenChange: (menuId, open) => props.controller.setMenuOpen(menuId, open),
+    ankiEnabled: () => {
+      const state = wordbookSettingsStore.view();
+      return state.enabled && state.target !== null && state.error === null;
+    },
+    currentAnkiBinding: () => {
+      const binding = wordbookSettingsStore.activeBinding();
+      if (!binding) return null;
+      return {
+        profile: binding.profile,
+        deckId: binding.deckId,
+        noteTypeId: binding.noteTypeId,
+        sourceField: binding.sourceField,
+        translationField: binding.translationField,
+      };
+    },
+    addToAnki: async (input) => {
+      const key = await wordbookSettingsStore.readApiKey();
+      return createAnkiClient(key ? { apiKey: key } : {}).addTranslation(input);
+    },
   });
 
   effect(() => {

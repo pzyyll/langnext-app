@@ -71,6 +71,40 @@ test("http transport: logs the request, the status, and the body the caller read
   ]);
 });
 
+test("http transport: omits bodies when requested", async () => {
+  const info = capture("info");
+  const debug = capture("debug");
+  const client = createHttpFetch({
+    scope: "wordbook/anki",
+    logBodies: false,
+    fetchImpl: async () => ({
+      ok: true,
+      status: 200,
+      headers: { get: () => "application/json" },
+      json: async () => ({ result: { profile: "User 1" } }),
+    }),
+  });
+
+  let payload: unknown;
+  try {
+    const response = await client(
+      "http://127.0.0.1:8765/api/v1",
+      call('{"method":"collection.get"}'),
+    );
+    payload = await response.json();
+  } finally {
+    info.restore();
+    debug.restore();
+  }
+
+  expect(payload).toEqual({ result: { profile: "User 1" } });
+  expect(info.calls).toEqual([
+    ["[wordbook/anki] request POST http://127.0.0.1:8765/api/v1"],
+    ["[wordbook/anki] response 200 POST http://127.0.0.1:8765/api/v1"],
+  ]);
+  expect(debug.calls).toEqual([]);
+});
+
 test("http transport: counts a binary body and previews a text one", async () => {
   const info = capture("info");
   const debug = capture("debug");
