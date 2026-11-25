@@ -844,7 +844,13 @@ export function QuickTranslatePopup(props: QuickTranslatePopupProps) {
   // Survives the editor unmounting into the one-line preview, so expand does not flash the largest step.
   const sourceFontStep = signal(LARGEST_FONT_STEP);
   const focusSourceAfterExpand = signal(false);
+  // A fresh native field after an edit empties it, so the next text starts from the initial line box.
+  const editorAlive = signal(true);
   let lastDeliverySeq = delivery()?.seq ?? 0;
+  let popupAlive = true;
+  cleanup(() => {
+    popupAlive = false;
+  });
 
   effect(() => {
     const current = delivery();
@@ -855,19 +861,27 @@ export function QuickTranslatePopup(props: QuickTranslatePopupProps) {
   });
 
   // Any edit that empties the field (Select All and Delete included) must drop the previous
-  // line box: reset the remembered step and make the native field take its format again.
+  // line box. Rebuild the native field between two frames: blur first, then replace it, so
+  // nothing is disposed while the control still owns the keyboard.
   let hadSourceText = hasSourceText();
   effect(() => {
     const has = hasSourceText();
     if (hadSourceText && !has) {
       sourceFontStep.set(LARGEST_FONT_STEP);
       requestAnimationFrame(() => {
-        if (isSourceCollapsed() || hasSourceText()) return;
-        const input = sourceInputRef();
-        if (input === null) return;
-        input.blur();
-        input.focus();
-        input.setSelection(0, 0);
+        if (!popupAlive || isSourceCollapsed() || hasSourceText()) return;
+        sourceInputRef()?.blur();
+        editorAlive.set(false);
+        requestAnimationFrame(() => {
+          if (!popupAlive) return;
+          editorAlive.set(true);
+          requestAnimationFrame(() => {
+            if (!popupAlive || isSourceCollapsed() || hasSourceText()) return;
+            const input = sourceInputRef();
+            input?.focus();
+            input?.setSelection(0, 0);
+          });
+        });
       });
     }
     hadSourceText = has;
@@ -1439,33 +1453,35 @@ export function QuickTranslatePopup(props: QuickTranslatePopupProps) {
           when={isSourceCollapsed()}
           else={
             <View class="flex-row items-start justify-between gap-2">
-              <Textarea
-                testID="quick-translate-source"
-                variant="frameless"
-                class="min-w-0 flex-1"
-                autoFocus
-                disabled={ocrRecognizing()}
-                submitBehavior="submit"
-                fontScale="stepped"
-                initialFontStep={sourceFontStep()}
-                onFontStep={(step) => {
-                  if (sourceFontStep() !== step) sourceFontStep.set(step);
-                }}
-                value={sourceText()}
-                placeholder={t("quickTranslate.sourcePlaceholder")}
-                accessibilityLabel={t("quickTranslate.sourceLabel")}
-                inputClass="min-h-10"
-                onChange={(nextText) => props.session.handleSourceChange(nextText)}
-                onSubmit={() => {
-                  if (isComposing()) return;
-                  props.session.handleSourceSubmit();
-                }}
-                onCompositionChange={({ composing }) => isComposing.set(composing)}
-                ref={(node) => {
-                  sourceInputRef.set(node);
-                  props.onAttachSourceInput?.(node);
-                }}
-              />
+              <If when={editorAlive()} else={<View class="h-10 min-w-0 flex-1" />}>
+                <Textarea
+                  testID="quick-translate-source"
+                  variant="frameless"
+                  class="min-w-0 flex-1"
+                  autoFocus
+                  disabled={ocrRecognizing()}
+                  submitBehavior="submit"
+                  fontScale="stepped"
+                  initialFontStep={sourceFontStep()}
+                  onFontStep={(step) => {
+                    if (sourceFontStep() !== step) sourceFontStep.set(step);
+                  }}
+                  value={sourceText()}
+                  placeholder={t("quickTranslate.sourcePlaceholder")}
+                  accessibilityLabel={t("quickTranslate.sourceLabel")}
+                  inputClass="min-h-10"
+                  onChange={(nextText) => props.session.handleSourceChange(nextText)}
+                  onSubmit={() => {
+                    if (isComposing()) return;
+                    props.session.handleSourceSubmit();
+                  }}
+                  onCompositionChange={({ composing }) => isComposing.set(composing)}
+                  ref={(node) => {
+                    sourceInputRef.set(node);
+                    props.onAttachSourceInput?.(node);
+                  }}
+                />
+              </If>
               {renderSourceActions("pt-0.5")}
             </View>
           }
