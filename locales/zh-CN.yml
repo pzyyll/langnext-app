@@ -8,6 +8,11 @@ app:
     label: 关于 Langnext
     logo: Langnext 图标
     version: 版本 %{version}
+startup:
+  failed:
+    title: 无法启动
+    log: "日志：%{path}"
+    exit: 退出
 tray:
   quickTranslate: 快速翻译
   screenshotTranslate: 截图翻译

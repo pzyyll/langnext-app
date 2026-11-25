@@ -75,3 +75,17 @@ The Quick Translate popup arranges the source query, engine translation rows, an
 | Streaming translation, loading, error, copy checkmark, and speech toggle | Immediate replacement in place; no pulsing or moving status indicators                                                                                           | Same                     |
 | Inline back-translation hover                                            | Shared `navigationFeedback` color transition (`150ms` ease-out)                                                                                                  | Immediate color change   |
 | Inline back-translation open, retry, error, and close                    | Immediate mount/unmount in place so window height fit tracks content cleanly; back-translate toggle holds `brand-ghost` `selected` fill                          | Same                     |
+
+## Startup Failure
+
+A start that fails before the app shell mounts shows a window of its own instead of nothing: a heading, the failure message (selectable), the log file path when the app writes one, and **Exit** on the desktops. It keeps the system title bar so it can be moved without the shell's drag row.
+
+### Motion Inventory
+
+| Change                             | Motion                                                               | Reduced motion         |
+| ---------------------------------- | -------------------------------------------------------------------- | ---------------------- |
+| Startup fails and the window opens | Opens at once, with no entrance animation: the message is the point  | Same                   |
+| Exit press                         | Shared `pressScale` feedback; the app quits, so nothing closes after | No transition or scale |
+| Failure message and log path       | Static text; it changes only when the app starts again               | Same                   |
+
+The window adds no overlay, travel, live region, drag, or layout animation.

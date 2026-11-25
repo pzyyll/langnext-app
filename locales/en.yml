@@ -8,6 +8,11 @@ app:
     label: About Langnext
     logo: Langnext logo
     version: Version %{version}
+startup:
+  failed:
+    title: Could not start
+    log: "Log: %{path}"
+    exit: Exit
 tray:
   quickTranslate: Quick Translate
   screenshotTranslate: Screenshot Translate

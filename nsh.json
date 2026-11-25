@@ -47,7 +47,6 @@
   },
   "window": {
     "title": "Langnext",
-    "defaultVisible": false,
     "backdrop": "popover",
     "defaultSize": {
       "width": 1040,

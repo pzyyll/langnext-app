@@ -1,7 +1,7 @@
 import { mount, platform } from "nsh";
-import { Window } from "nsh/desktop";
 import { initializeAiModules } from "./src/app/ai-setup";
 import { AppShell } from "./src/app/shell";
+import { StartupError, startupFailureMessage } from "./src/app/startup-error";
 import { loadSplitRailWidths } from "./src/components/layout/split-rail";
 import { languageDetectionStore } from "./src/features/language-detection/settings";
 import { loadModelsState } from "./src/features/models/store";
@@ -24,10 +24,10 @@ import { createLogger, logFile } from "./src/services/log";
 const log = createLogger("app");
 
 async function startApp() {
-  await loadLogLevel();
-  log.info(`Started on ${platform.os}; logs go to ${logFile() ?? "the platform's log"}`);
-  initializeAiModules();
   try {
+    await loadLogLevel();
+    log.info(`Started on ${platform.os}; logs go to ${logFile() ?? "the platform's log"}`);
+    initializeAiModules();
     try {
       await cleanupTtsPlaybackFiles();
     } catch {
@@ -52,10 +52,10 @@ async function startApp() {
     ]);
     mount(AppShell);
   } catch (error) {
-    // nsh.json opens the main window hidden and the shell shows it: a failed
-    // start still shows it, so the app never stays invisible.
-    Window.get("main")?.show();
-    throw error;
+    // Window model v2 opens no window until the app declares one, so the
+    // failure gets a window of its own: a failed start is never invisible.
+    log.error("Could not start the app", error);
+    mount(StartupError, { message: startupFailureMessage(error) });
   }
 }
 
