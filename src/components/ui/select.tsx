@@ -9,7 +9,13 @@ import { buildHoverTooltip, buildTooltip } from "./tooltip";
 export type { SelectItem };
 
 export type SelectSize = "sm" | "md";
-export type SelectVariant = "default" | "chip" | "inline";
+export type SelectVariant =
+  | "default"
+  | "chip"
+  | "inline"
+  | "pill-brand"
+  | "pill-muted"
+  | "ghost-chip";
 
 interface SelectProps {
   items: SelectItem[];
@@ -44,6 +50,12 @@ const TRIGGER_VARIANT_CLASSES: Record<SelectVariant, string> = {
   chip: "h-6 justify-between gap-1 rounded-md border border-border bg-surface-control px-2 hover:bg-accent/60 active:bg-accent",
   inline:
     "h-6 justify-between gap-1 rounded-full bg-transparent px-2 hover:bg-accent active:bg-border",
+  "pill-brand":
+    "h-6 justify-between gap-1 rounded-md bg-brand-soft px-2 hover:bg-brand-soft/80 active:bg-brand/20",
+  "pill-muted":
+    "h-6 justify-between gap-1 rounded-md bg-muted/80 px-2 hover:bg-accent active:bg-border",
+  "ghost-chip":
+    "h-6 justify-between gap-1 rounded-md bg-transparent px-1.5 hover:bg-accent/60 active:bg-accent",
 };
 
 /** Single-choice dropdown built over nsh/base Select with theme tokens. */
@@ -128,14 +140,20 @@ export function Select(props: SelectProps) {
               <Text class="shrink-0 text-xs text-muted-foreground">{props.prefix}</Text>
             </If>
             <Text
-              class={`${contentFlexClass()} truncate ${hasActiveValue() ? "text-foreground" : "text-muted-foreground"} ${textSizeClass()} ${props.labelClass ?? ""}`}
+              class={`${contentFlexClass()} truncate ${
+                hasActiveValue()
+                  ? variant() === "pill-brand"
+                    ? "text-brand"
+                    : "text-foreground"
+                  : "text-muted-foreground"
+              } ${textSizeClass()} ${props.labelClass ?? ""}`}
             >
               {shownLabel()}
             </Text>
           </View>
           <Icon
             name="mdi:chevron-down"
-            tone="muted-foreground"
+            tone={variant() === "pill-brand" ? "brand" : "muted-foreground"}
             class={isCompact() ? "size-3 shrink-0" : "size-3.5 shrink-0"}
           />
         </View>

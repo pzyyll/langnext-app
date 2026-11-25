@@ -805,6 +805,7 @@ quickTranslate:
   sourceMenuItem: "Source: %{language}"
   targetMenuItem: "Target: %{language}"
   templateLabel: Template
+  collapsed: Collapsed
   collapseCard: Collapse card
   expandCard: Expand card
   removeCard: Remove card

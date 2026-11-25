@@ -258,13 +258,13 @@ function QuickTranslateWindowBody(props: {
   return (
     <View
       testID="quick-translate-surface"
-      class="flex-1 overflow-hidden rounded-3xl border border-border bg-background text-foreground"
+      class="flex-1 overflow-hidden rounded-2xl border border-border bg-background text-foreground"
     >
       <View
         testID="quick-translate-header"
         onLayout={({ bounds }) => headerHeight.set(bounds.size.height)}
         desktop={{ windowDrag: true }}
-        class="shrink-0 flex-row items-center justify-between gap-1 border-b border-border/80"
+        class="shrink-0 flex-row items-center justify-between gap-1 border-b border-border/70 bg-background"
         // Runtime platform titleBar() insets clear native caption buttons; 16 pt matches the px-4 body spine.
         style={{
           height: Math.max(44, titleBar().height),

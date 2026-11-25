@@ -70,7 +70,7 @@ export function QuickTranslateLanguageBar(props: QuickTranslateLanguageBarProps)
   return (
     <View
       testID="quick-translate-language-bar"
-      class="h-7 min-w-0 shrink flex-row items-center gap-0.5 rounded-full bg-muted/80 px-0.5"
+      class="h-7 min-w-0 shrink flex-row items-center gap-0.5 rounded-full border border-border/70 bg-muted/75 px-0.5"
     >
       <Select
         testID="quick-translate-source-language"
@@ -81,7 +81,7 @@ export function QuickTranslateLanguageBar(props: QuickTranslateLanguageBarProps)
         items={sourceItems()}
         value={props.sourceLanguage}
         displayLabel={sourceDisplayLabel()}
-        labelClass="font-medium text-muted-foreground"
+        labelClass="font-medium text-foreground"
         accessibilityLabel={t("quickTranslate.sourceLanguageLabel")}
         onOpenChange={(open) => props.onSourceOpenChange?.(open)}
         onChange={(value) => {
@@ -108,7 +108,7 @@ export function QuickTranslateLanguageBar(props: QuickTranslateLanguageBarProps)
         class="min-w-0 shrink"
         items={targetItems()}
         value={props.targetLanguage}
-        labelClass="font-medium text-muted-foreground"
+        labelClass="font-medium text-foreground"
         accessibilityLabel={t("quickTranslate.targetLanguageLabel")}
         onOpenChange={(open) => props.onTargetOpenChange?.(open)}
         onChange={(value) => {

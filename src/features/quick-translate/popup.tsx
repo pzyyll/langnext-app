@@ -19,8 +19,8 @@ import {
 } from "nsh";
 import { t } from "nsh/i18n";
 import { motion } from "../../components/motion";
+import { Badge } from "../../components/ui/badge";
 import { Button, KeyboardButton } from "../../components/ui/button";
-import { Card } from "../../components/ui/card";
 import { LARGEST_FONT_STEP } from "../../components/ui/font-step";
 import { Icon, type IconName } from "../../components/ui/icon";
 import { Kbd } from "../../components/ui/kbd";
@@ -193,9 +193,12 @@ export function QuickTranslateFooter(props: { session: QuickTranslateSession }) 
   return (
     <View
       testID="quick-translate-footer"
-      class="shrink-0 flex-row items-center justify-between gap-2 border-t border-border bg-surface-subtle px-4 py-2"
+      class="shrink-0 flex-row items-center justify-between gap-2 border-t border-border/70 bg-background px-4 py-2"
     >
-      <QuickTranslateAddPresetMenu session={props.session} placement="top" align="start" />
+      {/* Align the + icon glyph with the px-4 body spine while preserving the button hit inset. */}
+      <View class="-ml-1.5">
+        <QuickTranslateAddPresetMenu session={props.session} placement="top" align="start" />
+      </View>
       <View class="shrink-0 flex-row items-center gap-3">
         <View class="flex-row items-center gap-1">
           <Kbd>↵</Kbd>
@@ -348,12 +351,19 @@ function PresetCardRow(props: PresetCardRowProps) {
   const isBackTranslationOpen = () => backTranslation().status !== "closed";
 
   const presetName = () => resolvedPreset()?.name ?? t("quickTranslate.presetPlaceholder");
+  const isAi = () => resolvedPreset()?.engine.kind === "ai";
+  const isCollapsed = () => props.card().collapsed;
+  const presetVariant = () => (isAi() && !isCollapsed() ? "pill-brand" : "ghost-chip");
+  // Pull borderless triggers left 6pt so the engine mark sits on the px-4 spine.
+  const presetClass = () =>
+    isAi() && !isCollapsed() ? "min-w-0 shrink" : "-ml-1.5 min-w-0 shrink";
 
   return (
-    <Card
+    <View
       testID={`quick-translate-card-${props.card().id}`}
-      variant="subtle"
-      class={`overflow-hidden ${props.reorder.dragging() ? "shadow-md" : ""}`}
+      class={`group/row ${motion.navigationFeedback} ${
+        props.reorder.dragging() ? "bg-card" : "hover:bg-brand-soft/45 dark:hover:bg-brand-soft/35"
+      }`}
     >
       <View
         testID={`quick-translate-card-header-${props.card().id}`}
@@ -361,14 +371,14 @@ function PresetCardRow(props: PresetCardRowProps) {
         onPanStart={() => props.reorder.onStart()}
         onPanEnd={(event) => props.reorder.onEnd(event)}
         onPress={() => props.onToggleCollapse(props.card().id)}
-        class={`group flex-row items-center justify-between gap-2 px-3 pt-2.5 ${hasBody() ? "pb-2" : "pb-2.5"} ${motion.navigationFeedback} hover:bg-accent/50 active:bg-accent/70`}
+        class={`flex-row items-center justify-between gap-2 px-4 ${hasBody() ? "pt-3.5 pb-1.5" : "py-2.5"}`}
       >
         <View class="min-w-0 flex-1 flex-row items-center gap-1.5">
           <Select
             testID="quick-translate-preset"
-            variant="chip"
-            class="min-w-0 shrink"
-            labelClass="font-semibold"
+            variant={presetVariant()}
+            class={presetClass()}
+            labelClass={isCollapsed() ? "font-semibold text-muted-foreground" : "font-semibold"}
             leading={<PresetLeadingMark preset={resolvedPreset()} />}
             itemLeading={(value) => (
               <PresetLeadingMark
@@ -389,7 +399,7 @@ function PresetCardRow(props: PresetCardRowProps) {
           <If when={hasTemplates()}>
             <Select
               testID="quick-translate-template"
-              variant="chip"
+              variant="pill-muted"
               class="min-w-0 shrink"
               labelClass="font-medium text-muted-foreground"
               items={templateItems()}
@@ -401,6 +411,13 @@ function PresetCardRow(props: PresetCardRowProps) {
                 props.onOverlayOpenChange(`card-template-${props.card().id}`, open)
               }
               onChange={(value) => props.onSelectTemplate(props.card().id, value)}
+            />
+          </If>
+          <If when={isCollapsed()}>
+            <Badge
+              testID={`quick-translate-card-collapsed-${props.card().id}`}
+              label={t("quickTranslate.collapsed")}
+              tone="muted"
             />
           </If>
         </View>
@@ -441,7 +458,7 @@ function PresetCardRow(props: PresetCardRowProps) {
               class={`shrink-0 cursor-grab ${motion.tooltip} ${
                 props.reorder.dragging()
                   ? "opacity-100"
-                  : "opacity-0 group-hover:opacity-100 focus-visible:opacity-100"
+                  : "opacity-0 group-hover/row:opacity-100 focus-visible:opacity-100 pointer-coarse:opacity-100"
               }`}
             >
               <Icon name="grip-vertical" tone="muted-foreground" class="size-3.5" />
@@ -454,6 +471,7 @@ function PresetCardRow(props: PresetCardRowProps) {
             tooltip={t("quickTranslate.removeCard")}
             accessibilityLabel={t("quickTranslate.removeCard")}
             onPress={() => props.onRemove(props.card().id)}
+            class={`shrink-0 ${motion.tooltip} opacity-0 group-hover/row:opacity-100 focus-visible:opacity-100 pointer-coarse:opacity-100`}
           >
             <Icon name="mdi:delete-outline" tone="muted-foreground" class="size-3.5" />
           </Button>
@@ -462,21 +480,17 @@ function PresetCardRow(props: PresetCardRowProps) {
             variant="ghost"
             size="icon-xs"
             tooltip={
-              props.card().collapsed
-                ? t("quickTranslate.expandCard")
-                : t("quickTranslate.collapseCard")
+              isCollapsed() ? t("quickTranslate.expandCard") : t("quickTranslate.collapseCard")
             }
             accessibilityLabel={
-              props.card().collapsed
-                ? t("quickTranslate.expandCard")
-                : t("quickTranslate.collapseCard")
+              isCollapsed() ? t("quickTranslate.expandCard") : t("quickTranslate.collapseCard")
             }
             onPress={() => props.onToggleCollapse(props.card().id)}
           >
             <Icon
               name="mdi:plus"
               tone="muted-foreground"
-              class={`size-3.5 ${motion.disclosureIcon} ${props.card().collapsed ? "" : "rotate-45"}`}
+              class={`size-3.5 ${motion.disclosureIcon} ${isCollapsed() ? "" : "rotate-45"}`}
             />
           </Button>
         </View>
@@ -484,7 +498,7 @@ function PresetCardRow(props: PresetCardRowProps) {
 
       <If when={hasBody()}>
         <If when={props.card().result.status === "loading"}>
-          <View class="px-3 pb-3">
+          <View class="px-4 pt-1 pb-3">
             <Text testID="quick-translate-status" class="text-xs text-muted-foreground">
               {t("quickTranslate.translating")}
             </Text>
@@ -492,7 +506,7 @@ function PresetCardRow(props: PresetCardRowProps) {
         </If>
 
         <If when={hasOutput() || failed()}>
-          <View class={`min-w-0 gap-1.5 px-3 ${streaming() ? "pb-3" : "pb-2.5"}`}>
+          <View class={`min-w-0 gap-1.5 px-4 pt-1 ${streaming() ? "pb-3" : "pb-2"}`}>
             <If when={hasOutput()}>
               <TranslationOutput
                 testID={failed() ? "quick-translate-partial-text" : "quick-translate-result-text"}
@@ -513,7 +527,7 @@ function PresetCardRow(props: PresetCardRowProps) {
         </If>
 
         <If when={failed()}>
-          <View class="flex-row items-center justify-end border-t border-border/60 px-2 py-1.5">
+          <View class="flex-row items-center justify-end px-4 pt-0.5 pb-2.5">
             <RetryIconButton
               testID="quick-translate-retry"
               onPress={() => props.onRetry(props.card().id)}
@@ -526,11 +540,51 @@ function PresetCardRow(props: PresetCardRowProps) {
             <If when={isBackTranslationOpen()}>
               <View
                 testID="quick-translate-back-translation"
-                class="mx-3 mb-2.5 rounded-lg border border-border/80 bg-muted/45"
+                class="mx-4 mt-1 mb-1.5 gap-1 rounded-r-lg border-l-2 border-brand/40 bg-brand-soft/45 py-1.5 pr-1.5 pl-3 dark:bg-brand-soft/30"
               >
-                <View class="flex-row items-center justify-between gap-2 pt-1.5 pr-1.5 pb-1 pl-2.5">
-                  <Icon name="mdi:arrow-u-left-top" tone="brand" class="size-3.5 shrink-0" />
-                  <View class="flex-row items-center gap-0.5">
+                <View class="flex-row items-start justify-between gap-2">
+                  <View class="min-w-0 flex-1 flex-row items-start gap-1.5 pt-0.5">
+                    <Icon
+                      name="mdi:arrow-right-bottom"
+                      tone="brand"
+                      class="mt-0.5 size-3.5 shrink-0"
+                    />
+                    <View class="min-w-0 flex-1">
+                      <If when={backTranslation().status === "loading"}>
+                        <Text
+                          testID="quick-translate-back-translation-status"
+                          class="text-xs text-muted-foreground"
+                        >
+                          {t("quickTranslate.backTranslating")}
+                        </Text>
+                      </If>
+                      <If when={backTranslation().status === "success"}>
+                        <TranslationOutput
+                          testID="quick-translate-back-translation-text"
+                          size="sm"
+                          text={(() => {
+                            const bt = backTranslation();
+                            return bt.status === "success" ? bt.text : "";
+                          })()}
+                          markdownEnabled={props.markdownEnabled}
+                          streaming={false}
+                        />
+                      </If>
+                      <If when={backTranslation().status === "error"}>
+                        <Text
+                          testID="quick-translate-back-translation-error"
+                          role="alert"
+                          class="text-xs text-destructive"
+                        >
+                          {(() => {
+                            const bt = backTranslation();
+                            return bt.status === "error" ? bt.message : "";
+                          })()}
+                        </Text>
+                      </If>
+                    </View>
+                  </View>
+                  <View class="shrink-0 flex-row items-center gap-0.5">
                     <If
                       when={(() => {
                         const bt = backTranslation();
@@ -607,69 +661,37 @@ function PresetCardRow(props: PresetCardRowProps) {
                     </Button>
                   </View>
                 </View>
-                <View class="min-w-0 gap-1.5 px-2.5 pb-2.5">
-                  <If when={backTranslation().status === "loading"}>
-                    <Text
-                      testID="quick-translate-back-translation-status"
-                      class="text-xs text-muted-foreground"
-                    >
-                      {t("quickTranslate.backTranslating")}
-                    </Text>
-                  </If>
-                  <If when={backTranslation().status === "success"}>
-                    <TranslationOutput
-                      testID="quick-translate-back-translation-text"
-                      text={(() => {
-                        const bt = backTranslation();
-                        return bt.status === "success" ? bt.text : "";
-                      })()}
-                      markdownEnabled={props.markdownEnabled}
-                      streaming={false}
-                    />
-                  </If>
-                  <If when={backTranslation().status === "error"}>
-                    <Text
-                      testID="quick-translate-back-translation-error"
-                      role="alert"
-                      class="text-xs text-destructive"
-                    >
-                      {(() => {
-                        const bt = backTranslation();
-                        return bt.status === "error" ? bt.message : "";
-                      })()}
-                    </Text>
-                  </If>
-                  <If when={props.backTranslationSpeakError() !== null}>
-                    <Text
-                      testID="quick-translate-speak-back-translation-error"
-                      role="alert"
-                      class="text-xs text-destructive"
-                    >
-                      {props.backTranslationSpeakError() ?? ""}
-                    </Text>
-                  </If>
-                  <If
-                    when={(() => {
-                      const bt = backTranslation();
-                      return bt.status === "success" && bt.copyError !== null;
-                    })()}
+                <If when={props.backTranslationSpeakError() !== null}>
+                  <Text
+                    testID="quick-translate-speak-back-translation-error"
+                    role="alert"
+                    class="text-xs text-destructive"
                   >
-                    <Text
-                      testID="quick-translate-copy-back-translation-error"
-                      role="alert"
-                      class="text-xs text-destructive"
-                    >
-                      {(() => {
-                        const bt = backTranslation();
-                        return bt.status === "success" ? (bt.copyError ?? "") : "";
-                      })()}
-                    </Text>
-                  </If>
-                </View>
+                    {props.backTranslationSpeakError() ?? ""}
+                  </Text>
+                </If>
+                <If
+                  when={(() => {
+                    const bt = backTranslation();
+                    return bt.status === "success" && bt.copyError !== null;
+                  })()}
+                >
+                  <Text
+                    testID="quick-translate-copy-back-translation-error"
+                    role="alert"
+                    class="text-xs text-destructive"
+                  >
+                    {(() => {
+                      const bt = backTranslation();
+                      return bt.status === "success" ? (bt.copyError ?? "") : "";
+                    })()}
+                  </Text>
+                </If>
               </View>
             </If>
-            <View class="flex-row items-center justify-between gap-2 border-t border-border/60 px-2 py-1.5">
-              <View class="flex-row items-center gap-0.5">
+            <View class="flex-row items-center justify-between gap-2 px-4 pt-1 pb-2.5">
+              {/* Align the leading action icon with the px-4 body spine while preserving the 24pt hit target. */}
+              <View class="-ml-1 flex-row items-center gap-0.5">
                 <If
                   when={(() => {
                     const res = props.card().result;
@@ -767,7 +789,7 @@ function PresetCardRow(props: PresetCardRowProps) {
               />
             </View>
             <If when={props.speakError() !== null}>
-              <View class="px-3 pb-2.5">
+              <View class="px-4 pb-2.5">
                 <Text
                   testID="quick-translate-speak-result-error"
                   role="alert"
@@ -778,7 +800,7 @@ function PresetCardRow(props: PresetCardRowProps) {
               </View>
             </If>
             <If when={props.card().anki.status !== "idle"}>
-              <View class="px-3 pb-2.5">
+              <View class="px-4 pb-2.5">
                 <Text
                   testID="quick-translate-anki-status"
                   role={props.card().anki.status === "error" ? "alert" : undefined}
@@ -799,7 +821,7 @@ function PresetCardRow(props: PresetCardRowProps) {
               </View>
             </If>
             <If when={props.card().copyError !== null}>
-              <View class="px-3 pb-2.5">
+              <View class="px-4 pb-2.5">
                 <Text
                   testID="quick-translate-copy-error"
                   role="alert"
@@ -812,7 +834,7 @@ function PresetCardRow(props: PresetCardRowProps) {
           </View>
         </If>
       </If>
-    </Card>
+    </View>
   );
 }
 
@@ -1322,19 +1344,22 @@ export function QuickTranslatePopup(props: QuickTranslatePopupProps) {
 
   const renderSourceStatus = () => (
     <If when={hasSourceToolbar()}>
-      <View testID="quick-translate-source-toolbar" class="mt-1 flex-row items-center gap-1.5">
+      <View testID="quick-translate-source-toolbar" class="mt-2 flex-row items-center gap-1.5">
         <If when={hasSpeakableSource()}>
-          <SpeakerButton
-            testID="quick-translate-speak-source"
-            disabled={speechControl("source").disabled}
-            tooltip={speechControl("source").tooltip}
-            label={speechControl("source").label}
-            icon={speechControl("source").icon}
-            onPress={() => {
-              if (speechControl("source").busy) cancelSpeech();
-              else speakSource();
-            }}
-          />
+          {/* Pull the 24pt button left 4pt so the speaker glyph aligns with the px-4 spine. */}
+          <View class="-ml-1 shrink-0">
+            <SpeakerButton
+              testID="quick-translate-speak-source"
+              disabled={speechControl("source").disabled}
+              tooltip={speechControl("source").tooltip}
+              label={speechControl("source").label}
+              icon={speechControl("source").icon}
+              onPress={() => {
+                if (speechControl("source").busy) cancelSpeech();
+                else speakSource();
+              }}
+            />
+          </View>
           <If when={sourceSpeechError() !== null}>
             <Text
               testID="quick-translate-speak-source-error"
@@ -1394,51 +1419,8 @@ export function QuickTranslatePopup(props: QuickTranslatePopupProps) {
   );
 
   return (
-    <View class="gap-3 px-4 pt-3.5 pb-3">
-      <If
-        when={
-          !showingHistory() &&
-          (props.session.presetsStatus().kind === "idle" ||
-            props.session.presetsStatus().kind === "loading")
-        }
-      >
-        <Card testID="quick-translate-presets-loading" variant="subtle" class="gap-1.5 p-3">
-          <Text class="text-xs text-muted-foreground">{t("quickTranslate.presetsLoading")}</Text>
-        </Card>
-      </If>
-
-      <If when={!showingHistory() && props.session.presetsStatus().kind === "error"}>
-        <Card
-          testID="quick-translate-presets-error"
-          variant="subtle"
-          class="flex-row items-center justify-between gap-2 border-destructive/40 py-2 pl-3 pr-2"
-        >
-          <Text role="alert" class="min-w-0 flex-1 text-xs text-destructive">
-            {(() => {
-              const s = props.session.presetsStatus();
-              return s.kind === "error" ? s.message : "";
-            })()}
-          </Text>
-          <RetryIconButton
-            testID="quick-translate-retry-presets"
-            onPress={() => props.session.retryLoadPresets()}
-          />
-        </Card>
-      </If>
-
-      <If
-        when={
-          !showingHistory() &&
-          props.session.presetsStatus().kind === "ready" &&
-          props.session.enabledPresets().length === 0
-        }
-      >
-        <Card testID="quick-translate-no-presets" variant="subtle" class="p-3">
-          <Text class="text-xs text-muted-foreground">{t("quickTranslate.noEnabledPresets")}</Text>
-        </Card>
-      </If>
-
-      <View testID="quick-translate-source-section">
+    <View class="bg-background">
+      <View testID="quick-translate-source-section" class="bg-background px-4 pt-4 pb-3">
         <If
           when={isSourceCollapsed()}
           else={
@@ -1498,14 +1480,64 @@ export function QuickTranslatePopup(props: QuickTranslatePopupProps) {
         {renderSourceStatus()}
       </View>
 
-      <If when={props.session.prefsSaveError() !== null}>
-        <Text
-          testID="quick-translate-preferences-error"
-          role="alert"
-          class="text-xs text-destructive"
+      <If
+        when={
+          !showingHistory() &&
+          (props.session.presetsStatus().kind === "idle" ||
+            props.session.presetsStatus().kind === "loading")
+        }
+      >
+        <View
+          testID="quick-translate-presets-loading"
+          class="border-t border-border/70 bg-surface-subtle px-4 py-2.5"
         >
-          {props.session.prefsSaveError() ?? ""}
-        </Text>
+          <Text class="text-xs text-muted-foreground">{t("quickTranslate.presetsLoading")}</Text>
+        </View>
+      </If>
+
+      <If when={!showingHistory() && props.session.presetsStatus().kind === "error"}>
+        <View
+          testID="quick-translate-presets-error"
+          class="flex-row items-center justify-between gap-2 border-t border-destructive/30 bg-destructive/5 py-2 pr-3 pl-4"
+        >
+          <Text role="alert" class="min-w-0 flex-1 text-xs text-destructive">
+            {(() => {
+              const s = props.session.presetsStatus();
+              return s.kind === "error" ? s.message : "";
+            })()}
+          </Text>
+          <RetryIconButton
+            testID="quick-translate-retry-presets"
+            onPress={() => props.session.retryLoadPresets()}
+          />
+        </View>
+      </If>
+
+      <If
+        when={
+          !showingHistory() &&
+          props.session.presetsStatus().kind === "ready" &&
+          props.session.enabledPresets().length === 0
+        }
+      >
+        <View
+          testID="quick-translate-no-presets"
+          class="border-t border-border/70 bg-surface-subtle px-4 py-2.5"
+        >
+          <Text class="text-xs text-muted-foreground">{t("quickTranslate.noEnabledPresets")}</Text>
+        </View>
+      </If>
+
+      <If when={props.session.prefsSaveError() !== null}>
+        <View class="border-t border-destructive/30 bg-destructive/5 px-4 py-2">
+          <Text
+            testID="quick-translate-preferences-error"
+            role="alert"
+            class="text-xs text-destructive"
+          >
+            {props.session.prefsSaveError() ?? ""}
+          </Text>
+        </View>
       </If>
 
       <If when={showingHistory()}>
@@ -1516,7 +1548,7 @@ export function QuickTranslatePopup(props: QuickTranslatePopupProps) {
       </If>
 
       <If when={!showingHistory() && props.session.cards().length > 0}>
-        <View class="gap-2.5">
+        <View testID="quick-translate-stream" class="border-t border-border/70">
           <Each of={props.session.cards()} key={(card) => card.id}>
             {(card) => {
               const cardId = () => card().id;
@@ -1529,7 +1561,10 @@ export function QuickTranslatePopup(props: QuickTranslatePopupProps) {
                     });
                   }}
                   style={{ translate: [0, cardOffset(cardId())] }}
-                  class={draggingCardId() === cardId() ? "z-10 cursor-grabbing" : undefined}
+                  class="border-b border-border/70 odd:bg-surface-subtle/85 even:bg-background last:border-b-0"
+                  classList={{
+                    "z-10 cursor-grabbing bg-card! shadow-md": draggingCardId() === cardId(),
+                  }}
                 >
                   <PresetCardRow
                     card={card}

@@ -57,3 +57,20 @@ After the user drags over text, an optional small **Translate Selection** button
 | Hint disappears on expiry or a press  | Removed at once; nothing animates and the pointer never chases it    | Same                   |
 | Translate Selection press             | Shared `pressScale` feedback                                         | No transition or scale |
 | Drag button setting switch            | Shared switch motion                                                 | No transition          |
+
+## Quick Translate Vertical Stream
+
+The Quick Translate popup arranges the source query, engine translation rows, and footer in one continuous edge-to-edge vertical stream separated by hairline borders and alternating row surfaces instead of isolated cards.
+
+### Motion Inventory
+
+| Change                                                                   | Motion                                                                                                                                                           | Reduced motion           |
+| ------------------------------------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------ |
+| Stream row hover wash                                                    | Shared `navigationFeedback` color transition (`150ms` ease-out)                                                                                                  | Immediate color change   |
+| Header, toolbar, and action buttons hover and press                      | Shared `pressScale` (`scale-95` on active) and color wash                                                                                                        | No transition or scale   |
+| Row hover actions (reorder grip, remove) appear                          | Shared `tooltip` opacity fade (`150ms` ease-out) on row hover or keyboard focus                                                                                  | Immediate opacity change |
+| Engine row collapse / expand indicator (`+` ↔ `×`)                       | Shared `disclosureIcon` rotation (`0deg` ↔ `45deg`, `150ms` ease-out); row body and window height fit update immediately so native `fitContentHeight` never lags | Immediate rotation       |
+| Engine row drag reorder and release                                      | 1:1 pointer tracking (`cardOffset`) during pan; `180ms` `easeOut` settle on release                                                                              | Instant snap             |
+| Language, preset, template, add-preset, and history dropdowns            | Shared `popup` and `popupHidden` reveal and dismiss; Select triggers keep `navigationFeedback`                                                                   | No transition or travel  |
+| Streaming translation, loading, error, copy checkmark, and speech toggle | Immediate replacement in place; no pulsing or moving status indicators                                                                                           | Same                     |
+| Inline back-translation open, retry, error, and close                    | Immediate mount/unmount in place so window height fit tracks content cleanly; back-translate toggle holds `brand-ghost` `selected` fill                          | Same                     |

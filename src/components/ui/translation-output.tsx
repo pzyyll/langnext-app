@@ -1,20 +1,27 @@
 import { Text, View } from "nsh";
 import { TextView } from "nsh/base";
 
-const OUTPUT_CLASS = "text-base leading-relaxed text-card-foreground";
+export type TranslationOutputSize = "default" | "sm";
+
+const OUTPUT_CLASS: Record<TranslationOutputSize, string> = {
+  default: "text-base leading-relaxed text-card-foreground",
+  sm: "text-sm leading-relaxed text-card-foreground",
+};
 
 export function TranslationOutput(props: {
   testID: string;
   text: string;
   markdownEnabled: boolean;
   streaming: boolean;
+  size?: TranslationOutputSize;
 }) {
+  const outputClass = () => OUTPUT_CLASS[props.size ?? "default"];
   return (
     <If
       when={props.markdownEnabled}
       else={
         <View selectable>
-          <Text testID={props.testID} class={OUTPUT_CLASS}>
+          <Text testID={props.testID} class={outputClass()}>
             {props.text}
           </Text>
         </View>
@@ -22,7 +29,7 @@ export function TranslationOutput(props: {
     >
       <TextView
         testID={props.testID}
-        class={OUTPUT_CLASS}
+        class={outputClass()}
         markdown={props.text}
         options={{ streaming: props.streaming, html: false, math: false }}
         selectable

@@ -2,7 +2,6 @@ import type { HistoryResult, HistorySnapshot } from "langnext-native";
 import { Clipboard, signal, Text, View } from "nsh";
 import { t } from "nsh/i18n";
 import { Button } from "../../components/ui/button";
-import { Card } from "../../components/ui/card";
 import { Icon } from "../../components/ui/icon";
 import { TranslationOutput } from "../../components/ui/translation-output";
 import { getLanguageLabel, isLanguageId } from "../presets/languages";
@@ -31,10 +30,13 @@ function HistoryResultCard(props: { result: HistoryResult; markdownEnabled: bool
   };
 
   return (
-    <Card class="gap-2 p-3" variant="subtle" testID="quick-translate-history-result">
+    <View
+      class="gap-2 border-b border-border/70 px-4 py-3 odd:bg-surface-subtle/85 even:bg-background last:border-b-0"
+      testID="quick-translate-history-result"
+    >
       <View class="flex-row items-center justify-between gap-2">
         <View class="min-w-0 flex-1 gap-0.5">
-          <Text class="truncate text-sm font-medium text-card-foreground">
+          <Text class="truncate text-sm font-semibold text-foreground">
             {props.result.presetName}
           </Text>
           <Text class="truncate text-xs text-muted-foreground">
@@ -67,7 +69,7 @@ function HistoryResultCard(props: { result: HistoryResult; markdownEnabled: bool
           {t("quickTranslate.error.copyFailed")}
         </Text>
       </If>
-    </Card>
+    </View>
   );
 }
 
@@ -77,7 +79,7 @@ export function QuickTranslateHistoryResults(props: {
   markdownEnabled: boolean;
 }) {
   return (
-    <View class="gap-2.5" testID="quick-translate-history-results">
+    <View class="border-t border-border/70" testID="quick-translate-history-results">
       <Each
         of={props.snapshot?.results ?? []}
         key={(result) => `${props.snapshot?.id}:${result.position}`}
