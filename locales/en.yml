@@ -99,6 +99,11 @@ settings:
     label: Simulate Copy to Get Text
     description: When the selection cannot be read directly, try copying it. This can replace your clipboard contents.
     saveError: Could not save the simulated copy setting. Try again.
+  selectionHint:
+    label: Show Translate Button After Dragging Text
+    description: A small button appears after you drag over text. A click reads the selection with UI Automation; the Translate Selection shortcut does not need it.
+    enableError: Could not start the drag button listener. It stays off, and the translation shortcuts still work.
+    saveError: Could not save the drag button setting. The previous value stays.
   doubleCopy:
     label: Double-copy Quick Translate (Ctrl+C × 2)
     description: Reads copied text after two quick Ctrl+C presses and translates it with your enabled presets.
@@ -781,6 +786,8 @@ quickTranslate:
   historyResultLanguages: "%{source} → %{target}"
   ocr: OCR
   ocrRecognizing: Reading text…
+  selectionNoSelection: No text is selected.
+  selectionUnavailable: Could not read the selection.
   shortcutUnavailable: Global shortcut %{shortcut} is unavailable. Use the tray icon menu to open Quick Translate.
   presetLabel: Preset
   presetPlaceholder: Select a preset…

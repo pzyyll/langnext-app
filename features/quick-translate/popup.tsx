@@ -49,11 +49,18 @@ export interface QuickTranslateOcrStatus {
   message: string | null;
 }
 
+/** Why a valid selection read delivered no text. */
+export type QuickTranslateSelectionFeedback = "noSelection" | "unavailable";
+
 export interface QuickTranslatePopupProps {
   session: QuickTranslateSession;
   markdownEnabled?: boolean;
   /** OCR progress and alerts; the window entry point passes the controller's state. */
   ocrState?: Accessor<QuickTranslateOcrStatus>;
+  /** Why the last valid selection read delivered no text; omitted without a selection port. */
+  selectionFeedback?: Accessor<QuickTranslateSelectionFeedback | null>;
+  /** Starts the existing Screenshot Translate command; omitted where screen capture is unavailable. */
+  onScreenshotTranslate?: () => void;
   /** False while the native window is hidden. Omitted in a harness with no window. */
   playbackAllowed?: Accessor<boolean>;
   onAttachSourceInput?: (input: InputRef | null) => void;
@@ -1255,7 +1262,14 @@ export function QuickTranslatePopup(props: QuickTranslatePopupProps) {
   // One bottom-left status slot serves OCR errors and active recognition by priority.
   const showOcrError = () => ocrMessage() !== null;
   const showOcrBusy = () => !showOcrError() && ocrRecognizing();
-  const hasToolbarStatus = () => showOcrError() || showOcrBusy();
+  const selectionFeedback = () => (props.selectionFeedback ? props.selectionFeedback() : null);
+  const selectionMessage = () => {
+    const feedback = selectionFeedback();
+    if (feedback === "unavailable") return t("quickTranslate.selectionUnavailable");
+    if (feedback === "noSelection") return t("quickTranslate.selectionNoSelection");
+    return null;
+  };
+  const hasToolbarStatus = () => showOcrError() || showOcrBusy() || selectionMessage() !== null;
   const hasSourceToolbar = () => hasSpeakableSource() || hasToolbarStatus();
 
   const renderSourceActions = (extraClass = "") => (
@@ -1347,6 +1361,33 @@ export function QuickTranslatePopup(props: QuickTranslatePopupProps) {
           >
             {t("quickTranslate.ocrRecognizing")}
           </Text>
+        </If>
+        <If when={!showOcrError() && !showOcrBusy() && selectionMessage() !== null}>
+          <Text
+            testID="quick-translate-selection-status"
+            role={selectionFeedback() === "unavailable" ? "alert" : undefined}
+            class={`min-w-0 flex-1 text-xs ${
+              selectionFeedback() === "unavailable"
+                ? "text-destructive"
+                : "truncate text-muted-foreground"
+            }`}
+          >
+            {selectionMessage() ?? ""}
+          </Text>
+          <If
+            when={
+              selectionFeedback() === "unavailable" && props.onScreenshotTranslate !== undefined
+            }
+          >
+            <Button
+              testID="quick-translate-selection-screenshot"
+              size="xs"
+              variant="ghost"
+              label={t("settings.shortcuts.screenshotTranslate")}
+              onPress={() => props.onScreenshotTranslate?.()}
+              class="shrink-0"
+            />
+          </If>
         </If>
       </View>
     </If>

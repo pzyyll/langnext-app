@@ -18,6 +18,12 @@ import {
   selectionCopySaving,
 } from "./selection-copy";
 import {
+  selectSelectionHint,
+  selectionHintEnabled,
+  selectionHintError,
+  selectionHintSaving,
+} from "./selection-hint";
+import {
   formatShortcut,
   recordQuickTranslateShortcut,
   TRANSLATION_SHORTCUTS,
@@ -227,6 +233,27 @@ export function ShortcutsSection(props: {
                 class="px-3 text-sm text-destructive"
               >
                 {t("settings.selectionCopy.saveError")}
+              </Text>
+            </If>
+          </View>
+          <View class="mx-3 h-px bg-border" />
+          <View class="gap-2">
+            <Switch
+              testID="settings-selection-hint-switch"
+              labelTestID="settings-selection-hint-label"
+              label={t("settings.selectionHint.label")}
+              tooltip={t("settings.selectionHint.description")}
+              checked={selectionHintEnabled()}
+              disabled={selectionHintSaving()}
+              onChange={(checked) => void selectSelectionHint(checked)}
+            />
+            <If when={selectionHintError() !== null}>
+              <Text
+                testID="settings-selection-hint-error"
+                role="alert"
+                class="px-3 text-sm text-destructive"
+              >
+                {selectionHintError() ?? ""}
               </Text>
             </If>
           </View>

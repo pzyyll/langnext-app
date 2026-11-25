@@ -23,6 +23,8 @@ import { GOOGLE_CLOUD_TTS_URL } from "../features/tts/google-cloud";
 import { DEFAULT_GOOGLE_VOICE_PREFERENCES } from "../features/tts/google-preferences";
 import { TTS_STORAGE_KEY, ttsCredentialStorageKey } from "../features/tts/settings";
 import { createQuickTranslateController, POPUP_MIN_SIZE } from "./quick-translate-controller";
+import { SELECTION_HINT_STORAGE_KEY } from "../features/settings/selection-hint";
+import { SELECTION_HINT_DURATION_MS } from "./selection-hint";
 
 const HARNESS_ENTRY = "./__tests__/quick-translate-harness.tsx";
 const HARNESS_SHORTCUT_MODE_KEY = "__test.qt.shortcutMode";
@@ -1627,6 +1629,599 @@ test("selection translate: waits for the selection, then translates once with Au
   await app.waitUntil(() => app.requests().length === 1);
   expect(JSON.parse(app.requests()[0]!.body!).messages[1].content).toBe(selected);
   expect(app.texts().join(" ")).toContain("dcReads=0|");
+});
+
+test("selection feedback: an empty selection shows why and keeps the draft, results, and pin", async () => {
+  const seeded = makeSeedStorage({
+    channels: [makeChannel({ adapterId: "openai-compatible", enabled: true })],
+    models: [makeModel({ enabled: true })],
+    credentials: { "ch-1": "sk-test" },
+  });
+  const popupStorage = popupPreferences({
+    cards: [{ id: "card-1", presetId: "preset-1", templateId: null, collapsed: false }],
+  });
+  const routes = {
+    "POST https://api.openai.com/v1/chat/completions": {
+      status: 200,
+      body: { choices: [{ message: { content: "Kept translation" } }] },
+    },
+  };
+
+  const app = await open(HARNESS_ENTRY, {
+    ...viewport,
+    storage: {
+      ...seeded,
+      [PRESETS_STORAGE_KEY]: JSON.stringify({ version: 1, items: [quickPreset] }),
+      [QUICK_TRANSLATE_PREFERENCES_KEY]: popupStorage,
+      "settings.language": "en",
+    },
+    network: routes,
+  });
+
+  await app.press("id:harness-tray-quick-translate");
+  await app.waitFor("id:quick-translate-source");
+  await app.type("id:quick-translate-source", "Kept draft");
+  await app.keyboard.press("enter");
+  await app.waitFor("id:quick-translate-result-text");
+  await app.press("id:quick-translate-pin");
+
+  await app.keyboard.press(DEFAULT_SELECTION_TRANSLATE_SHORTCUT);
+  await app.waitUntil(() => app.texts().some((text) => text.includes("selReads=1|")));
+  await app.press("id:harness-finish-selection-empty");
+  await app.waitFor("id:quick-translate-source-toolbar >> id:quick-translate-selection-status");
+
+  expect(app.texts()).toContain("No text is selected.");
+  expect(app.value("id:quick-translate-source")).toBe("Kept draft");
+  expect(app.texts()).toContain("Kept translation");
+  expect(app.requests()).toHaveLength(1);
+
+  // The pin is unchanged: a press outside the popup does not close it.
+  await app.press("id:nav-models");
+  expect(app.window("quick-translate").state()?.visible).toBe(true);
+
+  const chinese = await open(HARNESS_ENTRY, {
+    ...viewport,
+    storage: {
+      ...seeded,
+      [PRESETS_STORAGE_KEY]: JSON.stringify({ version: 1, items: [quickPreset] }),
+      [QUICK_TRANSLATE_PREFERENCES_KEY]: popupStorage,
+      "settings.language": "zh-CN",
+    },
+    network: routes,
+  });
+  // An empty source still shows the status row, localized.
+  await chinese.press("id:harness-tray-quick-translate");
+  await chinese.waitFor("id:quick-translate-pin");
+  await chinese.press("id:quick-translate-pin");
+  await chinese.keyboard.press(DEFAULT_SELECTION_TRANSLATE_SHORTCUT);
+  await chinese.waitUntil(() => chinese.texts().some((text) => text.includes("selReads=1|")));
+  await chinese.press("id:harness-finish-selection-empty");
+  await chinese.waitFor("id:quick-translate-source-toolbar >> id:quick-translate-selection-status");
+  expect(chinese.texts()).toContain("未选中文本。");
+  expect(chinese.value("id:quick-translate-source")).toBe("");
+  expect(chinese.requests()).toHaveLength(0);
+});
+
+test("selection feedback: an unreadable selection replaces an idle OCR message and never interrupts recognition", async () => {
+  const app = await open(HARNESS_ENTRY, { ...viewport, storage: { "settings.language": "en" } });
+
+  // Missing OCR setup leaves an idle message in the source toolbar.
+  await app.press("id:harness-tray-quick-translate");
+  await app.waitFor("id:quick-translate-source");
+  await app.type("id:quick-translate-source", "Kept draft");
+  await app.press("id:quick-translate-pin");
+  await app.press(OCR_BUTTON);
+  await app.waitFor("id:quick-translate-source-toolbar >> id:quick-translate-ocr-status");
+  expect(app.texts()).toContain(
+    "Configure OCR in Settings, or choose another way to get the text.",
+  );
+
+  await app.keyboard.press(DEFAULT_SELECTION_TRANSLATE_SHORTCUT);
+  await app.waitUntil(() => app.texts().some((text) => text.includes("selReads=1|")));
+  await app.press("id:harness-finish-selection-unavailable");
+  await app.waitFor("id:quick-translate-source-toolbar >> id:quick-translate-selection-status");
+  expect(app.texts()).toContain("Could not read the selection.");
+  expect(app.shows("id:quick-translate-source-toolbar >> id:quick-translate-ocr-status")).toBe(
+    false,
+  );
+  expect(app.value("id:quick-translate-source")).toBe("Kept draft");
+  expect(app.requests()).toHaveLength(0);
+
+  // Recognition keeps the status slot: the failed read does not replace it.
+  const recognizing = await open(HARNESS_ENTRY, {
+    ...viewport,
+    storage: ocrSeed({ [HARNESS_OCR_CAPTURE_KEY]: "wait" }),
+    network: ocrRoutes(JSON.stringify({ text: OCR_TEXT }), 2000),
+  });
+  await recognizing.press("id:harness-tray-quick-translate");
+  await recognizing.waitFor("id:quick-translate-source");
+  await recognizing.press(OCR_BUTTON);
+  await recognizing.waitUntil(() => recognizing.texts().some((text) => text.includes("ocrCap=1|")));
+  await recognizing.press("id:harness-finish-capture");
+  await recognizing.waitFor("id:quick-translate-source-toolbar >> id:quick-translate-ocr-busy");
+
+  await recognizing.keyboard.press(DEFAULT_SELECTION_TRANSLATE_SHORTCUT);
+  await recognizing.waitUntil(() =>
+    recognizing.texts().some((text) => text.includes("selReads=1|")),
+  );
+  await recognizing.press("id:harness-finish-selection-unavailable");
+  await recognizing.wait(50);
+  expect(
+    recognizing.shows("id:quick-translate-source-toolbar >> id:quick-translate-ocr-busy"),
+  ).toBe(true);
+  expect(recognizing.shows("id:quick-translate-selection-status")).toBe(false);
+  expect(recognizing.texts()).not.toContain("Could not read the selection.");
+  await recognizing.waitUntil(() => recognizing.value("id:quick-translate-source") === OCR_TEXT);
+  expect(
+    recognizing.shows("id:quick-translate-source-toolbar >> id:quick-translate-ocr-busy"),
+  ).toBe(false);
+});
+
+test("selection feedback: clears on a new attempt, edit, restore, delivery, OCR start, or close, and stale reads stay silent", async () => {
+  const pending: Array<{
+    resolve: (result: { status: "noSelection" } | { status: "unavailable" }) => void;
+  }> = [];
+  let currentTarget: string | null = "t1";
+  const controller = createQuickTranslateController({
+    isDoubleCopyActive: () => true,
+    readClipboardText: async () => "Copied phrase",
+    captureRegion: () => new Promise(() => {}),
+    selectionText: {
+      snapshot: () => currentTarget,
+      isCurrent: (target) => target === currentTarget,
+      read: () =>
+        new Promise((resolve) => {
+          pending.push({ resolve });
+        }),
+    },
+  });
+
+  controller.open();
+  controller.setSourceText("Kept draft");
+
+  const unreadable = controller.activateSelectionTranslate();
+  pending.shift()!.resolve({ status: "unavailable" });
+  await unreadable;
+  expect(controller.selectionFeedback()).toBe("unavailable");
+  expect(controller.sourceText()).toBe("Kept draft");
+
+  // A new attempt clears the old message before its read ends.
+  currentTarget = "t2";
+  const stale = controller.activateSelectionTranslate();
+  expect(controller.selectionFeedback()).toBeNull();
+  currentTarget = "t3";
+  pending.shift()!.resolve({ status: "noSelection" });
+  await stale;
+  expect(controller.selectionFeedback()).toBeNull();
+
+  // No foreground target: no read, no new feedback.
+  currentTarget = null;
+  await controller.activateSelectionTranslate();
+  expect(pending).toHaveLength(0);
+  expect(controller.selectionFeedback()).toBeNull();
+
+  // A draft edit clears it.
+  currentTarget = "t4";
+  const editedRead = controller.activateSelectionTranslate();
+  pending.shift()!.resolve({ status: "unavailable" });
+  await editedRead;
+  expect(controller.selectionFeedback()).toBe("unavailable");
+  controller.setSourceText("Edited draft");
+  expect(controller.selectionFeedback()).toBeNull();
+
+  // A restored draft clears it.
+  currentTarget = "t5";
+  const restoredRead = controller.activateSelectionTranslate();
+  pending.shift()!.resolve({ status: "noSelection" });
+  await restoredRead;
+  expect(controller.selectionFeedback()).toBe("noSelection");
+  controller.restoreSourceText("Restored draft");
+  expect(controller.selectionFeedback()).toBeNull();
+
+  // A new delivery clears it.
+  currentTarget = "t6";
+  const deliveryRead = controller.activateSelectionTranslate();
+  pending.shift()!.resolve({ status: "unavailable" });
+  await deliveryRead;
+  expect(controller.selectionFeedback()).toBe("unavailable");
+  await controller.activateDoubleCopy({ hasValidCopy: true });
+  expect(controller.selectionFeedback()).toBeNull();
+  expect(controller.sourceDelivery()?.kind).toBe("clipboard");
+
+  // Starting OCR clears it and owns the status slot from then on.
+  currentTarget = "t7";
+  const ocrRead = controller.activateSelectionTranslate();
+  pending.shift()!.resolve({ status: "unavailable" });
+  await ocrRead;
+  expect(controller.selectionFeedback()).toBe("unavailable");
+  await controller.startOcr();
+  expect(controller.selectionFeedback()).toBeNull();
+  expect(controller.ocrState().message).not.toBeNull();
+
+  // A failed read replaces that idle OCR message.
+  currentTarget = "t8";
+  const replacedRead = controller.activateSelectionTranslate();
+  pending.shift()!.resolve({ status: "unavailable" });
+  await replacedRead;
+  expect(controller.selectionFeedback()).toBe("unavailable");
+  expect(controller.ocrState().message).toBeNull();
+  expect(controller.sourceDelivery()?.seq).toBe(1);
+
+  // Closing clears it.
+  controller.close();
+  expect(controller.selectionFeedback()).toBeNull();
+});
+
+test("selection screenshot recovery: an unreadable selection offers capture and a cancelled region keeps the draft", async () => {
+  const app = await open(HARNESS_ENTRY, {
+    ...viewport,
+    storage: ocrSeed({ [HARNESS_OCR_CAPTURE_KEY]: "cancel" }),
+    network: ocrRoutes(JSON.stringify({ text: OCR_TEXT })),
+  });
+  const recovery = "id:quick-translate-source-toolbar >> id:quick-translate-selection-screenshot";
+
+  await app.press("id:harness-tray-quick-translate");
+  await app.waitFor("id:quick-translate-source");
+  await app.type("id:quick-translate-source", "Kept draft");
+  await app.keyboard.press("enter");
+  await app.waitFor("id:quick-translate-result-text");
+  await app.press("id:quick-translate-pin");
+
+  await app.keyboard.press(DEFAULT_SELECTION_TRANSLATE_SHORTCUT);
+  await app.waitUntil(() => app.texts().some((text) => text.includes("selReads=1|")));
+  await app.press("id:harness-finish-selection-unavailable");
+  await app.waitFor(recovery);
+  expect(app.texts()).toContain("Could not read the selection.");
+  expect(app.texts().some((text) => text.includes("ocrCap=0|"))).toBe(true);
+  expect(app.requests()).toHaveLength(1);
+
+  await app.press(recovery);
+  await app.waitUntil(() => app.texts().some((text) => text.includes("ocrCap=1|")));
+  await app.waitUntil(() => app.window("quick-translate").state()?.visible === true);
+
+  expect(app.value("id:quick-translate-source")).toBe("Kept draft");
+  expect(app.texts()).toContain("翻译结果");
+  expect(app.shows(recovery)).toBe(false);
+  expect(app.requests()).toHaveLength(1);
+});
+
+test("selection screenshot recovery: a confirmed crop translates the recognized text once", async () => {
+  const app = await open(HARNESS_ENTRY, {
+    ...viewport,
+    storage: ocrSeed({ [HARNESS_OCR_CAPTURE_KEY]: "wait" }),
+    network: ocrRoutes(JSON.stringify({ text: OCR_TEXT })),
+  });
+  const recovery = "id:quick-translate-source-toolbar >> id:quick-translate-selection-screenshot";
+
+  await app.press("id:harness-tray-quick-translate");
+  await app.waitFor("id:quick-translate-source");
+  await app.press("id:quick-translate-pin");
+  await app.keyboard.press(DEFAULT_SELECTION_TRANSLATE_SHORTCUT);
+  await app.waitUntil(() => app.texts().some((text) => text.includes("selReads=1|")));
+  await app.press("id:harness-finish-selection-unavailable");
+  await app.waitFor(recovery);
+
+  await app.press(recovery);
+  await app.waitUntil(() => app.texts().some((text) => text.includes("ocrCap=1|")));
+  await app.press("id:harness-finish-capture");
+  await app.waitUntil(() => app.value("id:quick-translate-source") === OCR_TEXT);
+  await app.waitFor("翻译结果");
+
+  expect(app.requests().map((request) => request.url)).toEqual([
+    "https://vision.example.com/v1/responses",
+    "https://api.openai.com/v1/chat/completions",
+  ]);
+  expect(app.shows(recovery)).toBe(false);
+});
+
+test("selection screenshot recovery: only an unreadable selection offers capture", async () => {
+  const app = await open(HARNESS_ENTRY, {
+    ...viewport,
+    storage: ocrSeed({ [HARNESS_OCR_CAPTURE_KEY]: "cancel" }),
+    network: ocrRoutes(JSON.stringify({ text: OCR_TEXT })),
+  });
+  const recovery = "id:quick-translate-source-toolbar >> id:quick-translate-selection-screenshot";
+
+  await app.press("id:harness-tray-quick-translate");
+  await app.waitFor("id:quick-translate-pin");
+  await app.press("id:quick-translate-pin");
+  await app.keyboard.press(DEFAULT_SELECTION_TRANSLATE_SHORTCUT);
+  await app.waitUntil(() => app.texts().some((text) => text.includes("selReads=1|")));
+  await app.press("id:harness-finish-selection-empty");
+  await app.waitFor("id:quick-translate-source-toolbar >> id:quick-translate-selection-status");
+
+  expect(app.texts()).toContain("No text is selected.");
+  expect(app.shows(recovery)).toBe(false);
+  expect(app.texts().some((text) => text.includes("ocrCap=0|"))).toBe(true);
+});
+
+test("selection screenshot recovery: missing OCR setup shows its own feedback without capture", async () => {
+  const seed: Record<string, string> = { ...ocrSeed() };
+  delete seed[OCR_STORAGE_KEY];
+  const app = await open(HARNESS_ENTRY, { ...viewport, storage: seed });
+  const recovery = "id:quick-translate-source-toolbar >> id:quick-translate-selection-screenshot";
+
+  await app.press("id:harness-tray-quick-translate");
+  await app.waitFor("id:quick-translate-source");
+  await app.press("id:quick-translate-pin");
+  await app.keyboard.press(DEFAULT_SELECTION_TRANSLATE_SHORTCUT);
+  await app.waitUntil(() => app.texts().some((text) => text.includes("selReads=1|")));
+  await app.press("id:harness-finish-selection-unavailable");
+  await app.waitFor(recovery);
+
+  await app.press(recovery);
+  await app.waitFor("id:quick-translate-source-toolbar >> id:quick-translate-ocr-status");
+  expect(app.texts()).toContain(
+    "Configure OCR in Settings, or choose another way to get the text.",
+  );
+  expect(app.texts().some((text) => text.includes("ocrCap=0|"))).toBe(true);
+  expect(app.requests()).toHaveLength(0);
+  expect(app.shows(recovery)).toBe(false);
+});
+
+test("selection screenshot recovery: the unreadable row renders in dark mode with reduced motion in Chinese", async () => {
+  const seed: Record<string, string> = { ...ocrSeed() };
+  delete seed[OCR_STORAGE_KEY];
+  const app = await open(HARNESS_ENTRY, {
+    ...viewport,
+    colorScheme: "dark",
+    reducedMotion: true,
+    storage: { ...seed, "settings.language": "zh-CN" },
+  });
+  const recovery = "id:quick-translate-source-toolbar >> id:quick-translate-selection-screenshot";
+
+  await app.press("id:harness-tray-quick-translate");
+  await app.waitFor("id:quick-translate-source");
+  await app.press("id:quick-translate-pin");
+  await app.keyboard.press(DEFAULT_SELECTION_TRANSLATE_SHORTCUT);
+  await app.waitUntil(() => app.texts().some((text) => text.includes("selReads=1|")));
+  await app.press("id:harness-finish-selection-unavailable");
+  await app.waitFor("id:quick-translate-source-toolbar >> id:quick-translate-selection-status");
+
+  expect(app.texts()).toContain("无法读取选中文本。");
+  expect(app.texts()).toContain("截图翻译");
+  expect(app.shows(recovery)).toBe(true);
+  expect(app.shows("id:quick-translate-footer")).toBe(true);
+  expect(app.window("quick-translate").state()?.visible).toBe(true);
+});
+
+test("selection hint activation: a drag release shows one button and only a click reads and translates", async () => {
+  const selected = "Selected line one\nSelected line two";
+  const app = await open(HARNESS_ENTRY, {
+    ...viewport,
+    clock: {},
+    storage: {
+      ...makeSeedStorage({
+        channels: [makeChannel({ adapterId: "openai-compatible", enabled: true })],
+        models: [makeModel({ enabled: true })],
+        credentials: { "ch-1": "sk-test" },
+      }),
+      [PRESETS_STORAGE_KEY]: JSON.stringify({ version: 1, items: [quickPreset] }),
+      [QUICK_TRANSLATE_PREFERENCES_KEY]: popupPreferences({
+        cards: [{ id: "card-1", presetId: "preset-1", templateId: null, collapsed: false }],
+      }),
+      [SELECTION_HINT_STORAGE_KEY]: "true",
+      "settings.language": "en",
+    },
+    network: {
+      "POST https://api.openai.com/v1/chat/completions": {
+        status: 200,
+        body: { choices: [{ message: { content: "Translated selection" } }] },
+      },
+    },
+  });
+
+  await app.waitUntil(() => app.texts().some((text) => text.includes("sgReg=1|")));
+  expect(app.window("selection-hint").state()).toBeNull();
+
+  await app.press("id:harness-selection-hint-candidate");
+  await app.waitUntil(() => app.window("selection-hint").state()?.visible === true);
+  // The button alone reads nothing: no target read, clipboard call, capture, or request.
+  expect(app.texts().join(" ")).toContain("selReads=0|");
+  expect(app.texts().join(" ")).toContain("dcReads=0|");
+  expect(app.texts().join(" ")).toContain("ocrCap=0|");
+  expect(app.requests()).toHaveLength(0);
+  expect(app.window("quick-translate").state()).toBeNull();
+  const placed = app.window("selection-hint").state()!;
+  expect(placed.display).toBe(app.window("main").state()?.display);
+  // Opening it takes no focus: the window that had it keeps it.
+  expect(placed.focused).toBe(false);
+  expect(app.window("main").state()?.focused).toBe(true);
+
+  await app.press("id:selection-hint-translate");
+  await app.waitUntil(() => app.texts().some((text) => text.includes("selReads=1|")));
+  expect(app.texts().join(" ")).toContain("selUia=1|");
+  await app.press("id:harness-finish-selection");
+  await app.waitUntil(() => app.requests().length === 1);
+
+  expect(JSON.parse(app.requests()[0]!.body!).messages[1].content).toBe(selected);
+  expect(app.window("quick-translate").state()?.visible).toBe(true);
+  expect(app.window("selection-hint").state()?.visible).not.toBe(true);
+});
+
+test("selection hint activation: a stale, expired, outside-pressed, or edge hint opens nothing unwanted", async () => {
+  const app = await open(HARNESS_ENTRY, {
+    ...viewport,
+    clock: {},
+    storage: { "settings.language": "en", [SELECTION_HINT_STORAGE_KEY]: "true" },
+  });
+
+  // A target that is no longer current opens nothing and reads nothing.
+  await app.press("id:harness-selection-hint-candidate");
+  await app.waitUntil(() => app.window("selection-hint").state()?.visible === true);
+  await app.press("id:harness-selection-hint-target-gone");
+  await app.press("id:selection-hint-translate");
+  await app.wait(50);
+  expect(app.texts().join(" ")).toContain("selReads=0|");
+  expect(app.window("quick-translate").state()).toBeNull();
+  expect(app.window("selection-hint").state()?.visible).not.toBe(true);
+
+  // A press outside dismisses it before any read.
+  await app.press("id:harness-selection-hint-candidate");
+  await app.waitUntil(() => app.window("selection-hint").state()?.visible === true);
+  await app.press("id:harness-selection-hint-press");
+  await app.waitUntil(() => app.window("selection-hint").state()?.visible !== true);
+  expect(app.texts().join(" ")).toContain("selReads=0|");
+
+  // Three seconds without a click dismiss it too.
+  await app.press("id:harness-selection-hint-candidate");
+  await app.waitUntil(() => app.window("selection-hint").state()?.visible === true);
+  await app.clock!.runFor(SELECTION_HINT_DURATION_MS + 100);
+  await app.waitUntil(() => app.window("selection-hint").state()?.visible !== true);
+  expect(app.texts().join(" ")).toContain("selReads=0|");
+  expect(app.requests()).toHaveLength(0);
+
+  // Near the work-area edge the hint flips and clamps, and stays fully inside the display.
+  await app.press("id:harness-selection-hint-candidate-edge");
+  await app.waitUntil(() => app.window("selection-hint").state()?.visible === true);
+  const edge = app.window("selection-hint").state()!;
+  const displayMetrics = app.texts().find((text) => text.startsWith("display:"))!;
+  const [workX, workY, workWidth, workHeight] = displayMetrics
+    .slice("display:".length)
+    .split(":")
+    .map(Number);
+  expect(edge.bounds.origin.x).toBeGreaterThanOrEqual(workX - 1);
+  expect(edge.bounds.origin.y).toBeGreaterThanOrEqual(workY - 1);
+  expect(edge.bounds.origin.x + edge.bounds.size.width).toBeLessThanOrEqual(workX + workWidth + 1);
+  expect(edge.bounds.origin.y + edge.bounds.size.height).toBeLessThanOrEqual(
+    workY + workHeight + 1,
+  );
+  // The release was 8 pt inside the corner, so a below-right placement could not fit.
+  expect(edge.bounds.origin.x + edge.bounds.size.width).toBeLessThanOrEqual(
+    workX + workWidth - 8 + 1,
+  );
+  expect(edge.bounds.origin.y + edge.bounds.size.height).toBeLessThanOrEqual(
+    workY + workHeight - 8 + 1,
+  );
+  expect(app.texts().join(" ")).toContain("selReads=0|");
+});
+
+test("selection hint setting: starts one listener only for the saved preference and stops it on disable", async () => {
+  const switchId = "id:settings-selection-hint-switch";
+  const app = await open(HARNESS_ENTRY, {
+    ...viewport,
+    clock: {},
+    storage: { "settings.language": "en" },
+  });
+
+  // Nothing saved: the listener never starts.
+  await app.waitUntil(() => app.texts().some((text) => text.includes("sgReg=0|")));
+  expect(app.window("selection-hint").state()).toBeNull();
+  expect(app.storage()[SELECTION_HINT_STORAGE_KEY]).toBeUndefined();
+
+  await app.press("id:nav-settings");
+  await app.press("id:settings-nav-shortcuts");
+  await app.waitFor(switchId);
+  expect(app.texts()).toContain("Show Translate Button After Dragging Text");
+  expect(app.shows("id:settings-selection-hint-error")).toBe(false);
+
+  await app.press(switchId);
+  await app.waitUntil(() => app.texts().some((text) => text.includes("sgReg=1|")));
+  await app.waitUntil(() => app.storage()[SELECTION_HINT_STORAGE_KEY] === "true");
+
+  // The enabled listener reports a candidate; the hint shows without reading anything.
+  await app.press("id:harness-selection-hint-candidate-edge");
+  await app.waitUntil(() => app.window("selection-hint").state()?.visible === true);
+  expect(app.texts().join(" ")).toContain("selReads=0|");
+
+  // Disabling stops the one listener and dismisses the hint it left behind.
+  await app.press(switchId);
+  await app.waitUntil(() => app.texts().some((text) => text.includes("sgStop=1|")));
+  await app.waitUntil(() => app.window("selection-hint").state()?.visible !== true);
+  await app.waitUntil(() => app.storage()[SELECTION_HINT_STORAGE_KEY] === "false");
+  expect(app.texts().join(" ")).toContain("sgReg=1|");
+
+  // The saved preference starts exactly one listener on the next launch.
+  const reopened = await open(HARNESS_ENTRY, {
+    ...viewport,
+    clock: {},
+    storage: { ...app.storage(), [SELECTION_HINT_STORAGE_KEY]: "true" },
+  });
+  await reopened.waitUntil(() => reopened.texts().some((text) => text.includes("sgReg=1|")));
+  await reopened.press("id:harness-selection-hint-candidate");
+  await reopened.waitUntil(() => reopened.window("selection-hint").state()?.visible === true);
+  await reopened.press("id:selection-hint-translate");
+  await reopened.waitUntil(() => reopened.texts().some((text) => text.includes("selReads=1|")));
+  expect(reopened.texts().join(" ")).toContain("selUia=1|");
+  await reopened.press("id:harness-finish-selection");
+  await reopened.waitUntil(() => reopened.window("quick-translate").state()?.visible === true);
+});
+
+test("selection hint setting: a refused start or a failed write keeps the feature off and the shortcuts", async () => {
+  const refused = await open(HARNESS_ENTRY, {
+    ...viewport,
+    storage: {
+      "settings.language": "en",
+      [SELECTION_HINT_STORAGE_KEY]: "true",
+      "__test.qt.selectionHintMode": "throw",
+    },
+  });
+
+  // The failure is reported to the user, and the shortcuts keep working.
+  await refused.waitUntil(() => refused.texts().includes(t("settings.selectionHint.enableError")));
+  expect(refused.texts().join(" ")).toContain("sgReg=1|");
+  expect(refused.texts().join(" ")).toContain("sgStop=0|");
+  // A refused listener never takes the shortcuts with it.
+  expect(refused.texts().join(" ")).toContain("shortcuts=alt+shift+d,alt+s,alt+d|");
+  expect(refused.window("selection-hint").state()).toBeNull();
+  await refused.press("id:nav-settings");
+  await refused.press("id:settings-nav-shortcuts");
+  await refused.waitFor("id:settings-selection-hint-error");
+
+  // A failed write keeps the previous value and runtime state. Only a headless run can
+  // substitute the app's storage; a desktop target rejects the option and skips this part.
+  let failWrites = true;
+  const saved: Record<string, string> = { "settings.language": "en" };
+  let failing: Awaited<ReturnType<typeof open>> | null = null;
+  try {
+    failing = await open(HARNESS_ENTRY, {
+      ...viewport,
+      modules: {
+        nsh: {
+          "Storage.getItem": async (key: string) => saved[key] ?? null,
+          "Storage.setItem": async (key: string, value: string) => {
+            if (key === SELECTION_HINT_STORAGE_KEY && failWrites) {
+              throw new Error("Storage unavailable");
+            }
+            saved[key] = value;
+          },
+        },
+      },
+    });
+  } catch (error) {
+    if ((error as { code?: string }).code !== "ERR_NSH_TEST_UNSUPPORTED") throw error;
+  }
+  if (failing === null) return;
+  await failing.press("id:nav-settings");
+  await failing.press("id:settings-nav-shortcuts");
+  await failing.press("id:settings-selection-hint-switch");
+  await failing.waitFor("id:settings-selection-hint-error");
+  expect(saved[SELECTION_HINT_STORAGE_KEY]).toBeUndefined();
+  await failing.waitUntil(() => failing.texts().some((text) => text.includes("sgStop=1|")));
+
+  failWrites = false;
+  await failing.press("id:settings-selection-hint-switch");
+  await failing.waitUntil(() => saved[SELECTION_HINT_STORAGE_KEY] === "true");
+  await failing.waitUntil(() => failing.shows("id:settings-selection-hint-error") === false);
+  expect(failing.texts().join(" ")).toContain("sgReg=2|");
+});
+
+test("selection hint setting: outside Windows the switch is hidden and no listener starts", async () => {
+  const app = await open(HARNESS_ENTRY, {
+    ...viewport,
+    platform: "macos",
+    clock: {},
+    storage: { "settings.language": "en", [SELECTION_HINT_STORAGE_KEY]: "true" },
+  });
+
+  await app.press("id:nav-settings");
+  await app.press("id:settings-nav-shortcuts");
+  // A desktop target runs its own platform; only a headless run can substitute macOS.
+  if (app.shows("id:settings-copy-card")) return;
+  await app.waitFor("id:settings-shortcuts-windows-only");
+  expect(app.shows("id:settings-selection-hint-switch")).toBe(false);
+  expect(app.texts().join(" ")).toContain("sgReg=0|");
+  expect(app.window("selection-hint").state()).toBeNull();
 });
 
 test("selection controller: recognition keeps the first delivery", async () => {

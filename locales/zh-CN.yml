@@ -99,6 +99,11 @@ settings:
     label: 模拟复制获取文本
     description: 无法直接读取选区时尝试复制。这可能替换剪贴板内容。
     saveError: 无法保存模拟复制设置，请重试。
+  selectionHint:
+    label: 拖选文本后显示翻译按钮
+    description: 拖选文本后出现一个小按钮。点击后用 UI Automation 读取选中内容；也可以直接使用“翻译选中文本”快捷键。
+    enableError: 无法启动拖选按钮监听，该功能保持关闭，翻译快捷键仍可使用。
+    saveError: 无法保存拖选按钮设置，仍保留之前的值。
   doubleCopy:
     label: 双击 Ctrl+C 快速翻译
     description: 连续按两次 Ctrl+C 会读取复制的文本，并使用已启用的预设进行翻译。
@@ -781,6 +786,8 @@ quickTranslate:
   historyResultLanguages: "%{source} → %{target}"
   ocr: 文本识别
   ocrRecognizing: 正在识别文字…
+  selectionNoSelection: 未选中文本。
+  selectionUnavailable: 无法读取选中文本。
   shortcutUnavailable: 全局快捷键 %{shortcut} 不可用，请通过托盘菜单打开快速翻译。
   presetLabel: 预设
   presetPlaceholder: 选择预设…

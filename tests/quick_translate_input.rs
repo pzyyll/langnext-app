@@ -317,3 +317,146 @@ fn settles_clipboard_sequence_updates_across_first_and_second_copy() {
     );
     assert!(!cancelled);
 }
+mod selection_drag {
+    use langnext::quick_translate::selection_gesture::{
+        CursorShape, DragPhase, DragSample, DragThreshold, PhysicalPoint, SelectionDragCandidate,
+        SelectionDragRecognizer,
+    };
+
+    fn sample(phase: DragPhase, x: i32, y: i32, cursor: CursorShape) -> DragSample {
+        DragSample {
+            phase,
+            point: PhysicalPoint { x, y },
+            cursor,
+        }
+    }
+
+    fn recognizer() -> SelectionDragRecognizer {
+        SelectionDragRecognizer::new(DragThreshold::new(4, 4))
+    }
+
+    #[test]
+    fn selection_drag_emits_one_candidate_only_on_release() {
+        use CursorShape::{IBeam, Other};
+        use DragPhase::{Down, Move, Up};
+
+        let mut rec = recognizer();
+
+        assert_eq!(rec.handle(sample(Down, 100, 100, IBeam)), None);
+        // Movement inside the system drag rectangle is still a click.
+        assert_eq!(rec.handle(sample(Move, 103, 100, IBeam)), None);
+        // The drag crosses the threshold, but nothing may fire before release.
+        assert_eq!(rec.handle(sample(Move, 104, 100, IBeam)), None);
+        assert_eq!(rec.handle(sample(Move, 160, 120, IBeam)), None);
+        assert_eq!(rec.handle(sample(Move, 170, 130, Other)), None);
+
+        assert_eq!(
+            rec.handle(sample(Up, 170, 130, IBeam)),
+            Some(SelectionDragCandidate {
+                release: PhysicalPoint { x: 170, y: 130 }
+            })
+        );
+        // One candidate per drag: the release is consumed once.
+        assert_eq!(rec.handle(sample(Up, 170, 130, IBeam)), None);
+    }
+
+    #[test]
+    fn selection_drag_ignores_clicks_short_drags_and_double_clicks() {
+        use CursorShape::{IBeam, Other};
+        use DragPhase::{Down, Move, Up};
+
+        let mut rec = recognizer();
+        // A click in text: no movement at all.
+        rec.handle(sample(Down, 200, 200, IBeam));
+        assert_eq!(rec.handle(sample(Up, 200, 200, IBeam)), None);
+
+        // A double click never becomes a candidate either.
+        rec.handle(sample(Down, 200, 200, IBeam));
+        rec.handle(sample(Up, 200, 200, IBeam));
+        rec.handle(sample(Down, 200, 200, IBeam));
+        assert_eq!(rec.handle(sample(Up, 200, 200, IBeam)), None);
+
+        // A short drag stays inside the rectangle.
+        rec.handle(sample(Down, 300, 300, IBeam));
+        rec.handle(sample(Move, 302, 301, IBeam));
+        assert_eq!(rec.handle(sample(Up, 303, 302, IBeam)), None);
+
+        // Any other button's release without a press reports nothing.
+        assert_eq!(rec.handle(sample(Up, 400, 400, Other)), None);
+    }
+
+    #[test]
+    fn selection_drag_requires_the_ibeam_at_some_point() {
+        use CursorShape::{IBeam, Other};
+        use DragPhase::{Down, Move, Up};
+
+        let mut rec = recognizer();
+        // Dragging a file or another object keeps the arrow cursor.
+        rec.handle(sample(Down, 50, 50, Other));
+        rec.handle(sample(Move, 260, 90, Other));
+        assert_eq!(rec.handle(sample(Up, 260, 90, Other)), None);
+
+        // The next drag over text still reports exactly one candidate.
+        rec.handle(sample(Down, 50, 50, Other));
+        rec.handle(sample(Move, 120, 60, Other));
+        rec.handle(sample(Move, 140, 60, IBeam));
+        assert_eq!(
+            rec.handle(sample(Up, 150, 60, IBeam)),
+            Some(SelectionDragCandidate {
+                release: PhysicalPoint { x: 150, y: 60 }
+            })
+        );
+    }
+
+    #[test]
+    fn selection_drag_accepts_a_fast_release_without_move_samples() {
+        use CursorShape::IBeam;
+        use DragPhase::{Down, Up};
+
+        let mut rec = recognizer();
+        rec.handle(sample(Down, 10, 10, IBeam));
+        assert_eq!(
+            rec.handle(sample(Up, 90, 10, IBeam)),
+            Some(SelectionDragCandidate {
+                release: PhysicalPoint { x: 90, y: 10 }
+            })
+        );
+    }
+
+    #[test]
+    fn selection_drag_resets_a_pending_press() {
+        use CursorShape::IBeam;
+        use DragPhase::{Down, Move, Up};
+
+        let mut rec = recognizer();
+        rec.handle(sample(Down, 10, 10, IBeam));
+        rec.handle(sample(Move, 90, 10, IBeam));
+        rec.reset();
+        assert_eq!(rec.handle(sample(Up, 90, 10, IBeam)), None);
+
+        // A second press while the first is pending starts over from the new point.
+        rec.handle(sample(Down, 10, 10, IBeam));
+        rec.handle(sample(Down, 20, 20, IBeam));
+        assert_eq!(
+            rec.handle(sample(Up, 30, 20, IBeam)),
+            Some(SelectionDragCandidate {
+                release: PhysicalPoint { x: 30, y: 20 }
+            })
+        );
+    }
+
+    #[test]
+    fn drag_threshold_keeps_a_malformed_metric_usable() {
+        use CursorShape::IBeam;
+        use DragPhase::{Down, Up};
+
+        let mut rec = SelectionDragRecognizer::new(DragThreshold::new(0, -3));
+        rec.handle(sample(Down, 5, 5, IBeam));
+        assert_eq!(
+            rec.handle(sample(Up, 6, 5, IBeam)),
+            Some(SelectionDragCandidate {
+                release: PhysicalPoint { x: 6, y: 5 }
+            })
+        );
+    }
+}

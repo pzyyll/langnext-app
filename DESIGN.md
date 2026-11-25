@@ -30,3 +30,30 @@ Settings → Integrations → Wordbook configures one Anki destination. It does 
 | Quick Translate add press and tooltip             | Shared icon `pressScale` and tooltip. The status glyph and text replace in place. | No transition or travel |
 
 Wordbook has no drag, live updates, or a new route transition.
+
+## Quick Translate Selection Feedback
+
+A selection read that delivers no text explains itself in the source toolbar. An empty selection shows ordinary muted text. An unreadable selection shows an inline alert with a secondary **Screenshot Translate** action that starts the existing region selection; a cancelled region keeps the draft and returns focus to the header Screenshot Translate action. A new attempt, a draft edit, a delivery, recognition, or closing replaces the message.
+
+### Motion Inventory
+
+| Change                                  | Motion                                                                       | Reduced motion         |
+| --------------------------------------- | ---------------------------------------------------------------------------- | ---------------------- |
+| Selection feedback appears or clears    | Immediate replacement in the existing status row; no moving status indicator | Same                   |
+| Recovery action hover and press         | Shared `pressScale` feedback                                                 | No transition or scale |
+| Window content fit after the status row | Unchanged: the existing content fit, which never widens the popup            | Same                   |
+
+The feedback adds no overlay, travel, or live region; it does not move the keyboard focus.
+
+## Quick Translate Selection Hint
+
+After the user drags over text, an optional small **Translate Selection** button appears beside the release point. It is an opt-in in **Settings → Application → Shortcuts**, off by default. The button never takes the focus, so the selection stays with the application that owns it, and it reads nothing until it is clicked. It hides after three seconds, on the next press outside it, on activation, when Quick Translate or its screenshot workflow takes over, or when the option is turned off. The **Translate Selection** shortcut remains the keyboard path.
+
+### Motion Inventory
+
+| Change                                | Motion                                                               | Reduced motion         |
+| ------------------------------------- | -------------------------------------------------------------------- | ---------------------- |
+| Hint appears or follows a new release | No opening transition, travel, or fade: it is placed before it opens | Same                   |
+| Hint disappears on expiry or a press  | Removed at once; nothing animates and the pointer never chases it    | Same                   |
+| Translate Selection press             | Shared `pressScale` feedback                                         | No transition or scale |
+| Drag button setting switch            | Shared switch motion                                                 | No transition          |

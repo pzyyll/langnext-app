@@ -398,6 +398,12 @@ function QuickTranslateWindowBody(props: {
             session={session}
             markdownEnabled={markdownEnabledPreference()}
             ocrState={props.controller.ocrState}
+            selectionFeedback={props.controller.selectionFeedback}
+            onScreenshotTranslate={
+              canCaptureScreen(platform.os) && props.controller.canStartOcr()
+                ? () => void props.controller.startOcr()
+                : undefined
+            }
             playbackAllowed={() => props.controller.attachedWindow()?.state()?.visible === true}
             onAttachSourceInput={(node) => props.controller.attachSourceInput(node)}
           />

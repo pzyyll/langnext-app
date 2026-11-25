@@ -1,5 +1,5 @@
 import { keymap, mount, signal, Storage, Text, View } from "nsh";
-import { Tray, Window, type MenuItem, type TrayOptions } from "nsh/desktop";
+import { displays, Tray, Window, type MenuItem, type TrayOptions } from "nsh/desktop";
 import { t } from "nsh/i18n";
 import { loadSplitRailWidths } from "../../components/layout/split-rail";
 import { Button } from "../../components/ui/button";
@@ -11,6 +11,7 @@ import { ttsSettingsStore } from "../../features/tts/settings";
 import { wordbookSettingsStore } from "../../features/wordbook/settings";
 import { loadAppearance } from "../../features/settings/appearance";
 import { loadLanguage } from "../../features/settings/language";
+import { loadSelectionHint } from "../../features/settings/selection-hint";
 import {
   DEFAULT_QUICK_TRANSLATE_SHORTCUT,
   QUICK_TRANSLATE_SHORTCUT_STORAGE_KEY,
@@ -18,7 +19,10 @@ import {
   SELECTION_TRANSLATE_SHORTCUT_STORAGE_KEY,
 } from "../../features/settings/shortcuts";
 import { loadTransparency } from "../../features/settings/transparency";
-import type { DoubleCopyActivationEvent } from "../../platform/quick-translate";
+import type {
+  DoubleCopyActivationEvent,
+  SelectionGestureEvent,
+} from "../../platform/quick-translate";
 import type { ScreenCaptureOutcome } from "../../platform/screen-capture";
 import type { SelectionTextRead } from "../../platform/selection-text";
 import { initializeAiModules } from "../ai-setup";
@@ -31,6 +35,7 @@ export const HARNESS_PLATFORM_OS_KEY = "__test.qt.platformOs";
 export const HARNESS_DOUBLE_COPY_MODE_KEY = "__test.qt.doubleCopyMode";
 export const HARNESS_DOUBLE_COPY_CLIPBOARD_KEY = "__test.qt.doubleCopyClipboard";
 export const HARNESS_OCR_CAPTURE_KEY = "__test.qt.ocrCapture";
+export const HARNESS_SELECTION_HINT_MODE_KEY = "__test.qt.selectionHintMode";
 
 /** 16×16 PNG: large enough for Baidu's minimum side, still a valid AI crop. */
 const HARNESS_PNG_BASE64 = "iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAAAAAA6mKC9AAAAAElFTkSuQmCC";
@@ -50,6 +55,7 @@ function isActionMenuItem(entry: MenuItem | null | undefined | false): entry is 
 function QuickTranslateHarness(config: {
   shortcutMode: "ok" | "false" | "reject" | "conflict";
   doubleCopyMode: "ok" | "throw";
+  selectionHintMode: "ok" | "throw";
   initialClipboard: string;
   platformOs?: string;
   ocrCapture: HarnessCaptureMode;
@@ -88,8 +94,24 @@ function QuickTranslateHarness(config: {
 
   let finishSelection: ((result: SelectionTextRead) => void) | undefined;
   const selectionReadCount = signal(0);
+  const selectionUiaOnlyCount = signal(0);
+  let selectionTargetCurrent = true;
   const selectionText = "Selected line one\nSelected line two";
   const shortcutBindings = new Map<string, () => void>();
+  let selectionGestureListener: ((event: SelectionGestureEvent) => void) | null = null;
+  const selectionGestureRegisterCount = signal(0);
+  const selectionGestureStopCount = signal(0);
+
+  /** A release in points on the first display, converted to the hook's physical offsets. */
+  const releaseOnFirstDisplay = (x: number, y: number) => {
+    const display = displays()[0];
+    if (!display) return null;
+    return {
+      displayId: display.id,
+      offsetX: (x - display.bounds.origin.x) * display.scaleFactor,
+      offsetY: (y - display.bounds.origin.y) * display.scaleFactor,
+    };
+  };
 
   return (
     <View class="flex-1">
@@ -131,13 +153,29 @@ function QuickTranslateHarness(config: {
             },
             selectionText: {
               snapshot: () => "target-1",
-              isCurrent: () => true,
-              read: () => {
+              isCurrent: () => selectionTargetCurrent,
+              read: (_target, options) => {
                 selectionReadCount.set(selectionReadCount() + 1);
+                if (options?.uiaOnly === true) {
+                  selectionUiaOnlyCount.set(selectionUiaOnlyCount() + 1);
+                }
                 return new Promise<SelectionTextRead>((resolve) => {
                   finishSelection = resolve;
                 });
               },
+            },
+          }}
+          selectionGesture={{
+            onSelectionGesture(listener) {
+              selectionGestureRegisterCount.set(selectionGestureRegisterCount() + 1);
+              if (config.selectionHintMode === "throw") {
+                throw new Error("mouse hook unavailable");
+              }
+              selectionGestureListener = listener;
+              return () => {
+                selectionGestureStopCount.set(selectionGestureStopCount() + 1);
+                if (selectionGestureListener === listener) selectionGestureListener = null;
+              };
             },
           }}
           doubleCopy={{
@@ -269,6 +307,60 @@ function QuickTranslateHarness(config: {
           }}
         />
         <Button
+          testID="harness-finish-selection-unavailable"
+          label="Finish Unreadable Selection"
+          size="sm"
+          onPress={() => {
+            const resolve = finishSelection;
+            finishSelection = undefined;
+            resolve?.({ status: "unavailable" });
+          }}
+        />
+        <Button
+          testID="harness-selection-hint-candidate"
+          label="Harness Selection Hint"
+          size="sm"
+          onPress={() => {
+            const release = releaseOnFirstDisplay(120, 160);
+            if (release === null) return;
+            selectionGestureListener?.({ kind: "candidate", release, target: "target-1" });
+          }}
+        />
+        <Button
+          testID="harness-selection-hint-candidate-edge"
+          label="Harness Edge Hint"
+          size="sm"
+          onPress={() => {
+            const display = displays()[0];
+            if (!display) return;
+            const work = display.visibleBounds;
+            const release = releaseOnFirstDisplay(
+              work.origin.x + work.size.width - 8,
+              work.origin.y + work.size.height - 8,
+            );
+            if (release === null) return;
+            selectionGestureListener?.({ kind: "candidate", release, target: "target-1" });
+          }}
+        />
+        <Button
+          testID="harness-selection-hint-press"
+          label="Harness Hint Press"
+          size="sm"
+          onPress={() => {
+            const press = releaseOnFirstDisplay(4, 4);
+            if (press === null) return;
+            selectionGestureListener?.({ kind: "press", press });
+          }}
+        />
+        <Button
+          testID="harness-selection-hint-target-gone"
+          label="Harness Target Gone"
+          size="sm"
+          onPress={() => {
+            selectionTargetCurrent = false;
+          }}
+        />
+        <Button
           testID="harness-trigger-double-copy-valid"
           label="Harness Double Copy Valid"
           size="sm"
@@ -302,8 +394,16 @@ function QuickTranslateHarness(config: {
             return work ? `quick-work-area:${work.origin.y}:${work.size.height}` : "";
           })()}
         </Text>
+        <Text testID="harness-display-metrics">
+          {(() => {
+            const display = displays()[0];
+            if (!display) return "display:none";
+            const work = display.visibleBounds;
+            return `display:${work.origin.x}:${work.origin.y}:${work.size.width}:${work.size.height}`;
+          })()}
+        </Text>
         <Text testID="harness-metrics">
-          {`ocrCap=${ocrCaptureCount()}|ocrCaption=${ocrCaptureCaption()}|reg=${registerCount()}|unreg=${unregisterCount()}|dcReg=${doubleCopyRegisterCount()}|dcStop=${doubleCopyStopCount()}|dcReads=${clipboardReadCount()}|ppReg=${pointerPressRegisterCount()}|ppStop=${pointerPressStopCount()}|selReads=${selectionReadCount()}|shortcuts=${shortcutList()}|tray=${trayMenuLabels()}|mainHidden=${mainHidden()}`}
+          {`ocrCap=${ocrCaptureCount()}|ocrCaption=${ocrCaptureCaption()}|reg=${registerCount()}|unreg=${unregisterCount()}|dcReg=${doubleCopyRegisterCount()}|dcStop=${doubleCopyStopCount()}|dcReads=${clipboardReadCount()}|ppReg=${pointerPressRegisterCount()}|ppStop=${pointerPressStopCount()}|selReads=${selectionReadCount()}|selUia=${selectionUiaOnlyCount()}|sgReg=${selectionGestureRegisterCount()}|sgStop=${selectionGestureStopCount()}|shortcuts=${shortcutList()}|tray=${trayMenuLabels()}|mainHidden=${mainHidden()}`}
         </Text>
       </View>
     </View>
@@ -329,6 +429,8 @@ void Promise.all([
   Storage.getItem(SELECTION_TRANSLATE_SHORTCUT_STORAGE_KEY),
   ttsSettingsStore.load(),
   wordbookSettingsStore.load(),
+  loadSelectionHint(),
+  Storage.getItem(HARNESS_SELECTION_HINT_MODE_KEY),
 ]).then(
   ([
     ,
@@ -347,6 +449,10 @@ void Promise.all([
     quickSaved,
     screenshotSaved,
     selectionSaved,
+    ,
+    ,
+    ,
+    selectionHintModeRaw,
   ]) => {
     const shortcutMode =
       modeRaw === "false" || modeRaw === "reject" || modeRaw === "conflict" ? modeRaw : "ok";
@@ -367,6 +473,7 @@ void Promise.all([
       <QuickTranslateHarness
         shortcutMode={shortcutMode}
         doubleCopyMode={doubleCopyMode}
+        selectionHintMode={selectionHintModeRaw === "throw" ? "throw" : "ok"}
         initialClipboard={initialClipboard}
         platformOs={platformOs}
         ocrCapture={ocrCapture}
