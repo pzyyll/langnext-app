@@ -203,6 +203,8 @@ test("quick popup: collapses a non-empty source into a one-line preview and retu
   expect(app.shows("id:quick-translate-source-actions")).toBe(true);
   expect(app.requests()).toHaveLength(0);
 
+  // The pointer stayed on the toggle after the collapse; leave it so the hover enters again.
+  await app.hover("id:quick-translate-source-preview");
   await app.hover("id:quick-translate-collapse-source");
   await app.waitFor(`text:${t("quickTranslate.editSource")}`);
 
@@ -253,6 +255,44 @@ test("quick popup: shows the source character count at the input's trailing edge
 
   await app.clear("id:quick-translate-source");
   expect(app.shows("id:quick-translate-source-count")).toBe(false);
+});
+
+test("quick popup: places the source edit toggle before the character count", async () => {
+  const app = await open(POPUP_HARNESS, {
+    ...viewport,
+    storage: seedWithPresets([makePreset()]),
+  });
+
+  await app.waitFor("id:quick-translate-source");
+  await app.type("id:quick-translate-source", "Hello world");
+
+  // The toggle joins the input's bottom toolbar, left of the count, not the top actions.
+  expect(app.shows("id:quick-translate-source-toolbar >> id:quick-translate-collapse-source")).toBe(
+    true,
+  );
+  expect(app.shows("id:quick-translate-source-actions >> id:quick-translate-collapse-source")).toBe(
+    false,
+  );
+
+  const toggle = app.layout("id:quick-translate-collapse-source");
+  const count = app.layout("id:quick-translate-source-count");
+  if (toggle === null || count === null) {
+    throw new Error("expected the source toggle and its count to be laid out");
+  }
+  expect(toggle.x + toggle.width).toBeLessThanOrEqual(count.x);
+  expect(count.x - (toggle.x + toggle.width)).toBeLessThanOrEqual(8);
+  expect(Math.abs(toggle.y + toggle.height / 2 - (count.y + count.height / 2))).toBeLessThanOrEqual(
+    1,
+  );
+
+  // The same toggle collapses the editor and expands the preview.
+  await app.press("id:quick-translate-collapse-source");
+  await app.waitFor("id:quick-translate-source-preview");
+  expect(app.shows("id:quick-translate-source-toolbar >> id:quick-translate-collapse-source")).toBe(
+    true,
+  );
+  await app.press("id:quick-translate-collapse-source");
+  await app.waitFor("id:quick-translate-source");
 });
 
 test("quick popup: renders streamed text while translating and keeps partial text on failure", async () => {

@@ -1322,34 +1322,6 @@ export function QuickTranslatePopup(props: QuickTranslatePopupProps) {
         class={`shrink-0 flex-row items-center gap-0.5 ${extraClass}`}
       >
         <Button
-          testID="quick-translate-collapse-source"
-          size="icon-xs"
-          variant="ghost"
-          tooltip={
-            isSourceCollapsed()
-              ? t("quickTranslate.editSource")
-              : t("quickTranslate.collapseSource")
-          }
-          accessibilityLabel={
-            isSourceCollapsed()
-              ? t("quickTranslate.editSource")
-              : t("quickTranslate.collapseSource")
-          }
-          onPress={() => {
-            if (isSourceCollapsed()) {
-              expandSource();
-              return;
-            }
-            props.session.setSourceCollapsed(true);
-          }}
-        >
-          <Icon
-            name={isSourceCollapsed() ? "mdi:pencil" : "mdi:arrow-collapse"}
-            tone="muted-foreground"
-            class="size-3.5"
-          />
-        </Button>
-        <Button
           testID="quick-translate-clear"
           size="icon-xs"
           variant="ghost"
@@ -1444,15 +1416,45 @@ export function QuickTranslatePopup(props: QuickTranslatePopupProps) {
           </If>
         </If>
         <If when={hasSourceText()}>
-          <Text
-            testID="quick-translate-source-count"
-            accessibilityLabel={t("quickTranslate.sourceCharacters", {
-              count: sourceCharacterCount(),
-            })}
-            class="ml-auto shrink-0 text-xs tabular-nums text-muted-foreground"
-          >
-            {sourceCharacterCount()}
-          </Text>
+          <View class="ml-auto shrink-0 flex-row items-center gap-0.5">
+            <Button
+              testID="quick-translate-collapse-source"
+              size="icon-xs"
+              variant="ghost"
+              tooltip={
+                isSourceCollapsed()
+                  ? t("quickTranslate.editSource")
+                  : t("quickTranslate.collapseSource")
+              }
+              accessibilityLabel={
+                isSourceCollapsed()
+                  ? t("quickTranslate.editSource")
+                  : t("quickTranslate.collapseSource")
+              }
+              onPress={() => {
+                if (isSourceCollapsed()) {
+                  expandSource();
+                  return;
+                }
+                props.session.setSourceCollapsed(true);
+              }}
+            >
+              <Icon
+                name={isSourceCollapsed() ? "mdi:pencil" : "mdi:arrow-collapse"}
+                tone="muted-foreground"
+                class="size-3.5"
+              />
+            </Button>
+            <Text
+              testID="quick-translate-source-count"
+              accessibilityLabel={t("quickTranslate.sourceCharacters", {
+                count: sourceCharacterCount(),
+              })}
+              class="shrink-0 text-xs tabular-nums text-muted-foreground"
+            >
+              {sourceCharacterCount()}
+            </Text>
+          </View>
         </If>
       </View>
     </If>
