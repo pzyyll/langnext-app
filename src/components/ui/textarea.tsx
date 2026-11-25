@@ -23,7 +23,6 @@ import {
   measurementLooksCollapsed,
   pickFontStep,
   SMALLEST_FONT_STEP,
-  usesNaturalLineHeight,
 } from "./font-step";
 
 export type TextareaVariant = "default" | "card" | "frameless";
@@ -155,7 +154,6 @@ export function Textarea(props: TextareaProps) {
   const stepped = () => (props.fontScale ?? "fixed") === "stepped";
   const sourceText = () => props.value ?? "";
   const measureClass = () => fontMeasureClass(props.inputClass);
-  const naturalLineHeight = () => usesNaturalLineHeight(props.inputClass);
   const contentWidth = signal(0);
   // Read once: a later remount (the collapsed preview expanding) passes the remembered step.
   const fontStep = signal(
@@ -270,7 +268,6 @@ export function Textarea(props: TextareaProps) {
             if (next < 1 || Math.abs(next - contentWidth()) < 1) return;
             contentWidth.set(next);
           }}
-          style={naturalLineHeight() ? { lineHeight: 0 } : undefined}
           class={`min-h-24 w-full bg-transparent ${fontClass()} ${fontWeightClass()} placeholder:text-muted-foreground ${TEXT_CLASSES[variant()]} ${props.inputClass ?? ""}`}
         />
       </View>

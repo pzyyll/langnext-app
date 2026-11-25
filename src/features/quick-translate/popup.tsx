@@ -3,7 +3,6 @@ import {
   createAnimatedValue,
   effect,
   Image,
-  platform,
   reduceMotion,
   signal,
   Text,
@@ -833,10 +832,6 @@ function PresetCardRow(props: PresetCardRowProps) {
 /** Compact Quick Translate popup body composed inside the floating window or standalone harness. */
 export function QuickTranslatePopup(props: QuickTranslatePopupProps) {
   const isComposing = signal(false);
-  // TODO(https://github.com/longbridge/nsh/issues/2655): Restore "min-h-10" on all platforms
-  // once the pinned NSH release aligns Windows input measurement with drawing.
-  // Zero uses the font's natural line height in NSH 0.6.1.
-  const sourceInputClass = platform.os === "windows" ? "min-h-10 leading-[0]" : "min-h-10";
   const sourceText = () => props.session.sourceText();
   const hasSourceText = () => sourceText().length > 0;
   const hasSpeakableSource = () => sourceText().trim().length > 0;
@@ -1432,7 +1427,7 @@ export function QuickTranslatePopup(props: QuickTranslatePopupProps) {
                 value={sourceText()}
                 placeholder={t("quickTranslate.sourcePlaceholder")}
                 accessibilityLabel={t("quickTranslate.sourceLabel")}
-                inputClass={sourceInputClass}
+                inputClass="min-h-10"
                 onChange={(nextText) => props.session.handleSourceChange(nextText)}
                 onSubmit={() => {
                   if (isComposing()) return;

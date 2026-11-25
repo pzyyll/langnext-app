@@ -53,15 +53,11 @@ export function pickFontStep(heights: readonly number[], budget: number, slack: 
   return SMALLEST_FONT_STEP;
 }
 
-/**
- * Leading utilities the offscreen measure text must share with the input.
- * `leading-[0]` is the Windows input workaround and is left out: on a Text it
- * collapses the measure to one line, so a large step looks like it fits.
- */
+/** Leading utilities the offscreen measure text must share with the input. */
 export function fontMeasureClass(inputClass: string | undefined): string {
   return (inputClass ?? "")
     .split(/\s+/)
-    .filter((part) => part.startsWith("leading-") && part !== "leading-[0]")
+    .filter((part) => part.startsWith("leading-"))
     .join(" ");
 }
 
@@ -103,9 +99,4 @@ export function measurementLooksCollapsed(
   const perLine = Math.max(1, Math.floor(width / fontSize));
   const minLines = Math.ceil(text.length / perLine);
   return minLines >= 3 && height < fontSize * 2;
-}
-
-/** leading-[0] asks NSH 0.6.1 to use the font's natural line height. */
-export function usesNaturalLineHeight(inputClass: string | undefined): boolean {
-  return (inputClass ?? "").split(/\s+/).includes("leading-[0]");
 }
