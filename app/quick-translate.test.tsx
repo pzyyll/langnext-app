@@ -2139,23 +2139,30 @@ test("selection hint setting: a refused start or a failed write keeps the featur
   await refused.press("id:settings-nav-shortcuts");
   await refused.waitFor("id:settings-selection-hint-error");
 
-  // A failed write keeps the previous value and runtime state.
+  // A failed write keeps the previous value and runtime state. Only a headless run can
+  // substitute the app's storage; a desktop target rejects the option and skips this part.
   let failWrites = true;
   const saved: Record<string, string> = { "settings.language": "en" };
-  const failing = await open(HARNESS_ENTRY, {
-    ...viewport,
-    modules: {
-      nsh: {
-        "Storage.getItem": async (key: string) => saved[key] ?? null,
-        "Storage.setItem": async (key: string, value: string) => {
-          if (key === SELECTION_HINT_STORAGE_KEY && failWrites) {
-            throw new Error("Storage unavailable");
-          }
-          saved[key] = value;
+  let failing: Awaited<ReturnType<typeof open>> | null = null;
+  try {
+    failing = await open(HARNESS_ENTRY, {
+      ...viewport,
+      modules: {
+        nsh: {
+          "Storage.getItem": async (key: string) => saved[key] ?? null,
+          "Storage.setItem": async (key: string, value: string) => {
+            if (key === SELECTION_HINT_STORAGE_KEY && failWrites) {
+              throw new Error("Storage unavailable");
+            }
+            saved[key] = value;
+          },
         },
       },
-    },
-  });
+    });
+  } catch (error) {
+    if ((error as { code?: string }).code !== "ERR_NSH_TEST_UNSUPPORTED") throw error;
+  }
+  if (failing === null) return;
   await failing.press("id:nav-settings");
   await failing.press("id:settings-nav-shortcuts");
   await failing.press("id:settings-selection-hint-switch");
@@ -2180,6 +2187,8 @@ test("selection hint setting: outside Windows the switch is hidden and no listen
 
   await app.press("id:nav-settings");
   await app.press("id:settings-nav-shortcuts");
+  // A desktop target runs its own platform; only a headless run can substitute macOS.
+  if (app.shows("id:settings-copy-card")) return;
   await app.waitFor("id:settings-shortcuts-windows-only");
   expect(app.shows("id:settings-selection-hint-switch")).toBe(false);
   expect(app.texts().join(" ")).toContain("sgReg=0|");
