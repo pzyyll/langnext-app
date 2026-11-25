@@ -89,3 +89,13 @@ A start that fails before the app shell mounts shows a window of its own instead
 | Failure message and log path       | Static text; it changes only when the app starts again               | Same                   |
 
 The window adds no overlay, travel, live region, drag, or layout animation.
+
+## Quick Translate Sentence Highlight
+
+Hovering an eligible result sentence or stepping through result sentences with `Left`/`Right` while focused applies `bg-brand-soft` synchronously to that result sentence and adds an inline `bg-brand-soft` decoration on the aligned range in `QuickTranslateSourceEditor`.
+
+| Surface                        | Gesture / Trigger                                                       | Motion                                                                          | Reduced Motion        |
+| ------------------------------ | ----------------------------------------------------------------------- | ------------------------------------------------------------------------------- | --------------------- |
+| Result sentence & source range | Pointer hover, keyboard `Left`/`Right`, accessibility `Previous`/`Next` | Immediate `bg-brand-soft` toggle (0 ms); no scroll, focus move, or caret change | Same immediate toggle |
+
+The highlight adds no overlay, popover, live region, travel, fade, or layout animation.

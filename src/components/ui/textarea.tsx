@@ -102,7 +102,7 @@ function FontProbe(props: {
   );
 }
 
-function FontProbes(props: {
+export function FontProbes(props: {
   text: string;
   width: number;
   frameless: boolean;
