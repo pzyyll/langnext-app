@@ -825,6 +825,25 @@ quickTranslate:
   speakPlayback: Could not play the audio. Try again.
   copy: Copy
   copied: Copied
+  ankiAdd: Add to Anki
+  ankiAdding: Adding…
+  ankiAdded: Added to Anki
+  ankiError:
+    unreachable: Start Anki Desktop and check that AnkiConnect is enabled.
+    unauthorized: Check the API key.
+    forbidden: Check the API key and AnkiConnect access.
+    unavailable: Check that AnkiConnect is installed and up to date.
+    noCollection: Open the configured Anki profile, then try again.
+    staleSession: Open Wordbook and test the connection again.
+    malformed: Anki sent an unexpected reply. Try again.
+    timeout: Anki did not answer. Try again.
+    profileMismatch: Open the configured Anki profile, then try again.
+    missingTarget: Recheck the destination in Wordbook.
+    incompatible: Recheck the note type in Wordbook.
+    notCurrent: The destination changed. Try again.
+    duplicate: This source already exists. Its translation was not changed.
+    rejected: Anki could not create the card. Check the selected note type.
+    unconfirmed: Could not confirm the add. Check Anki before trying again.
   backTranslate: Back-translate
   backTranslating: Back-translating…
   closeBackTranslation: Close back-translation

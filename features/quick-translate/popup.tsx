@@ -277,6 +277,8 @@ interface PresetCardRowProps {
   onRemove: (cardId: string) => void;
   onRetry: (cardId: string) => void;
   onCopy: (cardId: string) => void;
+  ankiEnabled: Accessor<boolean>;
+  onAddToAnki: (cardId: string) => void;
   onBackTranslate: (cardId: string) => void;
   onCloseBackTranslation: (cardId: string) => void;
   onRetryBackTranslation: (cardId: string) => void;
@@ -676,6 +678,35 @@ function PresetCardRow(props: PresetCardRowProps) {
                     onPress={() => props.onSpeak()}
                   />
                 </If>
+                <If
+                  when={(() => {
+                    const res = props.card().result;
+                    return (
+                      props.ankiEnabled() && res.status === "success" && res.text.trim().length > 0
+                    );
+                  })()}
+                >
+                  <Button
+                    testID="quick-translate-add-anki"
+                    size="icon-xs"
+                    variant="ghost"
+                    tooltip={
+                      props.card().anki.status === "added"
+                        ? t("quickTranslate.ankiAdded")
+                        : props.card().anki.status === "adding"
+                          ? t("quickTranslate.ankiAdding")
+                          : t("quickTranslate.ankiAdd")
+                    }
+                    accessibilityLabel={t("quickTranslate.ankiAdd")}
+                    onPress={() => props.onAddToAnki(props.card().id)}
+                  >
+                    <Icon
+                      name={props.card().anki.status === "added" ? "mdi:check" : "mdi:plus"}
+                      tone={props.card().anki.status === "added" ? "success" : "muted-foreground"}
+                      class="size-3.5"
+                    />
+                  </Button>
+                </If>
                 <Button
                   testID="quick-translate-copy"
                   size="icon-xs"
@@ -732,6 +763,27 @@ function PresetCardRow(props: PresetCardRowProps) {
                   class="text-xs text-destructive"
                 >
                   {props.speakError() ?? ""}
+                </Text>
+              </View>
+            </If>
+            <If when={props.card().anki.status !== "idle"}>
+              <View class="px-3 pb-2.5">
+                <Text
+                  testID="quick-translate-anki-status"
+                  role={props.card().anki.status === "error" ? "alert" : undefined}
+                  class={
+                    props.card().anki.status === "error"
+                      ? "text-xs text-destructive"
+                      : "text-xs text-muted-foreground"
+                  }
+                >
+                  {props.card().anki.status === "adding"
+                    ? t("quickTranslate.ankiAdding")
+                    : props.card().anki.status === "added"
+                      ? t("quickTranslate.ankiAdded")
+                      : props.card().anki.status === "error"
+                        ? props.card().anki.message
+                        : ""}
                 </Text>
               </View>
             </If>
@@ -1462,6 +1514,8 @@ export function QuickTranslatePopup(props: QuickTranslatePopupProps) {
                     onRemove={(targetId) => props.session.handleRemoveCard(targetId)}
                     onRetry={(id) => props.session.handleRetryCard(id)}
                     onCopy={(id) => props.session.handleCopyCard(id)}
+                    ankiEnabled={props.session.ankiEnabled}
+                    onAddToAnki={(id) => props.session.handleAddToAnki(id)}
                     onBackTranslate={(id) => props.session.handleBackTranslate(id)}
                     onCloseBackTranslation={(id) => props.session.handleCloseBackTranslation(id)}
                     onRetryBackTranslation={(id) => props.session.handleRetryBackTranslation(id)}

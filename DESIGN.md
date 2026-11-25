@@ -22,10 +22,11 @@ Settings → Integrations → Wordbook configures one Anki destination. It does 
 
 ### Motion Inventory
 
-| Change | Motion | Reduced motion |
-| --- | --- | --- |
-| Test Connection, Save, and enable switch press | Shared `pressScale` and switch thumb feedback | No transition or travel |
-| Deck, note type, and field menus | Shared `popup` and `popupHidden` tokens | No transition or travel |
-| Connection status, field choices, and save result | Replace the status text in place. No layout animation. | Same |
+| Change                                            | Motion                                                                            | Reduced motion          |
+| ------------------------------------------------- | --------------------------------------------------------------------------------- | ----------------------- |
+| Test Connection, Save, and enable switch press    | Shared `pressScale` and switch thumb feedback                                     | No transition or travel |
+| Deck, note type, and field menus                  | Shared `popup` and `popupHidden` tokens                                           | No transition or travel |
+| Connection status, field choices, and save result | Replace the status text in place. No layout animation.                            | Same                    |
+| Quick Translate add press and tooltip             | Shared icon `pressScale` and tooltip. The status glyph and text replace in place. | No transition or travel |
 
 Wordbook has no drag, live updates, or a new route transition.

@@ -1,4 +1,5 @@
 import type { HistoryResult, HistorySnapshot } from "langnext/native";
+import type { AnkiAddFailure, AnkiAddInput, AnkiTarget } from "../wordbook/anki-client";
 import { batch, cleanup, Clipboard, effect, signal, untracked, type Accessor } from "nsh";
 import { t } from "nsh/i18n";
 import type { SelectItem } from "../../components/ui/select";
@@ -67,6 +68,44 @@ export type CardResultState =
     }
   | { status: "error"; message: string; text?: string };
 
+export type CardAnkiState =
+  | { status: "idle" }
+  | { status: "adding" }
+  | { status: "added" }
+  | { status: "error"; message: string };
+
+const idleAnki: CardAnkiState = { status: "idle" };
+
+function sameAnkiTarget(left: AnkiTarget | null, right: AnkiTarget | null): boolean {
+  if (!left || !right) return false;
+  return (
+    left.profile === right.profile &&
+    left.deckId === right.deckId &&
+    left.noteTypeId === right.noteTypeId &&
+    left.sourceField === right.sourceField &&
+    left.translationField === right.translationField
+  );
+}
+
+const ANKI_FAILURE: Record<AnkiAddFailure, string> = {
+  unreachable: "quickTranslate.ankiError.unreachable",
+  unauthorized: "quickTranslate.ankiError.unauthorized",
+  forbidden: "quickTranslate.ankiError.forbidden",
+  unavailable: "quickTranslate.ankiError.unavailable",
+  noCollection: "quickTranslate.ankiError.noCollection",
+  staleSession: "quickTranslate.ankiError.staleSession",
+  malformed: "quickTranslate.ankiError.malformed",
+  timeout: "quickTranslate.ankiError.timeout",
+  blank: "quickTranslate.ankiError.rejected",
+  profileMismatch: "quickTranslate.ankiError.profileMismatch",
+  missingTarget: "quickTranslate.ankiError.missingTarget",
+  incompatible: "quickTranslate.ankiError.incompatible",
+  notCurrent: "quickTranslate.ankiError.notCurrent",
+  duplicate: "quickTranslate.ankiError.duplicate",
+  rejected: "quickTranslate.ankiError.rejected",
+  unconfirmed: "quickTranslate.ankiError.unconfirmed",
+};
+
 export type BackTranslationState =
   | { status: "closed" }
   | { status: "loading" }
@@ -81,6 +120,7 @@ export interface CardViewItem {
   result: CardResultState;
   copied: boolean;
   copyError: string | null;
+  anki: CardAnkiState;
   backTranslation: BackTranslationState;
 }
 
@@ -141,6 +181,12 @@ export interface QuickTranslateSessionOptions {
   /** Source language detection; tests replace it to control timing and answers. */
   detectSource?: DetectSourceLanguage;
   clipboard?: Pick<typeof Clipboard, "writeText">;
+  /** True when Settings has one saved, enabled Anki destination. */
+  ankiEnabled?: Accessor<boolean>;
+  currentAnkiBinding?: () => AnkiTarget | null;
+  addToAnki?: (
+    input: AnkiAddInput,
+  ) => Promise<{ ok: true } | { ok: false; failure: AnkiAddFailure }>;
 }
 
 export interface QuickTranslateSession {
@@ -178,6 +224,8 @@ export interface QuickTranslateSession {
   handleRemoveCard: (cardId: string) => void;
   handleRetryCard: (cardId: string) => void;
   handleCopyCard: (cardId: string) => void;
+  ankiEnabled: Accessor<boolean>;
+  handleAddToAnki: (cardId: string) => void;
   handleBackTranslate: (cardId: string) => void;
   handleCloseBackTranslation: (cardId: string) => void;
   handleRetryBackTranslation: (cardId: string) => void;
@@ -384,6 +432,7 @@ export function createQuickTranslateSession(
         ...card,
         copied: false,
         copyError: null,
+        anki: idleAnki,
         result: { status: "idle" },
         backTranslation: { status: "closed" },
       })),
@@ -467,6 +516,7 @@ export function createQuickTranslateSession(
           result: { status: "idle" },
           copied: false,
           copyError: null,
+          anki: idleAnki,
           backTranslation: { status: "closed" },
         };
       }),
@@ -503,6 +553,7 @@ export function createQuickTranslateSession(
           ...card,
           copied: false,
           copyError: null,
+          anki: idleAnki,
           result:
             card.result.status === "loading" || card.result.status === "streaming"
               ? { status: "idle" }
@@ -547,6 +598,7 @@ export function createQuickTranslateSession(
         ...item,
         copied: false,
         copyError: null,
+        anki: idleAnki,
         result: result ?? { status: "idle" },
         backTranslation:
           runtime.backTranslation && runtime.backTranslation.forwardQuery === query
@@ -811,6 +863,7 @@ export function createQuickTranslateSession(
         result: { status: "idle" },
         copied: false,
         copyError: null,
+        anki: idleAnki,
         backTranslation: { status: "closed" },
       },
     ]);
@@ -854,6 +907,7 @@ export function createQuickTranslateSession(
       templateId: null,
       copied: false,
       copyError: null,
+      anki: idleAnki,
       result: { status: "idle" },
       backTranslation: { status: "closed" },
     }));
@@ -888,6 +942,7 @@ export function createQuickTranslateSession(
         templateId: nextTemplateId,
         copied: false,
         copyError: null,
+        anki: idleAnki,
         result: { status: "idle" },
         backTranslation: { status: "closed" },
       }));
@@ -1273,6 +1328,65 @@ export function createQuickTranslateSession(
     void startBackTranslation(cardId, runtime, forwardQuery, card.result, preset);
   };
 
+  let ankiInFlight = false;
+
+  const handleAddToAnki = (cardId: string) => {
+    if (ankiInFlight || !options.addToAnki || !options.currentAnkiBinding) return;
+    const card = cards().find((item) => item.id === cardId);
+    const runtime = cardRuntimes.get(cardId);
+    const binding = options.currentAnkiBinding();
+    if (!card || !runtime || !binding || card.result.status !== "success") return;
+    const translated = card.result.text;
+    const source = runtime.context?.text ?? "";
+    if (translated.trim().length === 0 || source.trim().length === 0) return;
+    const expectedQuery = runtime.selectedQuery;
+    const expectedEpoch = windowEpoch;
+    ankiInFlight = true;
+    updateCard(cardId, (item) => ({ ...item, anki: { status: "adding" } }));
+    void options
+      .addToAnki({
+        target: binding,
+        sourceText: source,
+        translatedText: translated,
+        isCurrent: () => {
+          const latest = options.currentAnkiBinding?.() ?? null;
+          const currentRuntime = cardRuntimes.get(cardId);
+          return (
+            sameAnkiTarget(latest, binding) &&
+            currentRuntime === runtime &&
+            currentRuntime.selectedQuery === expectedQuery
+          );
+        },
+      })
+      .then((result) => {
+        const currentRuntime = cardRuntimes.get(cardId);
+        const latestCard = cards().find((item) => item.id === cardId);
+        const fresh =
+          windowEpoch === expectedEpoch &&
+          currentRuntime === runtime &&
+          currentRuntime.selectedQuery === expectedQuery &&
+          latestCard?.result.status === "success" &&
+          latestCard.result.text === translated &&
+          sameAnkiTarget(options.currentAnkiBinding?.() ?? null, binding);
+        if (!fresh) return;
+        if (!result.ok && result.failure === "notCurrent") {
+          updateCard(cardId, (item) => ({ ...item, anki: idleAnki }));
+          return;
+        }
+        if (result.ok) {
+          updateCard(cardId, (item) => ({ ...item, anki: { status: "added" } }));
+          return;
+        }
+        updateCard(cardId, (item) => ({
+          ...item,
+          anki: { status: "error", message: t(ANKI_FAILURE[result.failure]) },
+        }));
+      })
+      .finally(() => {
+        ankiInFlight = false;
+      });
+  };
+
   return {
     sourceText: options.sourceText,
     sourceDelivery: options.sourceDelivery ?? (() => null),
@@ -1310,6 +1424,8 @@ export function createQuickTranslateSession(
     handleRemoveCard,
     handleRetryCard: (cardId: string) => void executeCard(cardId, "manual"),
     handleCopyCard,
+    ankiEnabled: () => options.ankiEnabled?.() ?? false,
+    handleAddToAnki,
     handleBackTranslate,
     handleCloseBackTranslation,
     handleRetryBackTranslation,

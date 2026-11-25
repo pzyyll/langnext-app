@@ -2557,3 +2557,251 @@ test("quick window: back-translation adds no height when closed, fits open conte
   await app.press("id:quick-translate-card-card-2 >> id:quick-translate-remove");
   expect(app.shows("id:quick-translate-card-card-2")).toBe(false);
 });
+
+const ANKI_URL = "http://127.0.0.1:8765/api/v1";
+
+test("quick anki: adds only the pressed card and blocks a second write", async () => {
+  let translationCount = 0;
+  const app = await open(HARNESS_ENTRY, {
+    ...viewport,
+    storage: {
+      ...makeSeedStorage({
+        channels: [makeChannel({ adapterId: "openai-compatible", enabled: true })],
+        models: [makeModel({ enabled: true })],
+        credentials: { "ch-1": "sk-test" },
+      }),
+      [PRESETS_STORAGE_KEY]: JSON.stringify({ version: 1, items: [quickPreset] }),
+      "settings.language": "en",
+      "quickTranslate.preferences.v1": popupPreferences({
+        cards: [
+          { id: "card-1", presetId: quickPreset.id },
+          { id: "card-2", presetId: quickPreset.id },
+        ],
+      }),
+      "settings.wordbook.anki.v1": JSON.stringify({
+        version: 1,
+        enabled: true,
+        profile: "User 1",
+        deckId: "1550000000000",
+        deckName: "Vocabulary",
+        noteTypeId: "1550000000003",
+        noteTypeName: "Basic",
+        sourceField: "Front",
+        translationField: "Back",
+      }),
+    },
+    network: {
+      "POST https://api.openai.com/v1/chat/completions": () => {
+        translationCount += 1;
+        const text = translationCount === 1 ? "Alpha" : "Beta";
+        return { body: { choices: [{ message: { content: text } }] } };
+      },
+      ["POST " + ANKI_URL]: (request: { body?: string }) => {
+        const body = JSON.parse(request.body ?? "{}") as { id?: unknown; method?: string };
+        const id = body.id;
+        if (body.method === "collection.get") {
+          return {
+            body: {
+              jsonrpc: "2.0",
+              id,
+              result: { profile: "User 1", session: "sess-9", scheduler: "fsrs" },
+            },
+          };
+        }
+        if (body.method === "decks.get") {
+          return {
+            body: {
+              jsonrpc: "2.0",
+              id,
+              result: { id: "1550000000000", name: "Vocabulary", kind: "normal" },
+            },
+          };
+        }
+        if (body.method === "noteTypes.get") {
+          return {
+            body: {
+              jsonrpc: "2.0",
+              id,
+              result: {
+                id: "1550000000003",
+                name: "Basic",
+                kind: "normal",
+                fields: [{ name: "Front" }, { name: "Back" }],
+                templates: [
+                  { name: "Card 1", questionHtml: "{{Front}}", answerHtml: "{{Back}}", deck: null },
+                ],
+              },
+            },
+          };
+        }
+        if (body.method === "notes.create") {
+          return {
+            delay: 1500,
+            body: {
+              jsonrpc: "2.0",
+              id,
+              result: { noteId: "1550000000009", cardIds: ["1550000000010"] },
+            },
+          };
+        }
+        return {
+          status: 500,
+          body: { jsonrpc: "2.0", id, error: { code: -32601, message: "Method not found." } },
+        };
+      },
+    },
+  });
+
+  await app.press("id:harness-tray-quick-translate");
+  await app.type("id:quick-translate-source", "Hello");
+  await app.keyboard.press("enter");
+  await app.waitFor("text:Beta");
+  expect(app.requests().filter((request) => request.url.includes("8765"))).toEqual([]);
+  await app.press("id:quick-translate-card-card-2 >> id:quick-translate-add-anki");
+  await app.waitFor("id:quick-translate-card-card-2 >> text:Adding…");
+  expect(app.shows("id:quick-translate-card-card-1 >> text:Adding…")).toBe(false);
+  await app.press("id:quick-translate-card-card-1 >> id:quick-translate-add-anki");
+  await app.waitFor("id:quick-translate-card-card-2 >> text:Added to Anki");
+  expect(app.shows("id:quick-translate-card-card-1 >> text:Added to Anki")).toBe(false);
+  const creates = app.requests().filter((request) => (request.body ?? "").includes("notes.create"));
+  expect(creates).toHaveLength(1);
+  const created = JSON.parse(creates[0]!.body ?? "") as {
+    params: { fields: Record<string, string> };
+  };
+  expect(created.params.fields.Front).toBe("Hello");
+  expect(created.params.fields.Back).toBe("Beta");
+});
+
+function wordbookBinding(enabled: boolean): string {
+  return JSON.stringify({
+    version: 1,
+    enabled,
+    profile: "User 1",
+    deckId: "1550000000000",
+    deckName: "Vocabulary",
+    noteTypeId: "1550000000003",
+    noteTypeName: "Basic",
+    sourceField: "Front",
+    translationField: "Back",
+  });
+}
+
+function ankiReadNetwork(create: { body: unknown; delay?: number }) {
+  return (request: { body?: string }) => {
+    const body = JSON.parse(request.body ?? "{}") as { id?: unknown; method?: string };
+    const id = body.id;
+    if (body.method === "collection.get") {
+      return {
+        body: {
+          jsonrpc: "2.0",
+          id,
+          result: { profile: "User 1", session: "sess-9", scheduler: "fsrs" },
+        },
+      };
+    }
+    if (body.method === "decks.get") {
+      return {
+        body: {
+          jsonrpc: "2.0",
+          id,
+          result: { id: "1550000000000", name: "Vocabulary", kind: "normal" },
+        },
+      };
+    }
+    if (body.method === "noteTypes.get") {
+      return {
+        body: {
+          jsonrpc: "2.0",
+          id,
+          result: {
+            id: "1550000000003",
+            name: "Basic",
+            kind: "normal",
+            fields: [{ name: "Front" }, { name: "Back" }],
+            templates: [{ name: "Card 1", deck: null }],
+          },
+        },
+      };
+    }
+    if (body.method === "notes.create") {
+      const payload =
+        typeof create.body === "object" && create.body !== null
+          ? { ...create.body, id }
+          : create.body;
+      return { delay: create.delay, body: payload };
+    }
+    return { status: 500, body: { jsonrpc: "2.0", id, error: { code: -32601, message: "Method not found." } } };
+  };
+}
+
+test("quick anki: stays hidden when Wordbook is disabled", async () => {
+  const app = await open(HARNESS_ENTRY, {
+    ...viewport,
+    storage: {
+      ...makeSeedStorage({
+        channels: [makeChannel({ adapterId: "openai-compatible", enabled: true })],
+        models: [makeModel({ enabled: true })],
+        credentials: { "ch-1": "sk-test" },
+      }),
+      [PRESETS_STORAGE_KEY]: JSON.stringify({ version: 1, items: [quickPreset] }),
+      "settings.language": "en",
+      "quickTranslate.preferences.v1": popupPreferences({
+        cards: [{ id: "card-1", presetId: quickPreset.id }],
+      }),
+      "settings.wordbook.anki.v1": wordbookBinding(false),
+    },
+    network: {
+      "POST https://api.openai.com/v1/chat/completions": {
+        body: { choices: [{ message: { content: "Alpha" } }] },
+      },
+    },
+  });
+  await app.press("id:harness-tray-quick-translate");
+  await app.type("id:quick-translate-source", "Hello");
+  await app.keyboard.press("enter");
+  await app.waitFor("text:Alpha");
+  expect(app.shows("id:quick-translate-add-anki")).toBe(false);
+  expect(app.requests().filter((request) => request.url.includes("8765"))).toEqual([]);
+});
+
+test("quick anki: a duplicate write is not marked added", async () => {
+  const duplicate = {
+    jsonrpc: "2.0",
+    id: 4,
+    error: {
+      code: -32602,
+      message: "Validation failed.",
+      data: { type: "validationFailed", details: { issues: [{ type: "duplicate" }] } },
+    },
+  };
+  const app = await open(HARNESS_ENTRY, {
+    ...viewport,
+    storage: {
+      ...makeSeedStorage({
+        channels: [makeChannel({ adapterId: "openai-compatible", enabled: true })],
+        models: [makeModel({ enabled: true })],
+        credentials: { "ch-1": "sk-test" },
+      }),
+      [PRESETS_STORAGE_KEY]: JSON.stringify({ version: 1, items: [quickPreset] }),
+      "settings.language": "en",
+      "quickTranslate.preferences.v1": popupPreferences({
+        cards: [{ id: "card-1", presetId: quickPreset.id }],
+      }),
+      "settings.wordbook.anki.v1": wordbookBinding(true),
+    },
+    network: {
+      "POST https://api.openai.com/v1/chat/completions": {
+        body: { choices: [{ message: { content: "Alpha" } }] },
+      },
+      ["POST " + ANKI_URL]: ankiReadNetwork({ body: duplicate }),
+    },
+  });
+  await app.press("id:harness-tray-quick-translate");
+  await app.type("id:quick-translate-source", "Hello");
+  await app.keyboard.press("enter");
+  await app.waitFor("text:Alpha");
+  await app.press("id:quick-translate-add-anki");
+  await app.waitFor("text:This source already exists. Its translation was not changed.");
+  expect(app.shows("text:Added to Anki")).toBe(false);
+  expect(app.texts()).toContain("Alpha");
+});

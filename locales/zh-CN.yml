@@ -825,6 +825,25 @@ quickTranslate:
   speakPlayback: 无法播放音频。请重试。
   copy: 复制
   copied: 已复制
+  ankiAdd: 加入 Anki
+  ankiAdding: 正在加入…
+  ankiAdded: 已加入 Anki
+  ankiError:
+    unreachable: 请启动 Anki Desktop，并确认已启用 AnkiConnect。
+    unauthorized: 请检查 API 密钥。
+    forbidden: 请检查 API 密钥和 AnkiConnect 的访问权限。
+    unavailable: 请确认已安装并更新 AnkiConnect。
+    noCollection: 请打开已配置的 Anki 用户配置，然后重试。
+    staleSession: 请打开生词本并重新测试连接。
+    malformed: Anki 返回了无法识别的结果，请重试。
+    timeout: Anki 没有响应，请重试。
+    profileMismatch: 请打开已配置的 Anki 用户配置，然后重试。
+    missingTarget: 请在生词本中重新检查目标。
+    incompatible: 请在生词本中重新检查笔记类型。
+    notCurrent: 目标已改变，请重试。
+    duplicate: 这个原文已经存在，译文没有被修改。
+    rejected: Anki 未能创建卡片，请检查所选笔记类型。
+    unconfirmed: 无法确认是否加入成功。请先查看 Anki，再重试。
   backTranslate: 回译
   backTranslating: 正在回译…
   closeBackTranslation: 关闭回译

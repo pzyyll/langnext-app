@@ -8,6 +8,7 @@ import { ocrSettingsStore } from "../../features/ocr/settings";
 import { presetsStore } from "../../features/presets/store";
 import { loadQuickTranslatePreferences } from "../../features/quick-translate/preferences";
 import { ttsSettingsStore } from "../../features/tts/settings";
+import { wordbookSettingsStore } from "../../features/wordbook/settings";
 import { loadAppearance } from "../../features/settings/appearance";
 import { loadLanguage } from "../../features/settings/language";
 import {
@@ -327,6 +328,7 @@ void Promise.all([
   Storage.getItem(SCREENSHOT_TRANSLATE_SHORTCUT_STORAGE_KEY),
   Storage.getItem(SELECTION_TRANSLATE_SHORTCUT_STORAGE_KEY),
   ttsSettingsStore.load(),
+  wordbookSettingsStore.load(),
 ]).then(
   ([
     ,
