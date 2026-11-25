@@ -5,15 +5,15 @@
       "source": "longbridge/nsh",
       "sourceType": "github",
       "skillPath": "skills/nsh/SKILL.md",
-      "computedHash": "53e0e8ee612987771eaee00d4a0f6d6b47afd5bb3a4db716b8f59609788194ca",
-      "commit": "616c498bb1ebcc26c2aed636f4f3b14dc35a5d4b"
+      "computedHash": "6508e9dec92aa635855f766c199fe36f68af144a179566ce1c55981af706bdc5",
+      "commit": "88ef13210588fc82b06f5e4c204cb08ba62673c9"
     },
     "nsh-design-guides": {
       "source": "longbridge/nsh",
       "sourceType": "github",
       "skillPath": "skills/nsh-design-guides/SKILL.md",
-      "computedHash": "23aa3c5a5089fd2a06c638ff6c16bd1ecd85cad70a10e2ad5346c6728ef70a0c",
-      "commit": "616c498bb1ebcc26c2aed636f4f3b14dc35a5d4b"
+      "computedHash": "af85e94648672ee8e31e3d3292d6882561e82eac985b8a63943e8d7c16bf1e9f",
+      "commit": "88ef13210588fc82b06f5e4c204cb08ba62673c9"
     }
   }
 }
