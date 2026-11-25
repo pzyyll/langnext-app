@@ -70,9 +70,13 @@ function createDeferred<T>(): Deferred<T> {
 }
 
 function PopupSessionView(
-  props: QuickTranslateSessionOptions & { ocrState?: Accessor<QuickTranslateOcrStatus> },
+  props: QuickTranslateSessionOptions & {
+    ocrState?: Accessor<QuickTranslateOcrStatus>;
+    windowVisible?: Accessor<boolean>;
+  },
 ) {
   const session = createQuickTranslateSession(props);
+  const scrollRevision = signal(0);
   return (
     <Card class="min-h-0 flex-1 gap-0 overflow-hidden p-0">
       <View class="shrink-0 flex-row items-center justify-between border-b border-border px-4 py-2">
@@ -88,8 +92,17 @@ function PopupSessionView(
           onTargetOpenChange={(open) => session.notifyOverlayOpenChange("target-language", open)}
         />
       </View>
-      <Scroll class="min-h-0 flex-1">
-        <QuickTranslatePopup session={session} ocrState={props.ocrState} />
+      <Scroll
+        testID="harness-popup-scroll"
+        class="min-h-0 flex-1"
+        onScroll={() => scrollRevision.update((revision) => revision + 1)}
+      >
+        <QuickTranslatePopup
+          session={session}
+          ocrState={props.ocrState}
+          scrollRevision={() => scrollRevision()}
+          windowVisible={props.windowVisible}
+        />
       </Scroll>
       <QuickTranslateFooter session={session} />
     </Card>
@@ -102,6 +115,7 @@ function PopupHarnessApp(props: {
   onToggleWriteFail: () => void;
 }) {
   const popupOpen = signal(true);
+  const windowVisible = signal(true);
   const sourceText = signal("");
   const ocrState = signal<QuickTranslateOcrStatus>({ phase: "idle", message: null });
   const presetsErrorFail = signal(props.mode === "preset-load-error-then-recover");
@@ -530,6 +544,13 @@ function PopupHarnessApp(props: {
         </If>
         <Text testID="harness-popup-stats">{`calls=${translateCalls().length}|aborts=${abortEvents().join(",")}|detects=${languageCalls().length}|detectAborts=${languageAborts().join(",")}`}</Text>
         <Button
+          testID="harness-toggle-window-visible"
+          size="xs"
+          variant="outline"
+          label={windowVisible() ? "Hide Harness Window" : "Show Harness Window"}
+          onPress={() => windowVisible.set(!windowVisible())}
+        />
+        <Button
           testID="harness-toggle-prefs-write-fail"
           size="xs"
           variant="outline"
@@ -544,6 +565,7 @@ function PopupHarnessApp(props: {
           onSourceTextChange={(text) => sourceText.set(text)}
           autoTranslate={() => props.prefs.autoTranslate()}
           ocrState={() => ocrState()}
+          windowVisible={() => windowVisible()}
           presetsStore={store}
           preferences={props.prefs}
           translate={translateStub}

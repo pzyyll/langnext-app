@@ -1,13 +1,4 @@
-import {
-  batch,
-  signal,
-  untracked,
-  type Accessor,
-  type Bounds,
-  type InputRef,
-  type Point,
-  type Size,
-} from "nsh";
+import { batch, signal, untracked, type Accessor, type Bounds, type Point, type Size } from "nsh";
 import { t } from "nsh/i18n";
 import {
   displays,
@@ -20,6 +11,7 @@ import {
 import { checkOcrReadiness, recognizeScreenshot } from "../features/ocr/recognize";
 import { ocrSettingsStore } from "../features/ocr/settings";
 import type { SourceDelivery, SourceDeliveryKind } from "../features/quick-translate/session";
+import type { SourceInputHandle } from "../features/quick-translate/source-editor";
 import type { ScreenCaptureOverlayConfig, ScreenCapturePort } from "../platform/screen-capture";
 import type { SelectionTextPort, SelectionTextRead } from "../platform/selection-text";
 import {
@@ -116,7 +108,7 @@ export interface QuickTranslateController {
   setMenuOpen: (menuId: string, open: boolean) => void;
   hasOpenOverlay: () => boolean;
   attachWindow: (win: WindowRef | null) => void;
-  attachSourceInput: (input: InputRef | null) => void;
+  attachSourceInput: (input: SourceInputHandle | null) => void;
   verifyInitialBounds: (state: WindowState | null) => void;
   fitContentHeight: (win: WindowRef, height: number, fitId: number) => void;
   handleBoundsChange: (bounds: Bounds) => void;
@@ -182,7 +174,7 @@ export function createQuickTranslateController(
   const ocrFocusSeqSignal = signal(0);
   const openMenusSignal = signal<Record<string, boolean>>({});
   let windowRef: WindowRef | null = null;
-  let sourceInputRef: InputRef | null = null;
+  let sourceInputRef: SourceInputHandle | null = null;
   let closeCleanup: (() => void) | null = null;
   let stopPressMonitor: (() => void) | null = null;
   let needsBoundsCheck = false;
@@ -802,7 +794,7 @@ export function createQuickTranslateController(
       windowRef = win;
       attachedWindowSignal.set(win);
     },
-    attachSourceInput: (input: InputRef | null) => {
+    attachSourceInput: (input: SourceInputHandle | null) => {
       sourceInputRef = input;
       input?.focus();
     },

@@ -61,6 +61,8 @@ export type CardResultState =
   | { status: "streaming"; text: string }
   | {
       status: "success";
+      resultId: number;
+      sourceText: string;
       text: string;
       modelId: string | null;
       sourceLanguage: LanguageId;
@@ -282,6 +284,7 @@ export function createQuickTranslateSession(
   const sourceDetection = signal<SourceDetectionState>({ status: "idle" });
 
   let disposed = false;
+  let nextResultId = 0;
   const languageDetection = createSourceLanguageDetection({
     detect: options.detectSource,
     onStateChange: (state) => {
@@ -717,6 +720,8 @@ export function createQuickTranslateSession(
       if (outcome.ok) {
         finishQuery({
           status: "success",
+          resultId: ++nextResultId,
+          sourceText: languages.text,
           text: outcome.text,
           modelId: outcome.modelId,
           sourceLanguage: pair.sourceLanguage,

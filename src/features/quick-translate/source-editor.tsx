@@ -10,12 +10,19 @@ import {
   history,
   keymap,
 } from "nsh/base";
-import { View, cleanup, effect, signal } from "nsh";
+import { View, cleanup, effect, fontScale, keymap as appKeymap, signal } from "nsh";
 import {
+  FONT_FIT_SLACK_POINTS,
   FONT_SIZE_STEPS,
   FONT_STEP_LINE_HEIGHTS,
   FONT_STEP_POINTS,
+  LARGEST_FONT_STEP,
+  clampFontStep,
+  comparableMeasureText,
   fieldShouldStepDown,
+  fontFitBudget,
+  fontFitSlack,
+  fontMeasureClass,
   measurementLooksCollapsed,
   pickFontStep,
 } from "../../components/ui/font-step";
@@ -32,6 +39,8 @@ export interface QuickTranslateSourceHandle {
   setSelection(start: number, end: number): void;
 }
 
+export type SourceInputHandle = QuickTranslateSourceHandle;
+
 export interface QuickTranslateSourceEditorProps {
   testID?: string;
   ref?: (handle: QuickTranslateSourceHandle | null) => void;
@@ -46,6 +55,7 @@ export interface QuickTranslateSourceEditorProps {
   autoFocus?: boolean;
   initialFontStep?: number;
   class?: string;
+  inputClass?: string;
   measureClass?: string;
   onChangeText?: (text: string) => void;
   onSubmitEditing?: () => void;
@@ -89,7 +99,6 @@ const SOURCE_SCHEMA = defineSchema({
 const HIGHLIGHT_DECORATION_KEY = "quick-translate-sentence-highlight";
 const ASCII_CR = 13;
 const ASCII_LF = 10;
-const DEFAULT_MAX_MEASURE_HEIGHT = 200;
 
 /** Builds a raw UTF-16 -> normalized UTF-16 -> ProseMirror paragraph position map. */
 export function buildSourceProjection(raw: string): SourceProjection {
@@ -182,10 +191,6 @@ function readSessionPlainText(session: RichEditorSession): string {
   return session.textBetween(undefined, undefined, "\n");
 }
 
-function maxMeasureHeight(maxHeight: number | undefined): number {
-  return maxHeight ?? DEFAULT_MAX_MEASURE_HEIGHT;
-}
-
 export function QuickTranslateSourceEditor(props: QuickTranslateSourceEditorProps) {
   let activeProjection = buildSourceProjection(props.value);
   let lastRawValue = props.value;
@@ -194,17 +199,16 @@ export function QuickTranslateSourceEditor(props: QuickTranslateSourceEditorProp
   let editorRef: RichEditorRef | null = null;
 
   const docRevision = signal(0);
+  const editorFocused = signal(false);
+  const composing = signal(false);
   const fieldWidth = signal(0);
   const contentHeight = signal(0);
   const probeHeights = signal<number[]>(FONT_SIZE_STEPS.map(() => 0));
-  const initialStep = Math.max(
-    0,
-    Math.min(FONT_SIZE_STEPS.length - 1, props.initialFontStep ?? FONT_SIZE_STEPS.length - 1),
-  );
+  const initialStep = clampFontStep(props.initialFontStep ?? LARGEST_FONT_STEP);
   const stepIndex = signal(initialStep);
   let lastSteppedText = props.value;
   let lastSteppedWidth = 0;
-  let maxAllowedStep = FONT_SIZE_STEPS.length - 1;
+  let maxAllowedStep = LARGEST_FONT_STEP;
 
   const shiftEnterPlugin = keymap({
     "Shift-Enter": command("splitBlock"),
@@ -225,6 +229,23 @@ export function QuickTranslateSourceEditor(props: QuickTranslateSourceEditorProp
     plugins: [shiftEnterPlugin, enterPlugin, highlightPlugin, history(), baseKeymap()],
   });
 
+  const syncExternalValue = (nextRaw: string) => {
+    if (nextRaw === lastRawValue) return;
+    const nextProj = buildSourceProjection(nextRaw);
+    lastRawValue = nextRaw;
+    activeProjection = nextProj;
+    const currentNorm = readSessionPlainText(session);
+    if (nextProj.normalized !== currentNorm) {
+      syncingExternal = true;
+      try {
+        session.setContent(buildPlainDocJson(nextProj.paragraphs), "json");
+      } finally {
+        syncingExternal = false;
+      }
+    }
+    lastNormalizedValue = nextProj.normalized;
+  };
+
   const handle: QuickTranslateSourceHandle = {
     focus() {
       if (editorRef) editorRef.focus();
@@ -235,6 +256,7 @@ export function QuickTranslateSourceEditor(props: QuickTranslateSourceEditorProp
       else session.blur();
     },
     setSelection(start: number, end: number) {
+      syncExternalValue(props.value);
       const from = rawOffsetToDocPos(activeProjection, start);
       const to = rawOffsetToDocPos(activeProjection, end);
       editorRef?.setSelection(from, to);
@@ -267,23 +289,7 @@ export function QuickTranslateSourceEditor(props: QuickTranslateSourceEditorProp
     const nextRaw = props.value;
     const range = props.highlightRange;
     docRevision();
-
-    if (nextRaw !== lastRawValue) {
-      const nextProj = buildSourceProjection(nextRaw);
-      lastRawValue = nextRaw;
-      activeProjection = nextProj;
-      const currentNorm = readSessionPlainText(session);
-      if (nextProj.normalized !== currentNorm) {
-        syncingExternal = true;
-        try {
-          session.setContent(buildPlainDocJson(nextProj.paragraphs), "json");
-        } finally {
-          syncingExternal = false;
-        }
-      }
-      lastNormalizedValue = nextProj.normalized;
-    }
-
+    syncExternalValue(nextRaw);
     applyHighlightDecorations(range);
   });
 
@@ -291,15 +297,16 @@ export function QuickTranslateSourceEditor(props: QuickTranslateSourceEditorProp
     const text = props.value;
     const width = fieldWidth();
     const heights = probeHeights();
-    const budget = maxMeasureHeight(props.maxHeight);
+    const scale = fontScale();
+    const budget = props.maxHeight ?? fontFitBudget(scale);
+    const slack = props.maxHeight !== undefined ? FONT_FIT_SLACK_POINTS : fontFitSlack(scale);
     if (!text) {
-      maxAllowedStep = FONT_SIZE_STEPS.length - 1;
+      maxAllowedStep = LARGEST_FONT_STEP;
       lastSteppedText = "";
       lastSteppedWidth = width;
-      const topStep = FONT_SIZE_STEPS.length - 1;
-      if (stepIndex() !== topStep) {
-        stepIndex.set(topStep);
-        props.onFontStepChange?.(topStep);
+      if (stepIndex() !== LARGEST_FONT_STEP) {
+        stepIndex.set(LARGEST_FONT_STEP);
+        props.onFontStepChange?.(LARGEST_FONT_STEP);
       }
       return;
     }
@@ -308,21 +315,21 @@ export function QuickTranslateSourceEditor(props: QuickTranslateSourceEditorProp
     if (text !== lastSteppedText || Math.abs(width - lastSteppedWidth) > 1) {
       lastSteppedText = text;
       lastSteppedWidth = width;
-      maxAllowedStep = FONT_SIZE_STEPS.length - 1;
+      maxAllowedStep = LARGEST_FONT_STEP;
     }
 
-    const picked = pickFontStep(heights, budget, 2);
+    const picked = pickFontStep(heights, budget, slack);
     let nextStep = Math.min(picked, maxAllowedStep);
     const actualHeight = contentHeight();
     const probeHeight = heights[nextStep] ?? 0;
     if (
       nextStep > 0 &&
-      actualHeight > budget &&
+      actualHeight > budget + slack &&
       (probeHeight <= 0 ||
         fieldShouldStepDown(
           actualHeight,
           probeHeight,
-          budget,
+          budget + slack,
           nextStep,
           FONT_STEP_POINTS[nextStep] ?? FONT_STEP_POINTS[0],
         ))
@@ -341,17 +348,36 @@ export function QuickTranslateSourceEditor(props: QuickTranslateSourceEditorProp
     session.dispose();
   });
 
+  // Pass focus navigation and popup dismiss keys past RichEditor's keymap in plain text mode.
+  effect(() => {
+    if (!editorFocused() || composing()) return;
+    const unbind = appKeymap.bind(
+      {
+        tab: () => {},
+        "shift+tab": () => {},
+        escape: () => {},
+      },
+      { when: "always", overFocused: true, passThrough: true },
+    );
+    cleanup(unbind);
+  });
+
+  const editable = () => props.editable ?? true;
   const stepClass = () => FONT_SIZE_STEPS[stepIndex()] ?? FONT_SIZE_STEPS[0];
+  const fontWeightClass = () => (props.frameless && stepIndex() >= 2 ? "font-medium" : "");
   const rootClass = () => {
+    const minHeight = props.inputClass ?? "min-h-24";
     if (props.frameless) {
-      return `w-full bg-transparent ${props.class ?? ""}`;
+      return `w-full bg-transparent ${minHeight}`;
     }
-    return `w-full rounded-xl border border-input bg-background px-3 py-2 focus-within:border-ring ${props.class ?? ""}`;
+    return `w-full rounded-xl border border-input bg-background px-3 py-2 focus-within:border-ring ${minHeight}`;
   };
+  const measureClass = () => props.measureClass ?? fontMeasureClass(props.inputClass);
 
   return (
     <View
-      class="relative w-full"
+      disabled={!editable()}
+      class={`relative ${!editable() ? "opacity-60" : ""} ${props.class ?? "w-full"}`}
       onLayout={({ bounds }) => {
         if (bounds.size.width > 0 && bounds.size.width !== fieldWidth()) {
           fieldWidth.set(bounds.size.width);
@@ -362,9 +388,9 @@ export function QuickTranslateSourceEditor(props: QuickTranslateSourceEditorProp
         text={props.value}
         width={fieldWidth()}
         frameless={Boolean(props.frameless)}
-        measureClass={props.measureClass ?? ""}
+        measureClass={measureClass()}
         onHeight={(index, height, measured) => {
-          if (measured !== props.value) return;
+          if (comparableMeasureText(measured) !== comparableMeasureText(props.value)) return;
           if (measurementLooksCollapsed(measured, fieldWidth(), height, index)) return;
           probeHeights.update((prev: number[]) => {
             if (prev[index] === height) return prev;
@@ -381,15 +407,15 @@ export function QuickTranslateSourceEditor(props: QuickTranslateSourceEditorProp
           props.ref?.(node ? handle : null);
         }}
         editor={session}
-        editable={props.editable ?? true}
+        editable={editable()}
         autoFocus={props.autoFocus}
         placeholder={props.placeholder}
         accessibilityLabel={props.accessibilityLabel}
         classes={{
           root: rootClass(),
-          placeholder: `${stepClass()} text-muted-foreground`,
+          placeholder: `${stepClass()} ${fontWeightClass()} text-muted-foreground`,
           nodes: {
-            paragraph: `${stepClass()} text-foreground`,
+            paragraph: `${stepClass()} ${fontWeightClass()} text-foreground`,
           },
         }}
         styles={{
@@ -425,9 +451,18 @@ export function QuickTranslateSourceEditor(props: QuickTranslateSourceEditorProp
             empty: selection.empty,
           })
         }
-        onFocus={() => props.onFocus?.()}
-        onBlur={() => props.onBlur?.()}
-        onCompositionChange={({ composing }) => props.onCompositionChange?.(composing)}
+        onFocus={() => {
+          editorFocused.set(true);
+          props.onFocus?.();
+        }}
+        onBlur={() => {
+          editorFocused.set(false);
+          props.onBlur?.();
+        }}
+        onCompositionChange={({ composing: nextComposing }) => {
+          composing.set(nextComposing);
+          props.onCompositionChange?.(nextComposing);
+        }}
       />
     </View>
   );

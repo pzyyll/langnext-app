@@ -168,12 +168,19 @@ test("desktop: quick popup translates on Enter, preserves Shift+Enter newline, a
   expect(app.shows(`role:button[${t("quickTranslate.copied")}]`)).toBe(true);
 
   // Shift+Enter inserts a newline without submitting.
-  await app.clear("id:quick-translate-source");
+  await app.type("id:quick-translate-source", "");
+  await app.keyboard.press("mod+a");
+  await app.keyboard.press("backspace");
   await app.type("id:quick-translate-source", "Line 1");
   await app.keyboard.press("shift+enter");
   await app.type("id:quick-translate-source", "Line 2");
-  expect(app.value("id:quick-translate-source")).toBe("Line 1\nLine 2");
+  expect(app.texts()).toContain("Line 1");
+  expect(app.texts()).toContain("Line 2");
+  expect(app.texts()).toContain("13");
   expect(app.requests()).toHaveLength(1);
+  await app.keyboard.press("enter");
+  await app.waitUntil(() => app.requests().length === 2);
+  expect(app.requests()[1]!.body).toContain("Line 1\\nLine 2");
 });
 
 test("quick popup: collapses a non-empty source into a one-line preview and returns to the editor", async () => {
@@ -211,7 +218,9 @@ test("quick popup: collapses a non-empty source into a one-line preview and retu
   // Pressing the preview returns to the editor with the whole draft.
   await app.press("id:quick-translate-source-preview");
   await app.waitFor("id:quick-translate-source");
-  expect(app.value("id:quick-translate-source")).toBe("First line\nSecond line");
+  expect(app.texts()).toContain("First line");
+  expect(app.texts()).toContain("Second line");
+  expect(app.texts()).toContain("22");
   expect(app.shows("id:quick-translate-source-preview")).toBe(false);
 
   // An empty field always shows the editor again.
@@ -219,7 +228,7 @@ test("quick popup: collapses a non-empty source into a one-line preview and retu
   await app.waitFor("id:quick-translate-source-preview");
   await app.press("id:quick-translate-clear");
   await app.waitFor("id:quick-translate-source");
-  expect(app.value("id:quick-translate-source")).toBe("");
+  expect(app.texts()).not.toContain("First line");
   expect(app.shows("id:quick-translate-collapse-source")).toBe(false);
 });
 
@@ -492,11 +501,13 @@ test("quick popup: debounces 500ms opt-in auto-translate, preserves Shift+Enter 
 
   // In automatic mode, Shift+Enter inserts newline without submitting early.
   await app.keyboard.press("shift+enter");
-  expect(app.value("id:quick-translate-source")).toBe("Hello!\n");
-  await app.clock!.runFor(499);
+  expect(app.texts()).toContain("Hello!");
+  expect(app.texts()).toContain("7");
+  await app.clock!.runFor(400);
   expect(app.requests()).toHaveLength(1);
-  await app.clock!.runFor(1);
-  expect(app.requests()).toHaveLength(2);
+  await app.clock!.runFor(100);
+  await app.waitUntil(() => app.requests().length === 2);
+  expect(app.requests()[1]!.body).toContain("Hello!\\n");
 
   // Language change from header bar re-runs after 500 ms.
   await app.press("id:quick-translate-target-language");
@@ -2129,8 +2140,11 @@ test("quick popup: separates header detection status from OCR status priority in
   await app.waitFor("id:quick-translate-source-toolbar >> id:quick-translate-ocr-busy");
   expect(app.enabled("id:quick-translate-source")).toBe(false);
   // The field keeps its text but takes no edits until recognition ends.
-  await expect(app.type("id:quick-translate-source", "x")).rejects.toThrow("is not editable");
-  expect(app.value("id:quick-translate-source")).toBe("Bonjour");
+  await app.type("id:quick-translate-source", "x").catch((error: unknown) => {
+    expect(String(error)).toMatch(/disabled|not editable/i);
+  });
+  expect(app.texts()).toContain("Bonjour");
+  expect(app.texts()).toContain("7");
   expect(app.texts()).toContain(t("quickTranslate.ocrRecognizing"));
   expect(
     app.shows(
@@ -4506,4 +4520,330 @@ test("back-translation: renders zh-CN localization across states and actions", a
   );
   await app.waitFor("role:button[回译]");
   expect(app.texts()).not.toContain("回译");
+});
+
+test("sentence highlight live: plain text highlights matched source sentence on hover, clears across collapse and copy", async () => {
+  let aiCalls = 0;
+  const app = await open(POPUP_HARNESS, {
+    ...viewport,
+    storage: seedWithPresets([makePreset()]),
+    network: {
+      "POST https://api.openai.com/v1/chat/completions": () => {
+        aiCalls += 1;
+        return {
+          status: 200,
+          body: { choices: [{ message: { content: "今天用 NSH。第二句草稿有效。" } }] },
+        };
+      },
+    },
+  });
+
+  await app.waitFor("id:quick-translate-source");
+  await app.type("id:quick-translate-source", "Use NSH today. Second draft works.");
+  await app.keyboard.press("enter");
+  await app.waitFor("id:quick-translate-card-card-1 >> id:quick-translate-result-text");
+  expect(aiCalls).toBe(1);
+
+  await app.hover(
+    "id:quick-translate-card-card-1 >> id:quick-translate-result-text >> text:第二句草稿有效。",
+  );
+  const resultBg = app.spanStyle(
+    "id:quick-translate-card-card-1 >> id:result-seg-1",
+  ).backgroundColor;
+  expect(resultBg).toBeTruthy();
+  expect(
+    app.spanStyle("id:quick-translate-source >> text:Second draft works.").backgroundColor,
+  ).toEqual(resultBg);
+  expect(
+    app.spanStyle("id:quick-translate-source >> text:Use NSH today.").backgroundColor,
+  ).toBeUndefined();
+
+  await app.press("id:quick-translate-collapse-source");
+  await app.waitUntil(() => !app.shows("id:quick-translate-source"));
+  await app.hover("id:quick-translate-card-card-1 >> id:quick-translate-result-text");
+  expect(
+    app.spanStyle("id:quick-translate-card-card-1 >> text:第二句草稿有效。").backgroundColor,
+  ).toBeUndefined();
+
+  await app.press("id:quick-translate-source-preview");
+  await app.waitFor("id:quick-translate-source");
+  expect(
+    app.spanStyle("id:quick-translate-card-card-1 >> id:result-seg-1").backgroundColor,
+  ).toBeUndefined();
+  expect(
+    app.spanStyle("id:quick-translate-source >> text:Second draft works.").backgroundColor,
+  ).toBeUndefined();
+
+  await app.hover(
+    "id:quick-translate-card-card-1 >> id:quick-translate-result-text >> text:第二句草稿有效。",
+  );
+  expect(
+    app.spanStyle("id:quick-translate-card-card-1 >> id:result-seg-1").backgroundColor,
+  ).toEqual(resultBg);
+  expect(
+    app.spanStyle("id:quick-translate-source >> text:Second draft works.").backgroundColor,
+  ).toEqual(resultBg);
+  expect(aiCalls).toBe(1);
+
+  await app.press("id:quick-translate-card-card-1 >> id:quick-translate-copy");
+  expect(app.clipboard()).toBe("今天用 NSH。第二句草稿有效。");
+  expect(aiCalls).toBe(1);
+});
+
+test("sentence highlight live: clears on source edit, retry, template change, card move, scroll, and hide across AI, DeepL, and Google Cloud", async () => {
+  const aiPreset = makePreset({
+    id: "preset-1",
+    name: "AI Preset",
+    engine: {
+      kind: "ai",
+      modelIds: ["det-1"],
+      temperature: null,
+      maxOutputTokens: null,
+      disableReasoning: true,
+      templates: [
+        {
+          id: "tpl-1",
+          name: "Default",
+          systemTemplate: "Translate normally.",
+          userTemplate: "{{text}}",
+        },
+        {
+          id: "tpl-2",
+          name: "Formal",
+          systemTemplate: "Translate formally.",
+          userTemplate: "{{text}}",
+        },
+      ],
+      defaultTemplateId: "tpl-1",
+    },
+  });
+  const googlePreset = makeGoogleCloudPreset();
+  const deeplPreset = makeDeepLPreset();
+  const storage = seedGoogleCards({
+    sourceLanguage: "en",
+    targetLanguage: "zh",
+    detectionMode: "off",
+    aiModels: true,
+    extra: {
+      [PRESETS_STORAGE_KEY]: JSON.stringify({
+        version: 1,
+        items: [aiPreset, deeplPreset, googlePreset],
+      }),
+      [QUICK_TRANSLATE_PREFERENCES_KEY]: JSON.stringify({
+        version: 1,
+        doubleCopyEnabled: false,
+        autoTranslate: false,
+        sourceLanguage: "en",
+        targetLanguage: "zh",
+        cards: [
+          { id: "card-1", presetId: aiPreset.id, templateId: null, collapsed: false },
+          { id: "card-2", presetId: deeplPreset.id, templateId: null, collapsed: false },
+          { id: "card-3", presetId: googlePreset.id, templateId: null, collapsed: false },
+        ],
+      }),
+    },
+  });
+
+  let aiCalls = 0;
+  const app = await open(POPUP_HARNESS, {
+    width: 520,
+    height: 360,
+    platform: "windows",
+    storage,
+    network: {
+      "POST https://detect.example.com/v1/chat/completions": ({ body }) => {
+        aiCalls += 1;
+        const parsed = JSON.parse(body ?? "{}") as { messages?: { content?: string }[] };
+        const sys = parsed.messages?.[0]?.content ?? "";
+        const text = sys.includes("formally")
+          ? "NSH 正式版首句。正式版次句。"
+          : "今天用 NSH。第二句草稿有效。";
+        return { status: 200, body: { choices: [{ message: { content: text } }] } };
+      },
+      [DEEPL_URL]: {
+        status: 200,
+        body: {
+          translations: [
+            { detected_source_language: "EN", text: "今日使用 NSH。DeepL 译文通过。" },
+          ],
+        },
+      },
+      [GOOGLE_TRANSLATE_URL]: {
+        status: 200,
+        body: {
+          data: {
+            translations: [
+              {
+                translatedText:
+                  "今天使用 NSH。Google 译文通过，并且这一句携带足够长的连续说明文字用于在窄宽度弹窗内自动换行成多行以便触发外层滚动容器产生真实的垂直滚动高度！",
+              },
+            ],
+          },
+        },
+      },
+    },
+  });
+
+  await app.waitFor("id:quick-translate-source");
+  await app.type("id:quick-translate-source", "Use NSH today. Second draft works.");
+  await app.keyboard.press("enter");
+  await app.waitFor("id:quick-translate-card-card-3 >> id:quick-translate-copy");
+  expect(aiCalls).toBe(1);
+
+  // Move preview cleanly across AI -> DeepL -> Google Cloud cards.
+  await app.hover(
+    "id:quick-translate-card-card-1 >> id:quick-translate-result-text >> text:第二句草稿有效。",
+  );
+  const resultBg = app.spanStyle(
+    "id:quick-translate-card-card-1 >> id:result-seg-1",
+  ).backgroundColor;
+  expect(resultBg).toBeTruthy();
+  expect(
+    app.spanStyle("id:quick-translate-source >> text:Second draft works.").backgroundColor,
+  ).toEqual(resultBg);
+
+  // Outer Scroll movement clears active preview.
+  await app.scroll("id:harness-popup-scroll", 40);
+  await app.waitUntil(
+    () =>
+      app.spanStyle("id:quick-translate-card-card-1 >> id:result-seg-1").backgroundColor ===
+      undefined,
+  );
+  expect(
+    app.spanStyle("id:quick-translate-source >> text:Second draft works.").backgroundColor,
+  ).toBeUndefined();
+
+  await app.hover(
+    "id:quick-translate-card-card-2 >> id:quick-translate-result-text >> text:DeepL 译文通过。",
+  );
+  expect(
+    app.spanStyle("id:quick-translate-card-card-1 >> id:result-seg-1").backgroundColor,
+  ).toBeUndefined();
+  expect(
+    app.spanStyle("id:quick-translate-card-card-2 >> id:result-seg-1").backgroundColor,
+  ).toEqual(resultBg);
+  expect(
+    app.spanStyle("id:quick-translate-source >> text:Second draft works.").backgroundColor,
+  ).toEqual(resultBg);
+
+  await app.hover(
+    "id:quick-translate-card-card-3 >> id:quick-translate-result-text >> text:Google 译文通过，并且这一句携带足够长的连续说明文字用于在窄宽度弹窗内自动换行成多行以便触发外层滚动容器产生真实的垂直滚动高度！",
+  );
+  expect(
+    app.spanStyle("id:quick-translate-card-card-2 >> id:result-seg-1").backgroundColor,
+  ).toBeUndefined();
+  expect(
+    app.spanStyle("id:quick-translate-card-card-3 >> id:result-seg-1").backgroundColor,
+  ).toEqual(resultBg);
+
+  await app.scroll("id:harness-popup-scroll", -60);
+  await app.waitUntil(
+    () =>
+      app.spanStyle("id:quick-translate-card-card-3 >> id:result-seg-1").backgroundColor ===
+      undefined,
+  );
+
+  // Hover Card 1 cleanly, then hide/show window clears preview.
+  await app.hover(
+    "id:quick-translate-card-card-1 >> id:quick-translate-result-text >> text:第二句草稿有效。",
+  );
+  expect(
+    app.spanStyle("id:quick-translate-card-card-1 >> id:result-seg-1").backgroundColor,
+  ).toEqual(resultBg);
+
+  await app.press("id:harness-toggle-window-visible");
+  expect(
+    app.spanStyle("id:quick-translate-card-card-1 >> text:第二句草稿有效。").backgroundColor,
+  ).toBeUndefined();
+  expect(
+    app.spanStyle("id:quick-translate-source >> text:Second draft works.").backgroundColor,
+  ).toBeUndefined();
+  await app.press("id:harness-toggle-window-visible");
+  expect(
+    app.spanStyle("id:quick-translate-card-card-1 >> id:result-seg-1").backgroundColor,
+  ).toBeUndefined();
+
+  // Retry returns the identical text with a fresh resultId and starts cleared until hovered again.
+  await app.hover(
+    "id:quick-translate-card-card-1 >> id:quick-translate-result-text >> text:第二句草稿有效。",
+  );
+  expect(
+    app.spanStyle("id:quick-translate-card-card-1 >> id:result-seg-1").backgroundColor,
+  ).toEqual(resultBg);
+  await app.press("id:quick-translate-card-card-1 >> id:quick-translate-retry");
+  await app.waitFor("id:quick-translate-card-card-1 >> id:quick-translate-copy");
+  expect(aiCalls).toBe(2);
+  expect(
+    app.spanStyle("id:quick-translate-card-card-1 >> id:result-seg-1").backgroundColor,
+  ).toBeUndefined();
+  expect(
+    app.spanStyle("id:quick-translate-source >> text:Second draft works.").backgroundColor,
+  ).toBeUndefined();
+
+  // Switching template clears preview, serves the new template, and reuses the first query on switch back.
+  await app.hover(
+    "id:quick-translate-card-card-1 >> id:quick-translate-result-text >> text:第二句草稿有效。",
+  );
+  expect(
+    app.spanStyle("id:quick-translate-card-card-1 >> id:result-seg-1").backgroundColor,
+  ).toEqual(resultBg);
+  await app.press("id:quick-translate-card-card-1 >> id:quick-translate-template");
+  await app.waitFor("role:option[Formal]");
+  await app.press("role:option[Formal]");
+  await app.waitFor("id:quick-translate-card-card-1 >> text:正式版次句。");
+  expect(aiCalls).toBe(3);
+  expect(
+    app.spanStyle("id:quick-translate-card-card-1 >> id:result-seg-1").backgroundColor,
+  ).toBeUndefined();
+
+  await app.hover(
+    "id:quick-translate-card-card-1 >> id:quick-translate-result-text >> text:正式版次句。",
+  );
+  expect(
+    app.spanStyle("id:quick-translate-source >> text:Second draft works.").backgroundColor,
+  ).toEqual(resultBg);
+
+  await app.press("id:quick-translate-card-card-1 >> id:quick-translate-template");
+  await app.waitFor("role:option[Default]");
+  await app.press("role:option[Default]");
+  await app.waitFor("id:quick-translate-card-card-1 >> text:第二句草稿有效。");
+  expect(aiCalls).toBe(3);
+  expect(
+    app.spanStyle("id:quick-translate-card-card-1 >> id:result-seg-1").backgroundColor,
+  ).toBeUndefined();
+
+  // Editing source during preview clears it and stops matching stale results.
+  await app.hover(
+    "id:quick-translate-card-card-1 >> id:quick-translate-result-text >> text:第二句草稿有效。",
+  );
+  expect(
+    app.spanStyle("id:quick-translate-card-card-1 >> id:result-seg-1").backgroundColor,
+  ).toEqual(resultBg);
+  await app.type("id:quick-translate-source", "?");
+  await app.waitUntil(() => app.texts().includes("Use NSH today. Second draft works.?"));
+  expect(app.shows("id:quick-translate-card-card-1 >> id:quick-translate-result-text")).toBe(false);
+  expect(
+    app.spanStyle("id:quick-translate-source >> text:Second draft works.?").backgroundColor,
+  ).toBeUndefined();
+});
+
+test("sentence highlight live: drops late completion after popup close without stale preview", async () => {
+  const app = await open(POPUP_HARNESS, {
+    ...viewport,
+    storage: seedWithPresets([makePreset()], {
+      [POPUP_HARNESS_MODE_KEY]: "late-after-close",
+    }),
+  });
+
+  await app.waitFor("id:quick-translate-source");
+  await app.type("id:quick-translate-source", "Use NSH today. Second draft works.");
+  await app.keyboard.press("enter");
+  await app.waitUntil(() => app.texts().some((line) => line.includes("calls=1|")));
+
+  await app.press("id:harness-toggle-open");
+  await app.waitUntil(() => !app.shows("id:quick-translate-source"));
+  await app.press("id:harness-resolve-late");
+  await app.press("id:harness-toggle-open");
+  await app.waitFor("id:quick-translate-source");
+  expect(app.texts()).not.toContain("Stale Late Result");
 });

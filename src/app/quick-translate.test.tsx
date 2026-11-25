@@ -49,6 +49,23 @@ function popupPreferences(overrides: Record<string, unknown> = {}): string {
   });
 }
 
+function hasQuickSource(targetApp: Awaited<ReturnType<typeof open>>, expected: string): boolean {
+  if (expected.length === 0) {
+    return (
+      !targetApp.shows("id:quick-translate-collapse-source") &&
+      !targetApp.shows("id:quick-translate-source-count")
+    );
+  }
+  const texts = targetApp.texts();
+  const lines = expected.split("\n").filter((line) => line.length > 0);
+  return (
+    targetApp.shows("id:quick-translate-collapse-source") &&
+    targetApp.shows("id:quick-translate-source-count") &&
+    texts.includes(String(expected.length)) &&
+    lines.every((line) => texts.includes(line))
+  );
+}
+
 const quickPreset: TranslationPreset = {
   id: "preset-1",
   name: "Quick Preset",
@@ -93,13 +110,13 @@ test("desktop: quick window opens from production tray action, reuses existing w
 
   await app.waitFor("id:quick-translate-source");
   await app.type("id:quick-translate-source", "Hello quick window");
-  expect(app.value("id:quick-translate-source")).toBe("Hello quick window");
+  expect(hasQuickSource(app, "Hello quick window")).toBe(true);
 
   // Re-invoking shortcut while unpinned focuses and preserves existing draft.
   await app.keyboard.press(DEFAULT_QUICK_TRANSLATE_SHORTCUT);
   expect(app.window("quick-translate").state()?.visible).toBe(true);
   expect(app.window("quick-translate").state()?.focused).toBe(true);
-  expect(app.value("id:quick-translate-source")).toBe("Hello quick window");
+  expect(hasQuickSource(app, "Hello quick window")).toBe(true);
 });
 
 test("quick history: group multi-card translations and restore with no request or duplicate history", async () => {
@@ -159,7 +176,9 @@ test("quick history: group multi-card translations and restore with no request o
   await app.waitUntil(() => !app.shows("No translation history"));
   expect(app.window("quick-translate").state()?.visible).toBe(true);
 
-  await app.type(source, original);
+  await app.type(source, "Original first line");
+  await app.keyboard.press("shift+enter");
+  await app.type(source, "Original second line");
   await app.keyboard.press("enter");
   await app.waitUntil(() => [...saved.values()][0]?.results.length === 2);
   expect(saved.size).toBe(1);
@@ -168,12 +187,14 @@ test("quick history: group multi-card translations and restore with no request o
   await app.type(source, " Draft not sent yet");
   await app.press(history);
   await app.waitFor(entry);
-  expect(app.value(source)).not.toBe(original);
+  expect(hasQuickSource(app, original)).toBe(false);
+  expect(app.texts().some((text) => text.includes("Draft not sent yet"))).toBe(true);
   await app.keyboard.press("arrowdown");
   await app.keyboard.press("enter");
   await app.waitUntil(() => !app.shows(entry));
   await app.waitFor("id:quick-translate-history-results");
-  expect(app.value(source)).toBe(original);
+  expect(hasQuickSource(app, original)).toBe(true);
+  expect(app.texts().some((text) => text.includes("Draft not sent yet"))).toBe(false);
   expect(app.texts().filter((text) => text === "Saved translation")).toHaveLength(2);
   await app.clock!.runFor(AUTO_TRANSLATE_DEBOUNCE_MS + 200);
   expect(app.requests()).toHaveLength(2);
@@ -238,7 +259,7 @@ test("quick history: discard a late translation when a saved action replaces the
   await app.press("id:quick-translate-history");
   await app.press("role:menuitem[Stored original]");
   await app.waitFor("Stored result");
-  expect(app.value(source)).toBe("Stored original");
+  expect(hasQuickSource(app, "Stored original")).toBe(true);
   expect(app.texts()).toContain("Removed preset");
   await app.clock!.runFor(2100);
   expect(app.texts()).not.toContain("Late result");
@@ -427,7 +448,7 @@ test("quick window: closes on unpinned blur, survives blur when pinned, resets p
   // Reopen restores the draft but not the pin.
   await app.press("id:harness-tray-quick-translate");
   await app.waitFor("id:quick-translate-source");
-  expect(app.value("id:quick-translate-source")).toBe("Unfinished draft");
+  expect(hasQuickSource(app, "Unfinished draft")).toBe(true);
   await app.press("id:nav-settings");
   await app.waitUntil(() => app.window("quick-translate").state() === null);
 
@@ -1432,9 +1453,9 @@ test("double copy: shell seam delivers copied text to a newly mounted popup, tra
   await app.press("id:quick-translate-auto-toggle");
   await app.press("id:quick-translate-collapse-source");
   await app.waitFor("id:quick-translate-source");
-  expect(app.value("id:quick-translate-source")).toBe("Clipboard manual text");
+  expect(hasQuickSource(app, "Clipboard manual text")).toBe(true);
   await app.type("id:quick-translate-source", "!");
-  expect(app.value("id:quick-translate-source")).toBe("Clipboard manual text!");
+  expect(hasQuickSource(app, "Clipboard manual text!")).toBe(true);
   await app.clock!.runFor(AUTO_TRANSLATE_DEBOUNCE_MS);
   await app.waitFor("id:quick-translate-result-text");
   expect(app.requests()).toHaveLength(2);
@@ -1448,7 +1469,7 @@ test("double copy: shell seam delivers copied text to a newly mounted popup, tra
   expect(app.shows("id:quick-translate-source")).toBe(false);
   await app.press("id:quick-translate-collapse-source");
   await app.waitFor("id:quick-translate-source");
-  expect(app.value("id:quick-translate-source")).toBe("Second copied phrase");
+  expect(hasQuickSource(app, "Second copied phrase")).toBe(true);
   await app.waitFor("id:quick-translate-result-text");
   expect(app.texts()).toContain("Translated ok");
   expect(app.requests()).toHaveLength(3);
@@ -1458,7 +1479,7 @@ test("double copy: shell seam delivers copied text to a newly mounted popup, tra
   await app.waitUntil(() => app.window("quick-translate").state() === null);
   await app.keyboard.press(DEFAULT_QUICK_TRANSLATE_SHORTCUT);
   await app.waitFor("id:quick-translate-source");
-  expect(app.value("id:quick-translate-source")).toBe("");
+  expect(hasQuickSource(app, "")).toBe(true);
   expect(app.shows("id:quick-translate-result-text")).toBe(false);
   expect(app.requests()).toHaveLength(3);
 
@@ -1516,7 +1537,7 @@ test("quick window: reopening restores the draft and completed translation witho
   await app.waitFor("id:quick-translate-source");
   await app.clock!.runFor(responseDelay);
 
-  expect(app.value("id:quick-translate-source")).toBe(draft);
+  expect(hasQuickSource(app, draft)).toBe(true);
   expect(app.shows("id:quick-translate-status")).toBe(false);
   expect(app.shows("id:quick-translate-result-text")).toBe(false);
   expect(app.requests()).toHaveLength(1);
@@ -1528,7 +1549,7 @@ test("quick window: reopening restores the draft and completed translation witho
   await app.keyboard.press(DEFAULT_QUICK_TRANSLATE_SHORTCUT);
   await app.waitFor("id:quick-translate-result-text");
 
-  expect(app.value("id:quick-translate-source")).toBe(draft);
+  expect(hasQuickSource(app, draft)).toBe(true);
   expect(app.texts()).toContain(translation);
   expect(app.requests()).toHaveLength(2);
 });
@@ -1732,7 +1753,7 @@ test("selection feedback: an empty selection shows why and keeps the draft, resu
   await app.waitFor("id:quick-translate-source-toolbar >> id:quick-translate-selection-status");
 
   expect(app.texts()).toContain("No text is selected.");
-  expect(app.value("id:quick-translate-source")).toBe("Kept draft");
+  expect(hasQuickSource(app, "Kept draft")).toBe(true);
   expect(app.texts()).toContain("Kept translation");
   expect(app.requests()).toHaveLength(1);
 
@@ -1759,7 +1780,7 @@ test("selection feedback: an empty selection shows why and keeps the draft, resu
   await chinese.press("id:harness-finish-selection-empty");
   await chinese.waitFor("id:quick-translate-source-toolbar >> id:quick-translate-selection-status");
   expect(chinese.texts()).toContain("未选中文本。");
-  expect(chinese.value("id:quick-translate-source")).toBe("");
+  expect(hasQuickSource(chinese, "")).toBe(true);
   expect(chinese.requests()).toHaveLength(0);
 });
 
@@ -1785,7 +1806,7 @@ test("selection feedback: an unreadable selection replaces an idle OCR message a
   expect(app.shows("id:quick-translate-source-toolbar >> id:quick-translate-ocr-status")).toBe(
     false,
   );
-  expect(app.value("id:quick-translate-source")).toBe("Kept draft");
+  expect(hasQuickSource(app, "Kept draft")).toBe(true);
   expect(app.requests()).toHaveLength(0);
 
   // Recognition keeps the status slot: the failed read does not replace it.
@@ -1812,7 +1833,7 @@ test("selection feedback: an unreadable selection replaces an idle OCR message a
   ).toBe(true);
   expect(recognizing.shows("id:quick-translate-selection-status")).toBe(false);
   expect(recognizing.texts()).not.toContain("Could not read the selection.");
-  await recognizing.waitUntil(() => recognizing.value("id:quick-translate-source") === OCR_TEXT);
+  await recognizing.waitUntil(() => hasQuickSource(recognizing, OCR_TEXT));
   expect(
     recognizing.shows("id:quick-translate-source-toolbar >> id:quick-translate-ocr-busy"),
   ).toBe(false);
@@ -1940,7 +1961,7 @@ test("selection screenshot recovery: an unreadable selection offers capture and 
   await app.waitUntil(() => app.texts().some((text) => text.includes("ocrCap=1|")));
   await app.waitUntil(() => app.window("quick-translate").state()?.visible === true);
 
-  expect(app.value("id:quick-translate-source")).toBe("Kept draft");
+  expect(hasQuickSource(app, "Kept draft")).toBe(true);
   expect(app.texts()).toContain("翻译结果");
   expect(app.shows(recovery)).toBe(false);
   expect(app.requests()).toHaveLength(1);
@@ -1965,7 +1986,7 @@ test("selection screenshot recovery: a confirmed crop translates the recognized 
   await app.press(recovery);
   await app.waitUntil(() => app.texts().some((text) => text.includes("ocrCap=1|")));
   await app.press("id:harness-finish-capture");
-  await app.waitUntil(() => app.value("id:quick-translate-source") === OCR_TEXT);
+  await app.waitUntil(() => hasQuickSource(app, OCR_TEXT));
   await app.waitFor("翻译结果");
 
   expect(app.requests().map((request) => request.url)).toEqual([
@@ -2329,7 +2350,7 @@ test("selection controller: recognition keeps the first delivery", async () => {
   );
   await lateSelection.press("id:harness-finish-selection");
   await lateSelection.wait(50);
-  expect(lateSelection.value("id:quick-translate-source")).toBe(OCR_TEXT);
+  expect(hasQuickSource(lateSelection, OCR_TEXT)).toBe(true);
   expect(lateSelection.texts().join("\n")).not.toContain(selected);
 
   const emptySelection = await open(HARNESS_ENTRY, {
@@ -2353,7 +2374,7 @@ test("selection controller: recognition keeps the first delivery", async () => {
   await emptySelection.waitUntil(() =>
     emptySelection.texts().some((text) => text.includes(OCR_TEXT)),
   );
-  expect(emptySelection.value("id:quick-translate-source")).toBe(OCR_TEXT);
+  expect(hasQuickSource(emptySelection, OCR_TEXT)).toBe(true);
 });
 
 test("screenshot shortcut: selects first, then opens Quick Translate and translates once", async () => {
@@ -2377,7 +2398,7 @@ test("screenshot shortcut: selects first, then opens Quick Translate and transla
   await app.press("id:harness-finish-capture");
   await app.waitFor("id:quick-translate-ocr-busy");
   expect(app.window("quick-translate").state()?.visible).toBe(true);
-  await app.waitUntil(() => app.value("id:quick-translate-source") === OCR_TEXT);
+  await app.waitUntil(() => hasQuickSource(app, OCR_TEXT));
   await app.waitFor("翻译结果");
   const requests = app.requests();
   expect(requests.map((request) => request.url)).toEqual([
@@ -2432,7 +2453,7 @@ test("tray: Screenshot Translate starts the region selection and opens Quick Tra
 
   await app.press("id:harness-finish-capture");
   await app.waitFor("id:quick-translate-ocr-busy");
-  await app.waitUntil(() => app.value("id:quick-translate-source") === OCR_TEXT);
+  await app.waitUntil(() => hasQuickSource(app, OCR_TEXT));
   await app.waitFor("翻译结果");
 });
 
@@ -2450,7 +2471,7 @@ test("quick ocr: replaces the draft with the recognized text and translates once
   expect(app.shows(OCR_BUTTON)).toBe(true);
 
   await app.press(OCR_BUTTON);
-  await app.waitUntil(() => app.value("id:quick-translate-source") === OCR_TEXT);
+  await app.waitUntil(() => hasQuickSource(app, OCR_TEXT));
 
   const vision = app.requests().filter((request) => request.url.includes("vision.example.com"));
   expect(vision).toHaveLength(1);
@@ -2489,7 +2510,7 @@ test("quick ocr: cancelling keeps the draft and restores the popup", async () =>
   await app.waitUntil(() => app.texts().some((line) => line.includes("ocrCap=1")));
   await app.waitUntil(() => app.window("quick-translate").state()?.visible === true);
 
-  expect(app.value("id:quick-translate-source")).toBe("kept draft");
+  expect(hasQuickSource(app, "kept draft")).toBe(true);
   expect(app.requests()).toHaveLength(0);
   expect(app.shows("id:quick-translate-ocr-status")).toBe(false);
 });
@@ -2509,7 +2530,7 @@ test("quick ocr: a blank answer keeps the draft, shows an alert, and sends no tr
   await app.waitFor("id:quick-translate-source-toolbar >> id:quick-translate-ocr-status");
 
   expect(app.texts()).toContain("No text was found in the selected area.");
-  expect(app.value("id:quick-translate-source")).toBe("kept draft");
+  expect(hasQuickSource(app, "kept draft")).toBe(true);
   expect(app.requests().filter((request) => request.url.includes("api.openai.com"))).toHaveLength(
     0,
   );
@@ -2535,7 +2556,7 @@ test("quick ocr: a provider failure keeps the draft and never imports partial te
   await app.press(OCR_BUTTON);
   await app.waitFor("id:quick-translate-source-toolbar >> id:quick-translate-ocr-status");
 
-  expect(app.value("id:quick-translate-source")).toBe("kept draft");
+  expect(hasQuickSource(app, "kept draft")).toBe(true);
   expect(app.requests().filter((request) => request.url.includes("api.openai.com"))).toHaveLength(
     0,
   );
@@ -2559,10 +2580,11 @@ test("quick ocr: the source waits for the answer, and the answer replaces the dr
   // One OCR session at a time: neither the action nor the source takes input until the answer.
   expect(app.enabled(OCR_BUTTON)).toBe(false);
   expect(app.enabled(source)).toBe(false);
-  await expect(app.type(source, "typed instead")).rejects.toThrow("is not editable");
-  expect(app.value(source)).toBe("kept draft");
+  await app.type(source, "typed instead");
+  expect(app.texts().some((text) => text.includes("typed instead"))).toBe(false);
+  expect(hasQuickSource(app, "kept draft")).toBe(true);
 
-  await app.waitUntil(() => app.value(source) === OCR_TEXT);
+  await app.waitUntil(() => hasQuickSource(app, OCR_TEXT));
   expect(app.enabled(source)).toBe(true);
   expect(app.enabled(OCR_BUTTON)).toBe(true);
   const translations = app.requests().filter((request) => request.url.includes("api.openai.com"));
@@ -2626,10 +2648,10 @@ test("quick ocr: closing and reopening before the old result keeps the new draft
   await app.keyboard.press(DEFAULT_QUICK_TRANSLATE_SHORTCUT);
   await app.waitUntil(() => app.window("quick-translate").state()?.visible === true);
   await app.waitFor("id:quick-translate-source");
-  expect(app.value("id:quick-translate-source")).toBe("");
+  expect(hasQuickSource(app, "")).toBe(true);
 
   await app.wait(400);
-  expect(app.value("id:quick-translate-source")).toBe("");
+  expect(hasQuickSource(app, "")).toBe(true);
   expect(app.requests().filter((request) => request.url.includes("api.openai.com"))).toHaveLength(
     0,
   );
@@ -2651,7 +2673,7 @@ test("quick ocr: a queued auto-translate debounce never repeats the delivered te
   await app.waitFor("id:quick-translate-source");
   await app.type("id:quick-translate-source", "hello");
   await app.press(OCR_BUTTON);
-  await app.waitUntil(() => app.value("id:quick-translate-source") === OCR_TEXT);
+  await app.waitUntil(() => hasQuickSource(app, OCR_TEXT));
   await app.wait(700);
 
   const translations = app
@@ -2677,7 +2699,7 @@ test("quick ocr: no eligible card replaces the text without a translation", asyn
   await app.press("id:harness-tray-quick-translate");
   await app.waitFor("id:quick-translate-source");
   await app.press(OCR_BUTTON);
-  await app.waitUntil(() => app.value("id:quick-translate-source") === OCR_TEXT);
+  await app.waitUntil(() => hasQuickSource(app, OCR_TEXT));
 
   expect(app.requests().filter((request) => request.url.includes("api.openai.com"))).toHaveLength(
     0,
@@ -2704,7 +2726,7 @@ test("quick ocr: an unsaved service shows recovery and never captures", async ()
     "Configure OCR in Settings, or choose another way to get the text.",
   );
   expect(app.texts().some((line) => line.includes("ocrCap=0"))).toBe(true);
-  expect(app.value("id:quick-translate-source")).toBe("kept draft");
+  expect(hasQuickSource(app, "kept draft")).toBe(true);
   expect(app.requests()).toHaveLength(0);
 });
 
@@ -2777,7 +2799,7 @@ test("quick ocr: Baidu replaces the draft and translates the text once", async (
   await app.type("id:quick-translate-source", "old draft");
 
   await app.press(OCR_BUTTON);
-  await app.waitUntil(() => app.value("id:quick-translate-source") === OCR_TEXT);
+  await app.waitUntil(() => hasQuickSource(app, OCR_TEXT));
 
   const token = app.requests().filter((request) => request.url.includes("/oauth/2.0/token"));
   const uploads = app.requests().filter((request) => request.url.includes("/ocr/v1/accurate"));
@@ -2811,7 +2833,7 @@ test("quick ocr: Baidu cancellation, a late result, and a quota error keep the d
   await cancelled.press(OCR_BUTTON);
   await cancelled.waitUntil(() => cancelled.texts().some((line) => line.includes("ocrCap=1")));
   await cancelled.waitUntil(() => cancelled.window("quick-translate").state()?.visible === true);
-  expect(cancelled.value("id:quick-translate-source")).toBe("kept draft");
+  expect(hasQuickSource(cancelled, "kept draft")).toBe(true);
   expect(cancelled.requests()).toHaveLength(0);
 
   const late = await open(HARNESS_ENTRY, {
@@ -2824,7 +2846,7 @@ test("quick ocr: Baidu cancellation, a late result, and a quota error keep the d
   await late.press(OCR_BUTTON);
   await late.waitFor("id:quick-translate-source-toolbar >> id:quick-translate-ocr-busy");
   expect(late.enabled("id:quick-translate-source")).toBe(false);
-  await late.waitUntil(() => late.value("id:quick-translate-source") === OCR_TEXT);
+  await late.waitUntil(() => hasQuickSource(late, OCR_TEXT));
   expect(late.enabled("id:quick-translate-source")).toBe(true);
   const lateTranslations = late
     .requests()
@@ -2844,7 +2866,7 @@ test("quick ocr: Baidu cancellation, a late result, and a quota error keep the d
   await quota.waitFor("id:quick-translate-source-toolbar >> id:quick-translate-ocr-status");
   expect(quota.texts()).toContain(t("ocr.failure.baiduQuota"));
   expect(quota.texts().some((line) => line.includes("SENTINEL-SECRET"))).toBe(false);
-  expect(quota.value("id:quick-translate-source")).toBe("kept draft");
+  expect(hasQuickSource(quota, "kept draft")).toBe(true);
   expect(quota.requests().filter((request) => request.url.includes("api.openai.com"))).toHaveLength(
     0,
   );
@@ -2874,7 +2896,7 @@ test("quick ocr: falls back from primary Baidu quota failure to backup AI and tr
   await app.type("id:quick-translate-source", "old draft");
 
   await app.press(OCR_BUTTON);
-  await app.waitUntil(() => app.value("id:quick-translate-source") === OCR_TEXT);
+  await app.waitUntil(() => hasQuickSource(app, OCR_TEXT));
   await app.waitUntil(() =>
     app.requests().some((request) => request.url.includes("api.openai.com")),
   );
@@ -2937,7 +2959,7 @@ test("quick ocr: Vision replaces the draft and translates the text once", async 
   await app.type("id:quick-translate-source", "old draft");
 
   await app.press(OCR_BUTTON);
-  await app.waitUntil(() => app.value("id:quick-translate-source") === OCR_TEXT);
+  await app.waitUntil(() => hasQuickSource(app, OCR_TEXT));
   await app.waitUntil(() =>
     app.requests().some((request) => request.url.includes("api.openai.com")),
   );
@@ -2970,7 +2992,7 @@ test("quick ocr: Vision cancellation, a late result, and a service failure keep 
   await cancelled.press(OCR_BUTTON);
   await cancelled.waitUntil(() => cancelled.texts().some((line) => line.includes("ocrCap=1")));
   await cancelled.waitUntil(() => cancelled.window("quick-translate").state()?.visible === true);
-  expect(cancelled.value("id:quick-translate-source")).toBe("kept draft");
+  expect(hasQuickSource(cancelled, "kept draft")).toBe(true);
   expect(cancelled.requests()).toHaveLength(0);
 
   const late = await open(HARNESS_ENTRY, {
@@ -2988,7 +3010,7 @@ test("quick ocr: Vision cancellation, a late result, and a service failure keep 
   await late.keyboard.press(DEFAULT_QUICK_TRANSLATE_SHORTCUT);
   await late.waitFor("id:quick-translate-source");
   await late.wait(500);
-  expect(late.value("id:quick-translate-source")).toBe("");
+  expect(hasQuickSource(late, "")).toBe(true);
   expect(late.requests().filter((request) => request.url.includes("api.openai.com"))).toHaveLength(
     0,
   );
@@ -3006,7 +3028,7 @@ test("quick ocr: Vision cancellation, a late result, and a service failure keep 
   await failed.waitFor("id:quick-translate-source-toolbar >> id:quick-translate-ocr-status");
   expect(failed.texts()).toContain(t("ocr.failure.googleFailed"));
   expect(failed.texts().some((line) => line.includes("SENTINEL-SECRET"))).toBe(false);
-  expect(failed.value("id:quick-translate-source")).toBe("kept draft");
+  expect(hasQuickSource(failed, "kept draft")).toBe(true);
   expect(
     failed.requests().filter((request) => request.url.includes("api.openai.com")),
   ).toHaveLength(0);

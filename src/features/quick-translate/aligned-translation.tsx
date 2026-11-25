@@ -10,6 +10,7 @@ export interface SentenceSegment {
 export interface AlignedTranslationProps {
   testID?: string;
   text: string;
+  textClass?: string;
   segments: readonly SentenceSegment[];
   activeSegmentId?: string | null;
   onHoverEnterSegment?: (segmentId: string) => void;
@@ -70,7 +71,10 @@ export function AlignedTranslation(props: AlignedTranslationProps) {
 
   return (
     <View testID={props.testID ? `${props.testID}-container` : undefined} selectable>
-      <Text testID={props.testID}>
+      <Text
+        testID={props.testID}
+        class={props.textClass ?? "text-base leading-relaxed text-card-foreground"}
+      >
         {pieces().map((piece) => {
           const seg = piece.segment;
           if (!seg) return piece.text;
@@ -78,7 +82,7 @@ export function AlignedTranslation(props: AlignedTranslationProps) {
           return (
             <Text
               testID={seg.testID}
-              class={isActive() ? "bg-brand-soft hover:bg-brand-soft" : "hover:bg-brand-soft"}
+              class={isActive() ? "bg-brand-soft hover:opacity-100" : "hover:opacity-100"}
               onMouseEnter={() => props.onHoverEnterSegment?.(seg.id)}
               onMouseLeave={() => props.onHoverLeaveSegment?.(seg.id)}
             >

@@ -185,6 +185,7 @@ function QuickTranslateWindowBody(props: {
   const headerHeight = signal(0);
   const contentHeight = signal(0);
   const footerHeight = signal(0);
+  const scrollRevision = signal(0);
   let fitId = 0;
   const markdownActionLabel = () =>
     t(markdownEnabledPreference() ? "quickTranslate.showPlainText" : "quickTranslate.showMarkdown");
@@ -388,7 +389,10 @@ function QuickTranslateWindowBody(props: {
           </If>
         </View>
       </View>
-      <Scroll class="min-h-0 flex-1">
+      <Scroll
+        class="min-h-0 flex-1"
+        onScroll={() => scrollRevision.update((revision) => revision + 1)}
+      >
         {/* Measure the natural content height, not the scroll viewport. */}
         <View
           class="shrink-0"
@@ -409,6 +413,8 @@ function QuickTranslateWindowBody(props: {
                 : undefined
             }
             playbackAllowed={() => props.controller.attachedWindow()?.state()?.visible === true}
+            windowVisible={() => props.controller.isOpen() && win.state()?.visible !== false}
+            scrollRevision={() => scrollRevision()}
             onAttachSourceInput={(node) => props.controller.attachSourceInput(node)}
           />
         </View>

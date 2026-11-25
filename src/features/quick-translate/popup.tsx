@@ -3,6 +3,7 @@ import {
   createAnimatedValue,
   effect,
   Image,
+  platform,
   reduceMotion,
   signal,
   Text,
@@ -10,12 +11,12 @@ import {
   type Accessor,
   type Align,
   type AnimatedValue,
-  type InputRef,
   type PanEvent,
   type Placement,
   type Signal,
   type ViewRef,
 } from "nsh";
+import { SentenceAlignmentNative } from "langnext-native";
 import { t } from "nsh/i18n";
 import { motion } from "../../components/motion";
 import { Button, KeyboardButton } from "../../components/ui/button";
@@ -37,8 +38,14 @@ import { googlePreferencesSignature } from "../tts/google-preferences";
 import { playMp3Bytes } from "../tts/playback";
 import { prepareQuickSpeech, quickSpeechFailureMessage } from "../tts/quick-speech";
 import { ttsSettingsStore } from "../tts/settings";
+import { AlignedTranslation, type SentenceSegment } from "./aligned-translation";
 import { QuickTranslateHistoryResults } from "./history-results";
-import type { CardViewItem, QuickTranslateSession } from "./session";
+import type { CardResultState, CardViewItem, QuickTranslateSession } from "./session";
+import {
+  QuickTranslateSourceEditor,
+  type SourceHighlightRange,
+  type SourceInputHandle,
+} from "./source-editor";
 import { resolvePresetTemplate } from "./translate";
 
 /** What the OCR action reports while it runs, and after it stops. */
@@ -61,7 +68,11 @@ export interface QuickTranslatePopupProps {
   onScreenshotTranslate?: () => void;
   /** False while the native window is hidden. Omitted in a harness with no window. */
   playbackAllowed?: Accessor<boolean>;
-  onAttachSourceInput?: (input: InputRef | null) => void;
+  /** False while the containing popup or window is hidden. */
+  windowVisible?: Accessor<boolean>;
+  /** Increments when the outer scroll container moves. */
+  scrollRevision?: Accessor<number>;
+  onAttachSourceInput?: (input: SourceInputHandle | null) => void;
 }
 
 function buildTemplateItems(preset: TranslationPreset | null): SelectItem[] {
@@ -272,10 +283,34 @@ interface CardReorderControls {
   onGripRef: (node: ViewRef) => void;
 }
 
+type AlignmentRenderMode = "plain" | "markdown";
+
+interface CardAlignmentEntry {
+  cardId: string;
+  resultId: number;
+  renderMode: AlignmentRenderMode;
+  sourceText: string;
+  text: string;
+  segments: readonly SentenceSegment[];
+  sourceRanges: Readonly<Record<string, SourceHighlightRange>>;
+}
+
+interface CardSentenceAlignment {
+  resultId: number;
+  renderMode: AlignmentRenderMode;
+  segments: readonly SentenceSegment[];
+  activeSegmentId: Accessor<string | null>;
+  onHoverEnterSegment: (segmentId: string) => void;
+  onHoverLeaveSegment: (segmentId: string) => void;
+}
+
+const MAX_ALIGNMENT_CACHE_ENTRIES = 64;
+
 interface PresetCardRowProps {
   card: Accessor<CardViewItem>;
   reorder: CardReorderControls;
   markdownEnabled: boolean;
+  sentenceAlignment: Accessor<CardSentenceAlignment | null>;
   presets: Accessor<readonly TranslationPreset[]>;
   presetItems: Accessor<SelectItem[]>;
   onOverlayOpenChange: (menuId: string, open: boolean) => void;
@@ -497,12 +532,32 @@ function PresetCardRow(props: PresetCardRowProps) {
         <If when={hasOutput() || failed()}>
           <View class={`min-w-0 gap-1.5 px-4 pt-1 ${streaming() ? "pb-3" : "pb-2"}`}>
             <If when={hasOutput()}>
-              <TranslationOutput
-                testID={failed() ? "quick-translate-partial-text" : "quick-translate-result-text"}
-                text={outputText()}
-                markdownEnabled={props.markdownEnabled}
-                streaming={streaming()}
-              />
+              <If
+                when={!failed() && props.sentenceAlignment() !== null}
+                else={
+                  <TranslationOutput
+                    testID={
+                      failed() ? "quick-translate-partial-text" : "quick-translate-result-text"
+                    }
+                    text={outputText()}
+                    markdownEnabled={props.markdownEnabled}
+                    streaming={streaming()}
+                  />
+                }
+              >
+                <AlignedTranslation
+                  testID="quick-translate-result-text"
+                  text={outputText()}
+                  segments={props.sentenceAlignment()?.segments ?? []}
+                  activeSegmentId={props.sentenceAlignment()?.activeSegmentId() ?? null}
+                  onHoverEnterSegment={(segmentId) =>
+                    props.sentenceAlignment()?.onHoverEnterSegment(segmentId)
+                  }
+                  onHoverLeaveSegment={(segmentId) =>
+                    props.sentenceAlignment()?.onHoverLeaveSegment(segmentId)
+                  }
+                />
+              </If>
             </If>
             <If when={failed()}>
               <Text testID="quick-translate-error" role="alert" class="text-xs text-destructive">
@@ -841,7 +896,7 @@ export function QuickTranslatePopup(props: QuickTranslatePopupProps) {
   const sourceFirstLine = () => sourceText().split(/\r?\n/, 1)[0] ?? "";
   const sourceHasMultipleLines = () => /\r?\n/.test(sourceText());
   const sourceCharacterCount = () => Array.from(sourceText()).length;
-  const sourceInputRef = signal<InputRef | null>(null);
+  const sourceInputRef = signal<SourceInputHandle | null>(null);
   // Survives the editor unmounting into the one-line preview, so expand does not flash the largest step.
   const sourceFontStep = signal(LARGEST_FONT_STEP);
   const focusSourceAfterExpand = signal(false);
@@ -849,9 +904,265 @@ export function QuickTranslatePopup(props: QuickTranslatePopupProps) {
   const editorAlive = signal(true);
   let lastDeliverySeq = delivery()?.seq ?? 0;
   let popupAlive = true;
+
+  interface ActiveMatchKey {
+    cardId: string;
+    resultId: number;
+    renderMode: AlignmentRenderMode;
+    segmentId: string;
+  }
+  interface ActiveSentenceMatch extends ActiveMatchKey {
+    sourceRange: SourceHighlightRange;
+  }
+
+  const activeMatch = signal<ActiveSentenceMatch | null>(null);
+  const alignmentCache = new Map<string, CardAlignmentEntry>();
+  let pendingClearToken = 0;
+  let pendingClearMatch: ActiveMatchKey | null = null;
+  let pendingClearRaf: number | null = null;
+
+  const isSameMatchKey = (left: ActiveMatchKey, right: ActiveMatchKey) =>
+    left.cardId === right.cardId &&
+    left.resultId === right.resultId &&
+    left.renderMode === right.renderMode &&
+    left.segmentId === right.segmentId;
+
+  const cancelPendingClear = () => {
+    pendingClearMatch = null;
+    pendingClearToken += 1;
+    if (pendingClearRaf !== null) {
+      cancelAnimationFrame(pendingClearRaf);
+      pendingClearRaf = null;
+    }
+  };
+
+  const clearActiveMatch = () => {
+    cancelPendingClear();
+    if (activeMatch() !== null) {
+      activeMatch.set(null);
+    }
+  };
+
   cleanup(() => {
     popupAlive = false;
+    cancelPendingClear();
   });
+
+  const currentRenderMode = (): AlignmentRenderMode =>
+    props.markdownEnabled ? "markdown" : "plain";
+  const isPreviewWindowVisible = () => props.windowVisible?.() ?? true;
+
+  const isCardEligibleForAlignment = (
+    card: CardViewItem,
+    mode: AlignmentRenderMode,
+  ): card is CardViewItem & {
+    result: Extract<CardResultState, { status: "success" }>;
+  } => {
+    if (platform.os !== "windows") return false;
+    if (mode !== "plain") return false;
+    if (isSourceCollapsed() || showingHistory() || isComposing() || !isPreviewWindowVisible()) {
+      return false;
+    }
+    if (card.collapsed || card.result.status !== "success") return false;
+    return card.result.sourceText === sourceText();
+  };
+
+  const resolveCardAlignment = (
+    card: CardViewItem,
+    mode: AlignmentRenderMode,
+  ): CardAlignmentEntry | null => {
+    if (!isCardEligibleForAlignment(card, mode)) return null;
+    const res = card.result;
+    const key = `${card.id}:${res.resultId}:${mode}`;
+    const existing = alignmentCache.get(key);
+    if (existing && existing.sourceText === res.sourceText && existing.text === res.text) {
+      return existing;
+    }
+    const pairs = SentenceAlignmentNative.align(res.sourceText, [res.text]);
+    const segments: SentenceSegment[] = [];
+    const sourceRanges: Record<string, SourceHighlightRange> = {};
+    for (const pair of pairs) {
+      if (pair.targetBlockIndex !== 0) continue;
+      if (
+        pair.targetStart < 0 ||
+        pair.targetEnd <= pair.targetStart ||
+        pair.targetEnd > res.text.length
+      ) {
+        continue;
+      }
+      if (
+        pair.sourceStart < 0 ||
+        pair.sourceEnd <= pair.sourceStart ||
+        pair.sourceEnd > res.sourceText.length
+      ) {
+        continue;
+      }
+      const id = `seg-${segments.length}`;
+      segments.push({
+        id,
+        testID: `result-seg-${segments.length}`,
+        start: pair.targetStart,
+        end: pair.targetEnd,
+      });
+      sourceRanges[id] = { start: pair.sourceStart, end: pair.sourceEnd };
+    }
+    const entry: CardAlignmentEntry = {
+      cardId: card.id,
+      resultId: res.resultId,
+      renderMode: mode,
+      sourceText: res.sourceText,
+      text: res.text,
+      segments,
+      sourceRanges,
+    };
+    alignmentCache.set(key, entry);
+    if (alignmentCache.size > MAX_ALIGNMENT_CACHE_ENTRIES) {
+      const oldestKey = alignmentCache.keys().next().value;
+      if (oldestKey !== undefined) alignmentCache.delete(oldestKey);
+    }
+    return entry;
+  };
+
+  const activateMatch = (next: ActiveSentenceMatch) => {
+    cancelPendingClear();
+    const current = activeMatch();
+    if (current && isSameMatchKey(current, next)) {
+      return;
+    }
+    activeMatch.set(next);
+  };
+
+  const scheduleClearMatch = (leaving: ActiveMatchKey) => {
+    const current = activeMatch();
+    if (!current || !isSameMatchKey(current, leaving)) return;
+    const token = ++pendingClearToken;
+    pendingClearMatch = leaving;
+    if (pendingClearRaf !== null) {
+      cancelAnimationFrame(pendingClearRaf);
+    }
+    pendingClearRaf = requestAnimationFrame(() => {
+      pendingClearRaf = null;
+      if (!popupAlive || pendingClearToken !== token || !pendingClearMatch) return;
+      const latest = activeMatch();
+      if (latest && isSameMatchKey(latest, pendingClearMatch)) {
+        activeMatch.set(null);
+      }
+      pendingClearMatch = null;
+    });
+  };
+
+  let lastScrollRevision = props.scrollRevision?.() ?? 0;
+  effect(() => {
+    const cards = props.session.cards();
+    const activeCardIds = new Set(cards.map((item) => item.id));
+    for (const [key, entry] of alignmentCache) {
+      if (!activeCardIds.has(entry.cardId)) {
+        alignmentCache.delete(key);
+      }
+    }
+
+    const scrollRev = props.scrollRevision?.() ?? 0;
+    const scrolled = scrollRev !== lastScrollRevision;
+    lastScrollRevision = scrollRev;
+
+    const currentMode = currentRenderMode();
+    const currentSource = sourceText();
+    const collapsed = isSourceCollapsed();
+    const historyOpen = showingHistory();
+    const composing = isComposing();
+    const visible = isPreviewWindowVisible();
+
+    const current = activeMatch();
+    if (!current) return;
+    if (
+      scrolled ||
+      collapsed ||
+      historyOpen ||
+      composing ||
+      !visible ||
+      current.renderMode !== currentMode
+    ) {
+      clearActiveMatch();
+      return;
+    }
+    const matchedCard = cards.find((item) => item.id === current.cardId);
+    if (
+      !matchedCard ||
+      matchedCard.collapsed ||
+      matchedCard.result.status !== "success" ||
+      matchedCard.result.resultId !== current.resultId ||
+      matchedCard.result.sourceText !== currentSource
+    ) {
+      clearActiveMatch();
+    }
+  });
+
+  const activeSourceHighlight = (): SourceHighlightRange | null => {
+    const current = activeMatch();
+    if (!current) return null;
+    if (isSourceCollapsed() || showingHistory() || isComposing() || !isPreviewWindowVisible()) {
+      return null;
+    }
+    const matchedCard = props.session.cards().find((item) => item.id === current.cardId);
+    if (
+      !matchedCard ||
+      matchedCard.collapsed ||
+      matchedCard.result.status !== "success" ||
+      matchedCard.result.resultId !== current.resultId ||
+      matchedCard.result.sourceText !== sourceText() ||
+      currentRenderMode() !== current.renderMode
+    ) {
+      return null;
+    }
+    return current.sourceRange;
+  };
+
+  const buildCardSentenceAlignment = (card: CardViewItem): CardSentenceAlignment | null => {
+    const mode = currentRenderMode();
+    const entry = resolveCardAlignment(card, mode);
+    if (!entry || entry.segments.length === 0) return null;
+    const { resultId } = entry;
+    return {
+      resultId,
+      renderMode: mode,
+      segments: entry.segments,
+      activeSegmentId: () => {
+        const current = activeMatch();
+        if (
+          !current ||
+          current.cardId !== card.id ||
+          current.resultId !== resultId ||
+          current.renderMode !== mode
+        ) {
+          return null;
+        }
+        return current.segmentId;
+      },
+      onHoverEnterSegment: (segmentId: string) => {
+        const latestCard = props.session.cards().find((item) => item.id === card.id);
+        if (!latestCard || !isCardEligibleForAlignment(latestCard, mode)) return;
+        if (latestCard.result.resultId !== resultId) return;
+        const latestEntry = resolveCardAlignment(latestCard, mode);
+        const sourceRange = latestEntry?.sourceRanges[segmentId];
+        if (!sourceRange) return;
+        activateMatch({
+          cardId: card.id,
+          resultId,
+          renderMode: mode,
+          segmentId,
+          sourceRange,
+        });
+      },
+      onHoverLeaveSegment: (segmentId: string) => {
+        scheduleClearMatch({
+          cardId: card.id,
+          resultId,
+          renderMode: mode,
+          segmentId,
+        });
+      },
+    };
+  };
 
   effect(() => {
     const current = delivery();
@@ -1468,33 +1779,70 @@ export function QuickTranslatePopup(props: QuickTranslatePopupProps) {
           else={
             <View class="flex-row items-start justify-between gap-2">
               <If when={editorAlive()} else={<View class="h-10 min-w-0 flex-1" />}>
-                <Textarea
-                  testID="quick-translate-source"
-                  variant="frameless"
-                  class="min-w-0 flex-1"
-                  autoFocus
-                  disabled={ocrRecognizing()}
-                  submitBehavior="submit"
-                  fontScale="stepped"
-                  initialFontStep={sourceFontStep()}
-                  onFontStep={(step) => {
-                    if (sourceFontStep() !== step) sourceFontStep.set(step);
-                  }}
-                  value={sourceText()}
-                  placeholder={t("quickTranslate.sourcePlaceholder")}
-                  accessibilityLabel={t("quickTranslate.sourceLabel")}
-                  inputClass="min-h-10"
-                  onChange={(nextText) => props.session.handleSourceChange(nextText)}
-                  onSubmit={() => {
-                    if (isComposing()) return;
-                    props.session.handleSourceSubmit();
-                  }}
-                  onCompositionChange={({ composing }) => isComposing.set(composing)}
-                  ref={(node) => {
-                    sourceInputRef.set(node);
-                    props.onAttachSourceInput?.(node);
-                  }}
-                />
+                <If
+                  when={platform.os === "windows"}
+                  else={
+                    <Textarea
+                      testID="quick-translate-source"
+                      variant="frameless"
+                      class="min-w-0 flex-1"
+                      autoFocus
+                      disabled={ocrRecognizing()}
+                      submitBehavior="submit"
+                      fontScale="stepped"
+                      initialFontStep={sourceFontStep()}
+                      onFontStep={(step) => {
+                        if (sourceFontStep() !== step) sourceFontStep.set(step);
+                      }}
+                      value={sourceText()}
+                      placeholder={t("quickTranslate.sourcePlaceholder")}
+                      accessibilityLabel={t("quickTranslate.sourceLabel")}
+                      inputClass="min-h-10"
+                      onChange={(nextText) => props.session.handleSourceChange(nextText)}
+                      onSubmit={() => {
+                        if (isComposing()) return;
+                        props.session.handleSourceSubmit();
+                      }}
+                      onCompositionChange={({ composing }) => isComposing.set(composing)}
+                      ref={(node) => {
+                        sourceInputRef.set(node);
+                        props.onAttachSourceInput?.(node);
+                      }}
+                    />
+                  }
+                >
+                  <QuickTranslateSourceEditor
+                    testID="quick-translate-source"
+                    frameless
+                    class="min-w-0 flex-1"
+                    inputClass="min-h-10"
+                    autoFocus
+                    editable={!ocrRecognizing()}
+                    initialFontStep={sourceFontStep()}
+                    onFontStepChange={(step) => {
+                      if (sourceFontStep() !== step) sourceFontStep.set(step);
+                    }}
+                    value={sourceText()}
+                    highlightRange={activeSourceHighlight()}
+                    placeholder={t("quickTranslate.sourcePlaceholder")}
+                    accessibilityLabel={t("quickTranslate.sourceLabel")}
+                    onChangeText={(nextText) => props.session.handleSourceChange(nextText)}
+                    onSubmitEditing={() => {
+                      if (isComposing()) return;
+                      props.session.handleSourceSubmit();
+                    }}
+                    onCompositionChange={(composing) => isComposing.set(composing)}
+                    onSelectionChange={(selection) => {
+                      if (selection && !selection.empty && activeMatch() !== null) {
+                        clearActiveMatch();
+                      }
+                    }}
+                    ref={(node) => {
+                      sourceInputRef.set(node);
+                      props.onAttachSourceInput?.(node);
+                    }}
+                  />
+                </If>
               </If>
               {renderSourceActions("pt-0.5")}
             </View>
@@ -1623,6 +1971,7 @@ export function QuickTranslatePopup(props: QuickTranslatePopupProps) {
                       onGripRef: (node) => cardGripNodes.set(cardId(), node),
                     }}
                     markdownEnabled={props.markdownEnabled ?? false}
+                    sentenceAlignment={() => buildCardSentenceAlignment(card())}
                     presets={props.session.enabledPresets}
                     presetItems={props.session.presetItems}
                     onOverlayOpenChange={(menuId, open) =>
