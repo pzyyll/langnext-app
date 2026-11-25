@@ -743,6 +743,8 @@ quickTranslate:
   historyResultLanguages: "%{source} → %{target}"
   ocr: 文本识别
   ocrRecognizing: 正在识别文字…
+  selectionNoSelection: 未选中文本。
+  selectionUnavailable: 无法读取选中文本。
   shortcutUnavailable: 全局快捷键 %{shortcut} 不可用，请通过托盘菜单打开快速翻译。
   presetLabel: 预设
   presetPlaceholder: 选择预设…

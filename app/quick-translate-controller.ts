@@ -57,6 +57,9 @@ export interface QuickTranslateOcrState {
   message: string | null;
 }
 
+/** Why a valid selection read delivered no text; null leaves the draft untouched. */
+export type QuickTranslateSelectionFeedback = "noSelection" | "unavailable";
+
 export interface QuickTranslateControllerOptions {
   readCursorAnchor?: () => CursorAnchorPoint | null;
   getDisplays?: () => readonly Display[];
@@ -84,6 +87,10 @@ export interface QuickTranslateController {
   sourceText: Accessor<string>;
   sourceDelivery: Accessor<SourceDelivery | null>;
   ocrState: Accessor<QuickTranslateOcrState>;
+  /** Why the last valid selection read delivered no text; null hides it. */
+  selectionFeedback: Accessor<QuickTranslateSelectionFeedback | null>;
+  /** Whether a screen capture port exists, so the Screenshot Translate action can run. */
+  canStartOcr: Accessor<boolean>;
   /** Bumps whenever the OCR action should take the keyboard focus back. */
   ocrFocusSeq: Accessor<number>;
   /** Blur, Escape, and outside-press dismissal stay off while the selection runs. */
@@ -150,6 +157,7 @@ export function createQuickTranslateController(
   const sourceSignal = signal("");
   const sourceDeliverySignal = signal<SourceDelivery | null>(null);
   const ocrStateSignal = signal<QuickTranslateOcrState>(IDLE_OCR_STATE);
+  const selectionFeedbackSignal = signal<QuickTranslateSelectionFeedback | null>(null);
   const ocrFocusSeqSignal = signal(0);
   const openMenusSignal = signal<Record<string, boolean>>({});
   let windowRef: WindowRef | null = null;
@@ -183,6 +191,10 @@ export function createQuickTranslateController(
   const setOcrMessage = (message: string | null) => {
     ocrStateSignal.set({ phase: "idle", message });
   };
+  const setSelectionFeedback = (feedback: QuickTranslateSelectionFeedback | null) => {
+    if (selectionFeedbackSignal() === feedback) return;
+    selectionFeedbackSignal.set(feedback);
+  };
 
   /** Ends the running OCR request; late results see the older generation and drop. */
   const cancelOcr = () => {
@@ -195,6 +207,7 @@ export function createQuickTranslateController(
 
   const replaceDraft = (text: string) => {
     if (ocrActive || ocrStateSignal().message !== null) cancelOcr();
+    setSelectionFeedback(null);
     draftGen += 1;
     sourceSignal.set(text);
   };
@@ -223,6 +236,7 @@ export function createQuickTranslateController(
     openSignal.set(false);
     pinnedSignal.set(false);
     sourceDeliverySignal.set(null);
+    setSelectionFeedback(null);
     openMenusSignal.set({});
     windowRef = null;
     attachedWindowSignal.set(null);
@@ -302,6 +316,7 @@ export function createQuickTranslateController(
     lastDeliverySeq = seq;
     draftGen += 1;
     batch(() => {
+      setSelectionFeedback(null);
       sourceSignal.set(text);
       sourceDeliverySignal.set({ kind, seq });
     });
@@ -374,10 +389,19 @@ export function createQuickTranslateController(
     // UI Automation focus can change within the same native window and control.
     if (result.status === "stale" || !selectionTargetIsCurrent(target)) return;
     open();
-    if (result.status !== "selected" || result.text.trim().length === 0) return;
-    // A delivered selection replaces recognition. An empty read leaves it running.
-    cancelOcr();
-    deliverSource(result.text, "selection");
+    const text = result.status === "selected" ? result.text : "";
+    if (text.trim().length > 0) {
+      // A delivered selection replaces recognition. An empty read leaves it running.
+      cancelOcr();
+      setSelectionFeedback(null);
+      deliverSource(text, "selection");
+      return;
+    }
+    // Recognition keeps the status slot it already owns.
+    if (ocrStateSignal().phase !== "idle") return;
+    // A failed read replaces an earlier idle OCR message instead of stacking on it.
+    if (ocrStateSignal().message !== null) setOcrMessage(null);
+    setSelectionFeedback(result.status === "unavailable" ? "unavailable" : "noSelection");
   };
 
   /** One UI Automation read at a time. A newer press replaces the single queued target. */
@@ -416,6 +440,7 @@ export function createQuickTranslateController(
       target = null;
     }
     if (target === null) return;
+    setSelectionFeedback(null);
 
     const gen = ++sourceReadGen;
     const draftAtDispatch = draftGen;
@@ -455,6 +480,7 @@ export function createQuickTranslateController(
     // The overlay replaces any selection read that has not delivered yet.
     sourceReadGen += 1;
     releaseQueuedSelection();
+    setSelectionFeedback(null);
     const hadPopup = openSignal();
     ocrActive = true;
     ocrStateSignal.set({ phase: "selecting", message: null });
@@ -650,6 +676,8 @@ export function createQuickTranslateController(
     sourceText: () => sourceSignal(),
     sourceDelivery: () => sourceDeliverySignal(),
     ocrState: () => ocrStateSignal(),
+    selectionFeedback: () => selectionFeedbackSignal(),
+    canStartOcr: () => captureRegion !== undefined,
     ocrFocusSeq: () => ocrFocusSeqSignal(),
     dismissalSuspended: () => ocrStateSignal().phase !== "idle",
     autoTranslate: options.autoTranslate ?? (() => autoTranslateSignal()),

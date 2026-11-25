@@ -268,6 +268,16 @@ function QuickTranslateHarness(config: {
           }}
         />
         <Button
+          testID="harness-finish-selection-unavailable"
+          label="Finish Unreadable Selection"
+          size="sm"
+          onPress={() => {
+            const resolve = finishSelection;
+            finishSelection = undefined;
+            resolve?.({ status: "unavailable" });
+          }}
+        />
+        <Button
           testID="harness-trigger-double-copy-valid"
           label="Harness Double Copy Valid"
           size="sm"

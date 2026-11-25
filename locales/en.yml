@@ -743,6 +743,8 @@ quickTranslate:
   historyResultLanguages: "%{source} → %{target}"
   ocr: OCR
   ocrRecognizing: Reading text…
+  selectionNoSelection: No text is selected.
+  selectionUnavailable: Could not read the selection.
   shortcutUnavailable: Global shortcut %{shortcut} is unavailable. Use the tray icon menu to open Quick Translate.
   presetLabel: Preset
   presetPlaceholder: Select a preset…
