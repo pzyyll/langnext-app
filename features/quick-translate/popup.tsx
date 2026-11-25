@@ -777,13 +777,13 @@ function PresetCardRow(props: PresetCardRowProps) {
                       : "text-xs text-muted-foreground"
                   }
                 >
-                  {props.card().anki.status === "adding"
-                    ? t("quickTranslate.ankiAdding")
-                    : props.card().anki.status === "added"
-                      ? t("quickTranslate.ankiAdded")
-                      : props.card().anki.status === "error"
-                        ? props.card().anki.message
-                        : ""}
+                  {(() => {
+                    const anki = props.card().anki;
+                    if (anki.status === "adding") return t("quickTranslate.ankiAdding");
+                    if (anki.status === "added") return t("quickTranslate.ankiAdded");
+                    if (anki.status === "error") return anki.message;
+                    return "";
+                  })()}
                 </Text>
               </View>
             </If>

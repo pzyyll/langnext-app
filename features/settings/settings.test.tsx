@@ -1,4 +1,4 @@
-import { expect, open, test } from "nsh/test";
+import { expect, open, test, type StubRequest, type StubResponse } from "nsh/test";
 import { t } from "nsh/i18n";
 import { SPLIT_RAIL_STORAGE_KEYS } from "../../components/layout/split-rail";
 import {
@@ -3180,9 +3180,9 @@ test("wordbook page: opens Anki settings under Integrations without calling Anki
 
 const ANKI_URL = "http://127.0.0.1:8765/api/v1";
 
-function ankiNetwork() {
+function ankiNetwork(): Record<string, (request: StubRequest) => StubResponse> {
   return {
-    ["POST " + ANKI_URL]: (request: { body?: string }) => {
+    ["POST " + ANKI_URL]: (request): StubResponse => {
       const body = JSON.parse(request.body ?? "{}") as {
         id?: unknown;
         method?: string;

@@ -1,7 +1,7 @@
 import type { HistoryResult, HistorySnapshot } from "langnext/native";
 import type { WindowRef, WindowState } from "nsh/desktop";
 import { t } from "nsh/i18n";
-import { expect, open, test } from "nsh/test";
+import { expect, open, test, type StubRequest, type StubResponse } from "nsh/test";
 import { makeChannel, makeModel, makeSeedStorage } from "../features/models/__tests__/fixtures";
 import {
   baiduCredentialStorageKey,
@@ -2596,7 +2596,7 @@ test("quick anki: adds only the pressed card and blocks a second write", async (
         const text = translationCount === 1 ? "Alpha" : "Beta";
         return { body: { choices: [{ message: { content: text } }] } };
       },
-      ["POST " + ANKI_URL]: (request: { body?: string }) => {
+      ["POST " + ANKI_URL]: (request): StubResponse => {
         const body = JSON.parse(request.body ?? "{}") as { id?: unknown; method?: string };
         const id = body.id;
         if (body.method === "collection.get") {
@@ -2686,8 +2686,11 @@ function wordbookBinding(enabled: boolean): string {
   });
 }
 
-function ankiReadNetwork(create: { body: unknown; delay?: number }) {
-  return (request: { body?: string }) => {
+function ankiReadNetwork(create: {
+  body: unknown;
+  delay?: number;
+}): (request: StubRequest) => StubResponse {
+  return (request): StubResponse => {
     const body = JSON.parse(request.body ?? "{}") as { id?: unknown; method?: string };
     const id = body.id;
     if (body.method === "collection.get") {
@@ -2730,7 +2733,10 @@ function ankiReadNetwork(create: { body: unknown; delay?: number }) {
           : create.body;
       return { delay: create.delay, body: payload };
     }
-    return { status: 500, body: { jsonrpc: "2.0", id, error: { code: -32601, message: "Method not found." } } };
+    return {
+      status: 500,
+      body: { jsonrpc: "2.0", id, error: { code: -32601, message: "Method not found." } },
+    };
   };
 }
 

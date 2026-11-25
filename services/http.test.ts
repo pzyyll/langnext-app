@@ -87,7 +87,10 @@ test("http transport: omits bodies when requested", async () => {
 
   let payload: unknown;
   try {
-    const response = await client("http://127.0.0.1:8765/api/v1", call('{"method":"collection.get"}'));
+    const response = await client(
+      "http://127.0.0.1:8765/api/v1",
+      call('{"method":"collection.get"}'),
+    );
     payload = await response.json();
   } finally {
     info.restore();
