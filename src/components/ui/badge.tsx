@@ -1,7 +1,7 @@
 import { Text, View } from "nsh";
 import { buildTooltip } from "./tooltip";
 
-export type BadgeTone = "neutral" | "muted" | "primary" | "success" | "warning" | "destructive";
+export type BadgeTone = "neutral" | "primary" | "success" | "warning" | "destructive";
 
 interface BadgeProps {
   testID?: string;
@@ -17,7 +17,6 @@ interface BadgeProps {
 
 const CONTAINER_CLASSES: Record<BadgeTone, string> = {
   neutral: "border border-border bg-secondary",
-  muted: "border border-transparent bg-muted",
   primary: "border border-primary/30 bg-primary/10",
   success: "border border-success/40 bg-success/15",
   warning: "border border-warning/40 bg-warning/15",
@@ -26,7 +25,6 @@ const CONTAINER_CLASSES: Record<BadgeTone, string> = {
 
 const TEXT_CLASSES: Record<BadgeTone, string> = {
   neutral: "text-xs font-medium text-secondary-foreground",
-  muted: "text-xs font-medium text-muted-foreground",
   primary: "text-xs font-medium text-foreground",
   success: "text-xs font-medium text-success",
   warning: "text-xs font-medium text-warning",
@@ -35,7 +33,6 @@ const TEXT_CLASSES: Record<BadgeTone, string> = {
 
 const DOT_CLASSES: Record<BadgeTone, string> = {
   neutral: "bg-muted-foreground",
-  muted: "bg-muted-foreground",
   primary: "bg-primary",
   success: "bg-success",
   warning: "bg-warning",

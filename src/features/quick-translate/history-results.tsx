@@ -31,7 +31,7 @@ function HistoryResultCard(props: { result: HistoryResult; markdownEnabled: bool
 
   return (
     <View
-      class="gap-2 border-b border-border/70 px-4 py-3 odd:bg-surface-subtle/85 even:bg-background last:border-b-0"
+      class="gap-2 border-b border-border/70 bg-surface-subtle/85 px-4 py-3 last:border-b-0"
       testID="quick-translate-history-result"
     >
       <View class="flex-row items-center justify-between gap-2">

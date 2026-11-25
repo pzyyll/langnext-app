@@ -805,7 +805,6 @@ quickTranslate:
   sourceMenuItem: "源语言：%{language}"
   targetMenuItem: "目标语言：%{language}"
   templateLabel: 提示词模板
-  collapsed: 已折叠
   collapseCard: 折叠卡片
   expandCard: 展开卡片
   removeCard: 移除卡片

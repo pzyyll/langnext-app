@@ -60,7 +60,7 @@ After the user drags over text, an optional small **Translate Selection** button
 
 ## Quick Translate Vertical Stream
 
-The Quick Translate popup arranges the source query, engine translation rows, and footer in one continuous edge-to-edge vertical stream separated by hairline borders and alternating row surfaces instead of isolated cards.
+The Quick Translate popup arranges the source query, engine translation rows, and footer in one continuous edge-to-edge vertical stream separated by hairline borders on a uniform subtle output surface instead of isolated cards.
 
 ### Motion Inventory
 

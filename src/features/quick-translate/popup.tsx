@@ -19,7 +19,6 @@ import {
 } from "nsh";
 import { t } from "nsh/i18n";
 import { motion } from "../../components/motion";
-import { Badge } from "../../components/ui/badge";
 import { Button, KeyboardButton } from "../../components/ui/button";
 import { LARGEST_FONT_STEP } from "../../components/ui/font-step";
 import { Icon, type IconName } from "../../components/ui/icon";
@@ -351,12 +350,10 @@ function PresetCardRow(props: PresetCardRowProps) {
   const isBackTranslationOpen = () => backTranslation().status !== "closed";
 
   const presetName = () => resolvedPreset()?.name ?? t("quickTranslate.presetPlaceholder");
-  const isAi = () => resolvedPreset()?.engine.kind === "ai";
   const isCollapsed = () => props.card().collapsed;
-  const presetVariant = () => (isAi() && !isCollapsed() ? "pill-brand" : "ghost-chip");
-  // Pull borderless triggers left 6pt so the engine mark sits on the px-4 spine.
-  const presetClass = () =>
-    isAi() && !isCollapsed() ? "min-w-0 shrink" : "-ml-1.5 min-w-0 shrink";
+  const presetVariant = () => (isCollapsed() ? "ghost-chip" : "pill-muted");
+  // Pull collapsed borderless triggers left 6pt so the engine mark sits on the px-4 spine.
+  const presetClass = () => (isCollapsed() ? "-ml-1.5 min-w-0 shrink" : "min-w-0 shrink");
 
   return (
     <View
@@ -411,13 +408,6 @@ function PresetCardRow(props: PresetCardRowProps) {
                 props.onOverlayOpenChange(`card-template-${props.card().id}`, open)
               }
               onChange={(value) => props.onSelectTemplate(props.card().id, value)}
-            />
-          </If>
-          <If when={isCollapsed()}>
-            <Badge
-              testID={`quick-translate-card-collapsed-${props.card().id}`}
-              label={t("quickTranslate.collapsed")}
-              tone="muted"
             />
           </If>
         </View>
@@ -1561,7 +1551,7 @@ export function QuickTranslatePopup(props: QuickTranslatePopupProps) {
                     });
                   }}
                   style={{ translate: [0, cardOffset(cardId())] }}
-                  class="border-b border-border/70 odd:bg-surface-subtle/85 even:bg-background last:border-b-0"
+                  class="border-b border-border/70 bg-surface-subtle/85 last:border-b-0"
                   classList={{
                     "z-10 cursor-grabbing bg-card! shadow-md": draggingCardId() === cardId(),
                   }}
