@@ -854,6 +854,25 @@ export function QuickTranslatePopup(props: QuickTranslatePopupProps) {
     if (current?.kind === "ocr") focusSourceAfterExpand.set(true);
   });
 
+  // Any edit that empties the field (Select All and Delete included) must drop the previous
+  // line box: reset the remembered step and make the native field take its format again.
+  let hadSourceText = hasSourceText();
+  effect(() => {
+    const has = hasSourceText();
+    if (hadSourceText && !has) {
+      sourceFontStep.set(LARGEST_FONT_STEP);
+      requestAnimationFrame(() => {
+        if (isSourceCollapsed() || hasSourceText()) return;
+        const input = sourceInputRef();
+        if (input === null) return;
+        input.blur();
+        input.focus();
+        input.setSelection(0, 0);
+      });
+    }
+    hadSourceText = has;
+  });
+
   const expandSource = () => {
     focusSourceAfterExpand.set(true);
     props.session.setSourceCollapsed(false);
