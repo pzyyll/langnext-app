@@ -99,6 +99,7 @@ function PopupSessionView(
       >
         <QuickTranslatePopup
           session={session}
+          markdownEnabled={props.preferences?.preferences().markdownEnabled ?? false}
           ocrState={props.ocrState}
           scrollRevision={() => scrollRevision()}
           windowVisible={props.windowVisible}
@@ -549,6 +550,21 @@ function PopupHarnessApp(props: {
           variant="outline"
           label={windowVisible() ? "Hide Harness Window" : "Show Harness Window"}
           onPress={() => windowVisible.set(!windowVisible())}
+        />
+        <Button
+          testID="harness-toggle-markdown"
+          size="xs"
+          variant="outline"
+          label={
+            props.prefs.preferences().markdownEnabled
+              ? t("quickTranslate.showPlainText")
+              : t("quickTranslate.showMarkdown")
+          }
+          onPress={() =>
+            void props.prefs.savePopupState({
+              markdownEnabled: !props.prefs.preferences().markdownEnabled,
+            })
+          }
         />
         <Button
           testID="harness-toggle-prefs-write-fail"

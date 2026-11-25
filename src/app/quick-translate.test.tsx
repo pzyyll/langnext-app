@@ -2848,6 +2848,9 @@ test("quick ocr: Baidu cancellation, a late result, and a quota error keep the d
   expect(late.enabled("id:quick-translate-source")).toBe(false);
   await late.waitUntil(() => hasQuickSource(late, OCR_TEXT));
   expect(late.enabled("id:quick-translate-source")).toBe(true);
+  await late.waitUntil(() =>
+    late.requests().some((request) => request.url.includes("api.openai.com")),
+  );
   const lateTranslations = late
     .requests()
     .filter((request) => request.url.includes("api.openai.com"));

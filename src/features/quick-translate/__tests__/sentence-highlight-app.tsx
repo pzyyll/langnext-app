@@ -1,7 +1,10 @@
-import { Text, View, mount, signal } from "nsh";
+import { SentenceAlignmentNative } from "langnext-native";
+import { Scroll, Text, View, mount, signal } from "nsh";
+import { TextView, type TextViewDocument, type TextViewLinkPressEvent } from "nsh/base";
 import { FONT_SIZE_STEPS } from "../../../components/ui/font-step";
 import { Button } from "../../../components/ui/button";
 import { AlignedTranslation, type SentenceSegment } from "../aligned-translation";
+import { buildAlignedMarkdownDocument } from "../alignment-document";
 import {
   QuickTranslateSourceEditor,
   type QuickTranslateSourceHandle,
@@ -18,6 +21,7 @@ interface Fixture {
   source: string;
   result: string;
   pairs: readonly FixturePair[];
+  document?: TextViewDocument | null;
 }
 
 const DEFAULT_FIXTURE: Fixture = {
@@ -71,6 +75,52 @@ const LONG_FIXTURE: Fixture = {
   ],
 };
 
+function makeMarkdownFixture(): Fixture {
+  const source = [
+    "Summary V1",
+    "",
+    "First sentence has bold italic link details 42. Second sentence follows.",
+    "",
+    "List point A1.",
+    "",
+    "Table cell B2.",
+  ].join("\n");
+  const result = [
+    "## Summary V1",
+    "",
+    "First **bold** _italic_ [link 42](https://example.com) sentence. Second sentence follows.",
+    "",
+    "- List point A1.",
+    "",
+    "| Header |",
+    "| --- |",
+    "| Table cell B2. |",
+    "",
+    "```ts",
+    "const raw = 42;",
+    "```",
+  ].join("\n");
+  const built = buildAlignedMarkdownDocument(source, result, SentenceAlignmentNative.align);
+  const parsed = TextView.parse(result, { streaming: false, html: false, math: false });
+  const plainMatch =
+    built !== null && TextView.plainText(built.document) === TextView.plainText(parsed);
+  const codeBlock = built?.document.blocks.find((block) => block.type === "codeBlock");
+  const codeIntact =
+    codeBlock?.type === "codeBlock" &&
+    codeBlock.language === "ts" &&
+    codeBlock.code === "const raw = 42;";
+  return {
+    id: `markdown:seg=${built?.segments.length ?? 0}:plain=${plainMatch}:code=${codeIntact}`,
+    source,
+    result,
+    document: built?.document ?? null,
+    pairs: (built?.segments ?? []).map((seg) => ({
+      segment: { id: seg.id, testID: seg.testID, start: 0, end: 0 },
+      sourceRange: { start: seg.sourceStart, end: seg.sourceEnd },
+    })),
+  };
+}
+
 function SentenceHighlightApp() {
   const fixture = signal<Fixture>(DEFAULT_FIXTURE);
   const sourceText = signal(DEFAULT_FIXTURE.source);
@@ -80,6 +130,7 @@ function SentenceHighlightApp() {
   const selectionChanges = signal(0);
   const lastSel = signal("none");
   const isFocused = signal(false);
+  const lastLink = signal("none");
   let sourceHandle: QuickTranslateSourceHandle | null = null;
 
   const hoveredId = signal<string | null>(null);
@@ -94,14 +145,15 @@ function SentenceHighlightApp() {
   const applyFixture = (next: Fixture) => {
     hoveredId.set(null);
     activeSegmentId.set(null);
+    lastLink.set("none");
     fixture.set(next);
     sourceText.set(next.source);
   };
 
   return (
-    <View class="flex-1 bg-background p-4">
-      <View class="gap-3">
-        <View class="flex-row gap-2">
+    <Scroll class="flex-1 bg-background">
+      <View class="gap-3 p-4">
+        <View class="flex-row flex-wrap gap-2">
           <Button
             testID="fixture-basic"
             label="Basic"
@@ -109,6 +161,11 @@ function SentenceHighlightApp() {
           />
           <Button testID="fixture-crlf" label="CRLF" onPress={() => applyFixture(CRLF_FIXTURE)} />
           <Button testID="fixture-long" label="Long" onPress={() => applyFixture(LONG_FIXTURE)} />
+          <Button
+            testID="fixture-markdown"
+            label="Markdown"
+            onPress={() => applyFixture(makeMarkdownFixture())}
+          />
           <Button
             testID="focus-end"
             label="Focus End"
@@ -132,6 +189,8 @@ function SentenceHighlightApp() {
         <Text testID="font-step">{`step:${fontStep()}`}</Text>
         <Text testID="source-value">{`source:${sourceText()}`}</Text>
         <Text testID="selection-count">{`selections:${selectionChanges()} sel=${lastSel()} f=${isFocused()}`}</Text>
+        <Text testID="link-pressed">{`linkPressed:${lastLink()}`}</Text>
+        <Text testID="fixture-id">{fixture().id}</Text>
 
         <QuickTranslateSourceEditor
           testID="quick-translate-source"
@@ -158,6 +217,7 @@ function SentenceHighlightApp() {
         <AlignedTranslation
           testID="quick-translate-result-text"
           text={fixture().result}
+          document={fixture().document ?? null}
           segments={fixture().pairs.map((p: FixturePair) => p.segment)}
           activeSegmentId={activeSegmentId()}
           onHoverEnterSegment={(id: string) => {
@@ -170,9 +230,12 @@ function SentenceHighlightApp() {
               activeSegmentId.set(null);
             }
           }}
+          onLinkPress={(event: TextViewLinkPressEvent) => {
+            lastLink.set(event.url);
+          }}
         />
       </View>
-    </View>
+    </Scroll>
   );
 }
 

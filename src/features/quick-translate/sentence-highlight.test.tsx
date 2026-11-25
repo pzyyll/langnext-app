@@ -1,4 +1,6 @@
 import { expect, open, test } from "nsh/test";
+import { TextView } from "nsh/base";
+import { finalizeMarkdownAlignment, prepareMarkdownAlignment } from "./alignment-document";
 
 const HARNESS = "./__tests__/sentence-highlight-app.tsx";
 const viewport = {
@@ -141,4 +143,137 @@ test("sentence highlight native: highlights aligned source range on result hover
     return line !== undefined && line !== "step:3";
   });
   expect(app.texts()).toContain("step:0");
+});
+
+test("sentence highlight markdown: aligns formatted spans, preserves links and fenced code blocks, and syncs native hover", async () => {
+  const source = [
+    "Summary V1",
+    "",
+    "First sentence has bold italic link details 42. Second sentence follows.",
+    "",
+    "List point A1.",
+    "",
+    "Table cell B2.",
+  ].join("\n");
+  const markdown = [
+    "## Summary V1",
+    "",
+    "First **bold** _italic_ [link 42](https://example.com) sentence. Second sentence follows.",
+    "",
+    "- List point A1.",
+    "",
+    "| Header |",
+    "| --- |",
+    "| Table cell B2. |",
+    "",
+    "```ts",
+    "const raw = 42;",
+    "```",
+  ].join("\n");
+
+  const prepared = prepareMarkdownAlignment(markdown);
+  expect(prepared).not.toBeNull();
+  expect(prepared!.targetBlocks).toEqual([
+    "Summary V1",
+    "First bold italic link 42 sentence. Second sentence follows.",
+    "List point A1.",
+    "Header",
+    "Table cell B2.",
+    null,
+  ]);
+
+  const parsed = TextView.parse(markdown, { streaming: false, html: false, math: false });
+  const built = finalizeMarkdownAlignment(source, prepared!, [
+    { sourceStart: 0, sourceEnd: 10, targetBlockIndex: 0, targetStart: 0, targetEnd: 10 },
+    { sourceStart: 12, sourceEnd: 59, targetBlockIndex: 1, targetStart: 0, targetEnd: 35 },
+    { sourceStart: 60, sourceEnd: 84, targetBlockIndex: 1, targetStart: 36, targetEnd: 60 },
+    { sourceStart: 86, sourceEnd: 100, targetBlockIndex: 2, targetStart: 0, targetEnd: 14 },
+    { sourceStart: 102, sourceEnd: 116, targetBlockIndex: 4, targetStart: 0, targetEnd: 14 },
+  ]);
+  expect(built).not.toBeNull();
+  expect(TextView.plainText(built!.document)).toBe(TextView.plainText(parsed));
+  expect(built!.segments).toHaveLength(5);
+
+  const codeBlock = built!.document.blocks.find((block) => block.type === "codeBlock");
+  expect(codeBlock).toEqual({ type: "codeBlock", language: "ts", code: "const raw = 42;" });
+  const imagePrepared = prepareMarkdownAlignment("![Alt](https://example.com/a.png)");
+  expect(imagePrepared).toBeNull();
+
+  const app = await open(HARNESS, viewport);
+  await app.waitFor("id:fixture-markdown");
+  await app.press("id:fixture-markdown");
+  await app.waitFor("id:quick-translate-result-text >> text:const raw = 42;");
+  expect(app.texts()).toContain("markdown:seg=5:plain=true:code=true");
+
+  const brandSoft = app.spanStyle("id:ref-brand-soft").backgroundColor;
+  expect(brandSoft).toBeTruthy();
+
+  const segmentBg = (id: string, text: string) =>
+    app.viewStyle(`id:${id}`)?.backgroundColor ??
+    app.spanStyle(`id:${id} >> text:${text}`).backgroundColor;
+
+  // Hovering a non-link fragment highlights plain, bold, italic, link label, and source sentence together.
+  await app.hover("id:result-seg-1");
+  expect(segmentBg("result-seg-1", "First ")).toEqual(brandSoft);
+  expect(segmentBg("result-seg-1-frag-1", "bold")).toEqual(brandSoft);
+  expect(segmentBg("result-seg-1-frag-3", "italic")).toEqual(brandSoft);
+  expect(segmentBg("result-seg-1-frag-5", "link 42")).toEqual(brandSoft);
+  expect(segmentBg("result-seg-2", "Second sentence ")).toBeUndefined();
+  expect(app.spanStyle("id:result-seg-1-frag-1 >> text:bold").fontWeight).toBeGreaterThanOrEqual(
+    600,
+  );
+  expect(app.spanStyle("id:result-seg-1-frag-3 >> text:italic").italic).toBe(true);
+  expect(app.spanStyle("id:result-seg-1-frag-5 >> text:link 42").underline).toBe(true);
+  expect(
+    app.spanStyle(
+      "id:quick-translate-source >> text:First sentence has bold italic link details 42.",
+    ).backgroundColor,
+  ).toEqual(brandSoft);
+  expect(
+    app.spanStyle("id:quick-translate-source >> text:Second sentence follows.").backgroundColor,
+  ).toBeUndefined();
+
+  // Narrow viewport keeps wrapped formatted sentence and source synchronized.
+  await app.setViewport(220, 960);
+  await app.hover("id:result-seg-1-frag-3");
+  expect(segmentBg("result-seg-1", "First ")).toEqual(brandSoft);
+  expect(segmentBg("result-seg-1-frag-5", "link 42")).toEqual(brandSoft);
+  expect(
+    app.spanStyle(
+      "id:quick-translate-source >> text:First sentence has bold italic link details 42.",
+    ).backgroundColor,
+  ).toEqual(brandSoft);
+  await app.setViewport(viewport.size.width, viewport.size.height);
+
+  // Hovering the link fragment highlights the whole sentence, and clicking it still emits onLinkPress.
+  await app.hover("id:result-seg-1-frag-5");
+  expect(segmentBg("result-seg-1", "First ")).toEqual(brandSoft);
+  expect(segmentBg("result-seg-1-frag-5", "link 42")).toEqual(brandSoft);
+  await app.press("id:result-seg-1-frag-5", { position: { x: 4, y: 8 } });
+  expect(app.texts()).toContain("linkPressed:https://example.com");
+
+  // Moving to the adjacent sentence switches both result and source highlight.
+  await app.hover("id:result-seg-2");
+  expect(segmentBg("result-seg-2", "Second sentence ")).toEqual(brandSoft);
+  expect(segmentBg("result-seg-1", "First ")).toBeUndefined();
+  expect(
+    app.spanStyle("id:quick-translate-source >> text:Second sentence follows.").backgroundColor,
+  ).toEqual(brandSoft);
+
+  // Heading, list, and table cell align while fenced code block stays plain.
+  await app.hover("id:result-seg-0");
+  expect(app.spanStyle("id:quick-translate-source >> text:Summary V1").backgroundColor).toEqual(
+    brandSoft,
+  );
+  await app.hover("id:result-seg-3");
+  expect(app.spanStyle("id:quick-translate-source >> text:List point A1.").backgroundColor).toEqual(
+    brandSoft,
+  );
+  await app.hover("id:result-seg-4");
+  expect(app.spanStyle("id:quick-translate-source >> text:Table cell B2.").backgroundColor).toEqual(
+    brandSoft,
+  );
+
+  await app.hover("id:outside-gap");
+  expect(segmentBg("result-seg-4", "Table cell B2.")).toBeUndefined();
 });

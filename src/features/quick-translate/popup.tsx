@@ -17,6 +17,7 @@ import {
   type ViewRef,
 } from "nsh";
 import { SentenceAlignmentNative } from "langnext-native";
+import type { TextViewDocument } from "nsh/base";
 import { t } from "nsh/i18n";
 import { motion } from "../../components/motion";
 import { Button, KeyboardButton } from "../../components/ui/button";
@@ -39,6 +40,7 @@ import { playMp3Bytes } from "../tts/playback";
 import { prepareQuickSpeech, quickSpeechFailureMessage } from "../tts/quick-speech";
 import { ttsSettingsStore } from "../tts/settings";
 import { AlignedTranslation, type SentenceSegment } from "./aligned-translation";
+import { buildAlignedMarkdownDocument } from "./alignment-document";
 import { QuickTranslateHistoryResults } from "./history-results";
 import type { CardResultState, CardViewItem, QuickTranslateSession } from "./session";
 import {
@@ -291,6 +293,7 @@ interface CardAlignmentEntry {
   renderMode: AlignmentRenderMode;
   sourceText: string;
   text: string;
+  document: TextViewDocument | null;
   segments: readonly SentenceSegment[];
   sourceRanges: Readonly<Record<string, SourceHighlightRange>>;
 }
@@ -298,6 +301,7 @@ interface CardAlignmentEntry {
 interface CardSentenceAlignment {
   resultId: number;
   renderMode: AlignmentRenderMode;
+  document: TextViewDocument | null;
   segments: readonly SentenceSegment[];
   activeSegmentId: Accessor<string | null>;
   onHoverEnterSegment: (segmentId: string) => void;
@@ -548,6 +552,7 @@ function PresetCardRow(props: PresetCardRowProps) {
                 <AlignedTranslation
                   testID="quick-translate-result-text"
                   text={outputText()}
+                  document={props.sentenceAlignment()?.document ?? null}
                   segments={props.sentenceAlignment()?.segments ?? []}
                   activeSegmentId={props.sentenceAlignment()?.activeSegmentId() ?? null}
                   onHoverEnterSegment={(segmentId) =>
@@ -954,12 +959,10 @@ export function QuickTranslatePopup(props: QuickTranslatePopupProps) {
 
   const isCardEligibleForAlignment = (
     card: CardViewItem,
-    mode: AlignmentRenderMode,
   ): card is CardViewItem & {
     result: Extract<CardResultState, { status: "success" }>;
   } => {
     if (platform.os !== "windows") return false;
-    if (mode !== "plain") return false;
     if (isSourceCollapsed() || showingHistory() || isComposing() || !isPreviewWindowVisible()) {
       return false;
     }
@@ -971,47 +974,67 @@ export function QuickTranslatePopup(props: QuickTranslatePopupProps) {
     card: CardViewItem,
     mode: AlignmentRenderMode,
   ): CardAlignmentEntry | null => {
-    if (!isCardEligibleForAlignment(card, mode)) return null;
+    if (!isCardEligibleForAlignment(card)) return null;
     const res = card.result;
     const key = `${card.id}:${res.resultId}:${mode}`;
     const existing = alignmentCache.get(key);
     if (existing && existing.sourceText === res.sourceText && existing.text === res.text) {
       return existing;
     }
-    const pairs = SentenceAlignmentNative.align(res.sourceText, [res.text]);
+
+    let document: TextViewDocument | null = null;
     const segments: SentenceSegment[] = [];
     const sourceRanges: Record<string, SourceHighlightRange> = {};
-    for (const pair of pairs) {
-      if (pair.targetBlockIndex !== 0) continue;
-      if (
-        pair.targetStart < 0 ||
-        pair.targetEnd <= pair.targetStart ||
-        pair.targetEnd > res.text.length
-      ) {
-        continue;
+
+    if (mode === "markdown") {
+      const built = buildAlignedMarkdownDocument(
+        res.sourceText,
+        res.text,
+        SentenceAlignmentNative.align,
+      );
+      if (built) {
+        document = built.document;
+        for (const seg of built.segments) {
+          segments.push({ id: seg.id, testID: seg.testID, start: 0, end: 0 });
+          sourceRanges[seg.id] = { start: seg.sourceStart, end: seg.sourceEnd };
+        }
       }
-      if (
-        pair.sourceStart < 0 ||
-        pair.sourceEnd <= pair.sourceStart ||
-        pair.sourceEnd > res.sourceText.length
-      ) {
-        continue;
+    } else {
+      const pairs = SentenceAlignmentNative.align(res.sourceText, [res.text]);
+      for (const pair of pairs) {
+        if (pair.targetBlockIndex !== 0) continue;
+        if (
+          pair.targetStart < 0 ||
+          pair.targetEnd <= pair.targetStart ||
+          pair.targetEnd > res.text.length
+        ) {
+          continue;
+        }
+        if (
+          pair.sourceStart < 0 ||
+          pair.sourceEnd <= pair.sourceStart ||
+          pair.sourceEnd > res.sourceText.length
+        ) {
+          continue;
+        }
+        const id = `seg-${segments.length}`;
+        segments.push({
+          id,
+          testID: `result-seg-${segments.length}`,
+          start: pair.targetStart,
+          end: pair.targetEnd,
+        });
+        sourceRanges[id] = { start: pair.sourceStart, end: pair.sourceEnd };
       }
-      const id = `seg-${segments.length}`;
-      segments.push({
-        id,
-        testID: `result-seg-${segments.length}`,
-        start: pair.targetStart,
-        end: pair.targetEnd,
-      });
-      sourceRanges[id] = { start: pair.sourceStart, end: pair.sourceEnd };
     }
+
     const entry: CardAlignmentEntry = {
       cardId: card.id,
       resultId: res.resultId,
       renderMode: mode,
       sourceText: res.sourceText,
       text: res.text,
+      document,
       segments,
       sourceRanges,
     };
@@ -1125,6 +1148,7 @@ export function QuickTranslatePopup(props: QuickTranslatePopupProps) {
     return {
       resultId,
       renderMode: mode,
+      document: entry.document,
       segments: entry.segments,
       activeSegmentId: () => {
         const current = activeMatch();
@@ -1140,7 +1164,7 @@ export function QuickTranslatePopup(props: QuickTranslatePopupProps) {
       },
       onHoverEnterSegment: (segmentId: string) => {
         const latestCard = props.session.cards().find((item) => item.id === card.id);
-        if (!latestCard || !isCardEligibleForAlignment(latestCard, mode)) return;
+        if (!latestCard || !isCardEligibleForAlignment(latestCard)) return;
         if (latestCard.result.resultId !== resultId) return;
         const latestEntry = resolveCardAlignment(latestCard, mode);
         const sourceRange = latestEntry?.sourceRanges[segmentId];

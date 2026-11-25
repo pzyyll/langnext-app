@@ -4847,3 +4847,121 @@ test("sentence highlight live: drops late completion after popup close without s
   await app.waitFor("id:quick-translate-source");
   expect(app.texts()).not.toContain("Stale Late Result");
 });
+
+test("sentence highlight markdown: highlights formatted spans across TextView blocks, toggles with plain text, and preserves copy", async () => {
+  let aiCalls = 0;
+  const markdownReply = [
+    "## Summary V1",
+    "",
+    "First **bold** _italic_ [link 42](https://example.com) sentence. Second sentence follows.",
+    "",
+    "- List point A1.",
+    "",
+    "| Header |",
+    "| --- |",
+    "| Table cell B2. |",
+    "",
+    "```ts",
+    "const raw = 42;",
+    "```",
+  ].join("\n");
+
+  const app = await open(POPUP_HARNESS, {
+    ...viewport,
+    storage: seedWithPresets([makePreset()], {
+      [QUICK_TRANSLATE_PREFERENCES_KEY]: JSON.stringify({
+        version: 1,
+        doubleCopyEnabled: false,
+        autoTranslate: false,
+        markdownEnabled: true,
+        sourceLanguage: "en",
+        targetLanguage: "zh",
+        cards: [{ id: "card-1", presetId: "preset-1", templateId: null, collapsed: false }],
+      }),
+    }),
+    network: {
+      "POST https://api.openai.com/v1/chat/completions": () => {
+        aiCalls += 1;
+        return {
+          status: 200,
+          body: { choices: [{ message: { content: markdownReply } }] },
+        };
+      },
+    },
+  });
+
+  await app.waitFor("id:quick-translate-source");
+  await app.type("id:quick-translate-source", "Summary V1");
+  await app.keyboard.press("shift+enter");
+  await app.keyboard.press("shift+enter");
+  await app.type(
+    "id:quick-translate-source",
+    "First sentence has bold italic link details 42. Second sentence follows.",
+  );
+  await app.keyboard.press("shift+enter");
+  await app.keyboard.press("shift+enter");
+  await app.type("id:quick-translate-source", "List point A1.");
+  await app.keyboard.press("shift+enter");
+  await app.keyboard.press("shift+enter");
+  await app.type("id:quick-translate-source", "Table cell B2.");
+  await app.keyboard.press("enter");
+
+  await app.waitFor("id:quick-translate-card-card-1 >> text:const raw = 42;");
+  expect(aiCalls).toBe(1);
+
+  await app.hover("id:quick-translate-card-card-1 >> id:result-seg-1");
+  const fragBg = app.viewStyle(
+    "id:quick-translate-card-card-1 >> id:result-seg-1",
+  )?.backgroundColor;
+  expect(fragBg).toBeTruthy();
+  expect(
+    app.viewStyle("id:quick-translate-card-card-1 >> id:result-seg-1-frag-1")?.backgroundColor,
+  ).toEqual(fragBg);
+  expect(
+    app.viewStyle("id:quick-translate-card-card-1 >> id:result-seg-1-frag-3")?.backgroundColor,
+  ).toEqual(fragBg);
+  expect(
+    app.viewStyle("id:quick-translate-card-card-1 >> id:result-seg-1-frag-5")?.backgroundColor,
+  ).toEqual(fragBg);
+  expect(
+    app.viewStyle("id:quick-translate-card-card-1 >> id:result-seg-2")?.backgroundColor,
+  ).toBeUndefined();
+  expect(
+    app.spanStyle(
+      "id:quick-translate-source >> text:First sentence has bold italic link details 42.",
+    ).backgroundColor,
+  ).toEqual(fragBg);
+  expect(
+    app.spanStyle("id:quick-translate-source >> text:Second sentence follows.").backgroundColor,
+  ).toBeUndefined();
+
+  await app.hover("id:quick-translate-card-card-1 >> id:result-seg-3");
+  expect(app.spanStyle("id:quick-translate-source >> text:List point A1.").backgroundColor).toEqual(
+    fragBg,
+  );
+
+  await app.hover("id:quick-translate-card-card-1 >> id:result-seg-4");
+  expect(app.spanStyle("id:quick-translate-source >> text:Table cell B2.").backgroundColor).toEqual(
+    fragBg,
+  );
+
+  // Copy copies the raw Markdown result while keeping fenced code block intact.
+  await app.press("id:quick-translate-card-card-1 >> id:quick-translate-copy");
+  expect(app.clipboard()).toBe(markdownReply);
+
+  // Toggling Markdown off clears active preview and switches without retranslating.
+  await app.press("id:harness-toggle-markdown");
+  await app.waitUntil(
+    () =>
+      app.spanStyle("id:quick-translate-source >> text:Table cell B2.").backgroundColor ===
+      undefined,
+  );
+  expect(aiCalls).toBe(1);
+
+  await app.press("id:harness-toggle-markdown");
+  await app.hover("id:quick-translate-card-card-1 >> id:result-seg-0");
+  expect(app.spanStyle("id:quick-translate-source >> text:Summary V1").backgroundColor).toEqual(
+    fragBg,
+  );
+  expect(aiCalls).toBe(1);
+});
