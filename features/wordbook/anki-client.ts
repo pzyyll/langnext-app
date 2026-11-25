@@ -36,6 +36,34 @@ export type AnkiDiscoverResult =
     }
   | { ok: false; failure: AnkiReadFailure };
 
+export interface AnkiTarget {
+  profile: string;
+  deckId: string;
+  noteTypeId: string;
+  sourceField: string;
+  translationField: string;
+}
+
+export interface AnkiAddInput {
+  target: AnkiTarget;
+  sourceText: string;
+  translatedText: string;
+  /** Confirms the saved binding is still the one about to be written, and still enabled. */
+  isCurrent: () => boolean | Promise<boolean>;
+}
+
+export type AnkiAddFailure =
+  | AnkiReadFailure
+  | "blank"
+  | "profileMismatch"
+  | "missingTarget"
+  | "incompatible"
+  | "notCurrent"
+  | "duplicate"
+  | "rejected"
+  | "unconfirmed";
+
+export type AnkiAddResult = { ok: true; outcome: "added" } | { ok: false; failure: AnkiAddFailure };
 export type AnkiNoteTypeResult =
   | {
       ok: true;
@@ -56,6 +84,8 @@ interface RpcSuccess {
 interface RpcFailure {
   ok: false;
   failure: AnkiReadFailure;
+  rpcType?: string;
+  issues?: string[];
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -107,13 +137,49 @@ function isLegacyEnvelope(payload: unknown): boolean {
   return error === null || error === undefined || typeof error === "string";
 }
 
-function failureFromRpc(error: unknown): AnkiReadFailure {
-  if (!isRecord(error) || !isRecord(error.data) || typeof error.data.type !== "string") {
-    return "malformed";
+function issueTypes(details: unknown): string[] {
+  if (!isRecord(details) || !Array.isArray(details.issues)) return [];
+  const types: string[] = [];
+  for (const issue of details.issues) {
+    if (isRecord(issue) && typeof issue.type === "string") types.push(issue.type);
   }
-  if (error.data.type === "collectionUnavailable") return "noCollection";
-  if (error.data.type === "staleSession") return "staleSession";
-  return "malformed";
+  return types;
+}
+
+function describeRpcError(error: unknown): RpcFailure {
+  if (!isRecord(error) || !isRecord(error.data) || typeof error.data.type !== "string") {
+    return { ok: false, failure: "malformed" };
+  }
+  const rpcType = error.data.type;
+  let failure: AnkiReadFailure = "malformed";
+  if (rpcType === "collectionUnavailable") failure = "noCollection";
+  else if (rpcType === "staleSession") failure = "staleSession";
+  return { ok: false, failure, rpcType, issues: issueTypes(error.data.details) };
+}
+
+function plainFailure(reply: RpcFailure): { ok: false; failure: AnkiReadFailure } {
+  return { ok: false, failure: reply.failure };
+}
+
+function readOutcome(reply: RpcFailure): AnkiAddResult {
+  if (reply.rpcType === "notFound") return { ok: false, failure: "missingTarget" };
+  return plainFailure(reply);
+}
+
+function createOutcome(reply: RpcFailure): AnkiAddResult {
+  if (reply.rpcType === "validationFailed") {
+    return { ok: false, failure: reply.issues?.includes("duplicate") ? "duplicate" : "rejected" };
+  }
+  if (reply.rpcType === "notFound") return { ok: false, failure: "missingTarget" };
+  if (
+    reply.failure === "unauthorized" ||
+    reply.failure === "forbidden" ||
+    reply.failure === "noCollection" ||
+    reply.failure === "staleSession"
+  ) {
+    return { ok: false, failure: reply.failure };
+  }
+  return { ok: false, failure: "unconfirmed" };
 }
 
 function normalDecks(result: unknown): AnkiNamedId[] | null {
@@ -174,6 +240,50 @@ function noteTypeSummaries(result: unknown): AnkiNamedId[] | null {
   return noteTypes;
 }
 
+function htmlPlain(value: string): string {
+  return value
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/\r\n|\r|\n/g, "<br>");
+}
+
+function targetReady(target: AnkiTarget): boolean {
+  return (
+    isName(target.profile) &&
+    isEntityId(target.deckId) &&
+    isEntityId(target.noteTypeId) &&
+    isName(target.sourceField) &&
+    isName(target.translationField) &&
+    target.sourceField !== target.translationField
+  );
+}
+
+function readDeck(result: unknown, requestedId: string): "normal" | "filtered" | null {
+  if (!isRecord(result) || result.id !== requestedId || !isEntityId(result.id)) return null;
+  if (result.kind !== "normal" && result.kind !== "filtered") return null;
+  return result.kind;
+}
+
+function acceptsTarget(
+  detail: Extract<AnkiNoteTypeResult, { ok: true }>,
+  target: AnkiTarget,
+): boolean {
+  return (
+    detail.kind === "normal" &&
+    !detail.hasDeckOverride &&
+    detail.templateCount >= 1 &&
+    detail.fields.length >= 2 &&
+    detail.fields[0] === target.sourceField &&
+    detail.fields.includes(target.translationField)
+  );
+}
+
+function createdNote(result: unknown): boolean {
+  if (!isRecord(result) || !isEntityId(result.noteId) || !Array.isArray(result.cardIds))
+    return false;
+  return result.cardIds.length > 0 && result.cardIds.every(isEntityId);
+}
 /** Discovers the open Anki profile, its normal decks, and its note type summaries. */
 export function createAnkiClient(options: AnkiClientOptions) {
   const send = createHttpFetch({
@@ -218,14 +328,14 @@ export function createAnkiClient(options: AnkiClientOptions) {
     const hasResult = Object.prototype.hasOwnProperty.call(payload, "result");
     const hasError = Object.prototype.hasOwnProperty.call(payload, "error");
     if (hasResult === hasError) return { ok: false, failure: "malformed" };
-    if (hasError) return { ok: false, failure: failureFromRpc(payload.error) };
+    if (hasError) return describeRpcError(payload.error);
     return { ok: true, result: payload.result };
   }
 
   return {
     async discover(): Promise<AnkiDiscoverResult> {
       const collection = await rpc("collection.get", {});
-      if (!collection.ok) return collection;
+      if (!collection.ok) return plainFailure(collection);
       if (
         !isRecord(collection.result) ||
         !isName(collection.result.profile) ||
@@ -236,9 +346,9 @@ export function createAnkiClient(options: AnkiClientOptions) {
       const profile = collection.result.profile;
       const session = collection.result.session;
       const decksReply = await rpc("decks.list", { session });
-      if (!decksReply.ok) return decksReply;
+      if (!decksReply.ok) return plainFailure(decksReply);
       const typesReply = await rpc("noteTypes.list", { session });
-      if (!typesReply.ok) return typesReply;
+      if (!typesReply.ok) return plainFailure(typesReply);
       const decks = normalDecks(decksReply.result);
       if (!decks) return { ok: false, failure: "malformed" };
       const noteTypes = noteTypeSummaries(typesReply.result);
@@ -248,8 +358,66 @@ export function createAnkiClient(options: AnkiClientOptions) {
     async getNoteType(session: string, noteTypeId: string): Promise<AnkiNoteTypeResult> {
       if (!isName(session) || !isEntityId(noteTypeId)) return { ok: false, failure: "malformed" };
       const reply = await rpc("noteTypes.get", { noteType: { id: noteTypeId }, session });
-      if (!reply.ok) return reply;
+      if (!reply.ok) return plainFailure(reply);
       return readNoteType(reply.result, noteTypeId) ?? { ok: false, failure: "malformed" };
+    },
+    async addTranslation(input: AnkiAddInput): Promise<AnkiAddResult> {
+      if (input.sourceText.trim() === "" || input.translatedText.trim() === "") {
+        return { ok: false, failure: "blank" };
+      }
+      const target = input.target;
+      if (!targetReady(target)) return { ok: false, failure: "incompatible" };
+      const collection = await rpc("collection.get", {});
+      if (!collection.ok) return plainFailure(collection);
+      if (
+        !isRecord(collection.result) ||
+        collection.result.profile !== target.profile ||
+        !isName(collection.result.session)
+      ) {
+        if (
+          isRecord(collection.result) &&
+          isName(collection.result.profile) &&
+          isName(collection.result.session)
+        ) {
+          return { ok: false, failure: "profileMismatch" };
+        }
+        return { ok: false, failure: "malformed" };
+      }
+      const session = collection.result.session;
+      const deckReply = await rpc("decks.get", { deck: { id: target.deckId }, session });
+      if (!deckReply.ok) return readOutcome(deckReply);
+      const deckKind = readDeck(deckReply.result, target.deckId);
+      if (!deckKind) return { ok: false, failure: "malformed" };
+      if (deckKind === "filtered") return { ok: false, failure: "incompatible" };
+      const typeReply = await rpc("noteTypes.get", {
+        noteType: { id: target.noteTypeId },
+        session,
+      });
+      if (!typeReply.ok) return readOutcome(typeReply);
+      const detail = readNoteType(typeReply.result, target.noteTypeId);
+      if (!detail) return { ok: false, failure: "malformed" };
+      if (!acceptsTarget(detail, target)) return { ok: false, failure: "incompatible" };
+      if (!(await input.isCurrent())) return { ok: false, failure: "notCurrent" };
+      const fields: Record<string, string> = {};
+      for (const name of detail.fields) fields[name] = "";
+      fields[target.sourceField] = htmlPlain(input.sourceText);
+      fields[target.translationField] = htmlPlain(input.translatedText);
+      const created = await rpc("notes.create", {
+        deck: { id: target.deckId },
+        noteType: { id: target.noteTypeId },
+        fields,
+        session,
+        duplicates: {
+          allow: false,
+          scope: "deck",
+          deck: { id: target.deckId },
+          includeChildren: false,
+          acrossNoteTypes: false,
+        },
+      });
+      if (!created.ok) return createOutcome(created);
+      if (!createdNote(created.result)) return { ok: false, failure: "unconfirmed" };
+      return { ok: true, outcome: "added" };
     },
   };
 }
