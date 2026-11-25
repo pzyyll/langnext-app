@@ -41,6 +41,7 @@ import {
   selectionHintError,
 } from "../features/settings/selection-hint";
 import { canCaptureScreen } from "../platform/screen-capture";
+import { applyTaskbarIcon } from "../platform/taskbar-icon";
 import {
   createQuickTranslateController,
   QuickTranslateWindow,
@@ -216,6 +217,12 @@ function MainWindow(props: {
     const silent = untracked(silentLaunch);
     if (silent) win.hide();
     else win.show();
+  });
+  effect(() => {
+    // Windows draws a window's taskbar button by the window's own icon, and
+    // NSH puts the app's icon on its hidden host window only. The platform
+    // reports the window once it shows it: its handle is there then.
+    if (win.state() !== null) void applyTaskbarIcon();
   });
 
   const page = signal<SidebarPage>("models");
