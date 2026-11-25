@@ -66,5 +66,4 @@ All project commands are in `.mise/tasks/`.
 
 ## Referencs
 
-- `langnext-app`: `F:\workspace\my\langnext-app`
 - `NSH` Docs: `https://nsh.dev/llms.txt`
