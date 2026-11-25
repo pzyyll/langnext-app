@@ -102,6 +102,37 @@ fn is_sentence_candidate(trimmed: &str) -> bool {
     trimmed.chars().any(char::is_alphanumeric)
 }
 
+fn sentence_segments(text: &str) -> impl Iterator<Item = (usize, &str)> {
+    let mut boundaries = text.split_sentence_bound_indices().peekable();
+    let mut next_opening_quote = None;
+    let mut straight_quote_open = false;
+    std::iter::from_fn(move || {
+        let (offset, segment) = boundaries.next()?;
+        let segment = segment.trim_end();
+        let start = next_opening_quote.take().unwrap_or(offset);
+        let mut end = offset + segment.len();
+        straight_quote_open ^= !segment
+            .bytes()
+            .filter(|&ch| ch == b'"')
+            .count()
+            .is_multiple_of(2);
+
+        // Unicode sentence boundaries can keep the next sentence's opening quote with the terminator.
+        if let Some((_, next)) = boundaries.peek() {
+            let opening_quote = match segment.chars().next_back() {
+                Some('“') if next.contains('”') => Some('“'),
+                Some('"') if straight_quote_open && next.contains('"') => Some('"'),
+                _ => None,
+            };
+            if let Some(quote) = opening_quote {
+                end -= quote.len_utf8();
+                next_opening_quote = Some(end);
+            }
+        }
+        Some((start, &text[start..end]))
+    })
+}
+
 fn collect_block_sentences<'a>(
     text: &'a str,
     block_index: u32,
@@ -113,18 +144,14 @@ fn collect_block_sentences<'a>(
         let group_id = groups.len();
         let start_sentence = sentences.len();
         let slice = &text[group_start..group_end];
-        for (rel_start, segment) in slice.split_sentence_bound_indices() {
-            let leading_ws = segment.len() - segment.trim_start().len();
-            let trailing_trimmed = segment.trim_end();
-            if trailing_trimmed.len() <= leading_ws {
-                continue;
-            }
-            let trimmed = &segment[leading_ws..trailing_trimmed.len()];
+        for (rel_start, segment) in sentence_segments(slice) {
+            let start_trimmed = segment.trim_start();
+            let trimmed = start_trimmed.trim_end();
             if !is_sentence_candidate(trimmed) {
                 continue;
             }
-            let abs_start = group_start + rel_start + leading_ws;
-            let abs_end = group_start + rel_start + trailing_trimmed.len();
+            let abs_start = group_start + rel_start + segment.len() - start_trimmed.len();
+            let abs_end = abs_start + trimmed.len();
             sentences.push(Sentence {
                 block_index,
                 group_id,
@@ -149,7 +176,19 @@ fn is_literal_anchor_token(token: &str) -> bool {
         || (bytes.len() >= 2 && bytes.iter().all(u8::is_ascii_uppercase))
 }
 
-fn for_each_literal_anchor_token<'a>(text: &'a str, mut visit: impl FnMut(&'a str)) {
+fn is_name_anchor_token(token: &str) -> bool {
+    const MIN_NAME_ANCHOR_LEN: usize = 4;
+    let bytes = token.as_bytes();
+    bytes.len() >= MIN_NAME_ANCHOR_LEN
+        && bytes[0].is_ascii_uppercase()
+        && bytes[1..].iter().all(u8::is_ascii_lowercase)
+}
+
+fn for_each_anchor_token<'a>(
+    text: &'a str,
+    is_candidate: impl Fn(&str) -> bool,
+    mut visit: impl FnMut(&'a str),
+) {
     let bytes = text.as_bytes();
     let mut i = 0usize;
     while i < bytes.len() {
@@ -159,7 +198,7 @@ fn for_each_literal_anchor_token<'a>(text: &'a str, mut visit: impl FnMut(&'a st
                 i += 1;
             }
             let token = &text[start..i];
-            if is_literal_anchor_token(token) {
+            if is_candidate(token) {
                 visit(token);
             }
         } else {
@@ -207,28 +246,27 @@ fn filter_non_conflicting_monotonic(candidates: &mut Vec<(usize, usize)>) {
     });
 }
 
-fn collect_literal_anchors(
+fn collect_token_anchors(
     source_sentences: &[Sentence<'_>],
     target_sentences: &[Sentence<'_>],
+    is_candidate: impl Fn(&str) -> bool,
 ) -> Vec<(usize, usize)> {
     let mut occurrences: HashMap<&str, (UniqueSentence, UniqueSentence)> = HashMap::new();
     for (idx, sentence) in source_sentences.iter().enumerate() {
-        for_each_literal_anchor_token(sentence.text, |token| {
+        for_each_anchor_token(sentence.text, &is_candidate, |token| {
             occurrences.entry(token).or_default().0.record(idx);
         });
     }
     for (idx, sentence) in target_sentences.iter().enumerate() {
-        for_each_literal_anchor_token(sentence.text, |token| {
+        for_each_anchor_token(sentence.text, &is_candidate, |token| {
             occurrences.entry(token).or_default().1.record(idx);
         });
     }
 
-    let mut candidates: Vec<(usize, usize)> = occurrences
+    occurrences
         .into_values()
         .filter_map(|(src, tgt)| Some((src.index()?, tgt.index()?)))
-        .collect();
-    filter_non_conflicting_monotonic(&mut candidates);
-    candidates
+        .collect()
 }
 
 fn count_paired_double_quotes(text: &str) -> usize {
@@ -297,12 +335,56 @@ fn collect_quote_anchors(
     candidates
 }
 
-fn fill_same_group_gaps(
+fn has_excluded_block_between(
+    target_blocks: &[Option<String>],
+    before: Sentence<'_>,
+    after: Sentence<'_>,
+) -> bool {
+    target_blocks[before.block_index as usize..=after.block_index as usize]
+        .iter()
+        .any(Option::is_none)
+}
+
+fn collect_bounded_name_anchors(
+    source_sentences: &[Sentence<'_>],
+    target_sentences: &[Sentence<'_>],
+    target_blocks: &[Option<String>],
+    accepted: &[(usize, usize)],
+) -> Vec<(usize, usize)> {
+    if accepted.len() < 2 {
+        return Vec::new();
+    }
+
+    collect_token_anchors(source_sentences, target_sentences, is_name_anchor_token)
+        .into_iter()
+        .filter(|&(source, target)| {
+            let next = accepted.partition_point(|&(index, _)| index < source);
+            if next == 0 || next == accepted.len() {
+                return false;
+            }
+            let (left_source, left_target) = accepted[next - 1];
+            let (right_source, right_target) = accepted[next];
+            source < right_source
+                && left_target < target
+                && target < right_target
+                && source - left_source == target - left_target
+                && right_source - source == right_target - target
+                && !has_excluded_block_between(
+                    target_blocks,
+                    target_sentences[left_target],
+                    target_sentences[right_target],
+                )
+        })
+        .collect()
+}
+
+fn fill_single_sentence_gaps(
     accepted: &[(usize, usize)],
     source_sentences: &[Sentence<'_>],
     source_groups: &[GroupSpan],
     target_sentences: &[Sentence<'_>],
     target_groups: &[GroupSpan],
+    target_blocks: &[Option<String>],
 ) -> Vec<(usize, usize)> {
     let mut pairs = accepted.to_vec();
 
@@ -335,10 +417,13 @@ fn fill_same_group_gaps(
     for window in accepted.windows(2) {
         let (s_a, t_a) = window[0];
         let (s_b, t_b) = window[1];
-        if source_sentences[s_a].group_id == source_sentences[s_b].group_id
-            && target_sentences[t_a].group_id == target_sentences[t_b].group_id
-            && s_b - s_a == 2
+        if s_b - s_a == 2
             && t_b - t_a == 2
+            && !has_excluded_block_between(
+                target_blocks,
+                target_sentences[t_a],
+                target_sentences[t_b],
+            )
         {
             pairs.push((s_a + 1, t_a + 1));
         }
@@ -384,21 +469,34 @@ pub fn align_blocks(
         }];
     }
 
-    let literal_anchors = collect_literal_anchors(&source_sentences, &target_sentences);
-    let quote_anchors =
-        collect_quote_anchors(&source_sentences, &target_sentences, &literal_anchors);
-
-    let mut accepted = literal_anchors;
+    let mut accepted = collect_token_anchors(
+        &source_sentences,
+        &target_sentences,
+        is_literal_anchor_token,
+    );
+    filter_non_conflicting_monotonic(&mut accepted);
+    let quote_anchors = collect_quote_anchors(&source_sentences, &target_sentences, &accepted);
     accepted.extend(quote_anchors);
     accepted.sort_unstable();
     accepted.dedup();
 
-    let paired = fill_same_group_gaps(
+    let name_anchors = collect_bounded_name_anchors(
+        &source_sentences,
+        &target_sentences,
+        target_blocks,
+        &accepted,
+    );
+    accepted.extend(name_anchors);
+    accepted.sort_unstable();
+    accepted.dedup();
+
+    let paired = fill_single_sentence_gaps(
         &accepted,
         &source_sentences,
         &source_groups,
         &target_sentences,
         &target_groups,
+        target_blocks,
     );
 
     paired
@@ -425,6 +523,142 @@ mod tests {
         let units: Vec<u16> = text.encode_utf16().collect();
         String::from_utf16(&units[start as usize..end as usize])
             .expect("aligned UTF-16 offsets should sit on valid character boundaries")
+    }
+
+    fn aligned_texts(source: &str, targets: &[Option<String>]) -> Vec<(String, String)> {
+        align_blocks(source, targets)
+            .into_iter()
+            .map(|pair| {
+                (
+                    slice_utf16(source, pair.source_start, pair.source_end),
+                    slice_utf16(
+                        targets[pair.target_block_index as usize]
+                            .as_deref()
+                            .unwrap(),
+                        pair.target_start,
+                        pair.target_end,
+                    ),
+                )
+            })
+            .collect()
+    }
+
+    #[test]
+    fn aligns_sentences_starting_with_double_quotes_after_a_period() {
+        let source = "NSH is running.\n\nThe interface is ready. Choose \"Light\" or \"Dark\".";
+        for (intro, options) in [
+            ("界面已就绪。", "“浅色”或“深色”均可选择。"),
+            ("界面已就绪。", "\"浅色\"或\"深色\"均可选择。"),
+            ("界面提示“已就绪。”", "“浅色”或“深色”均可选择。"),
+            ("界面提示\"已就绪。\"", "\"浅色\"或\"深色\"均可选择。"),
+        ] {
+            let target = format!("NSH 已启动。\n\n{intro}{options}");
+            assert_eq!(
+                aligned_texts(source, &[Some(target)]),
+                [
+                    ("NSH is running.".into(), "NSH 已启动。".into()),
+                    ("The interface is ready.".into(), intro.into()),
+                    ("Choose \"Light\" or \"Dark\".".into(), options.into()),
+                ],
+                "opening quotes belong to the next sentence: {intro}{options}",
+            );
+        }
+    }
+
+    #[test]
+    fn aligns_translations_even_when_the_provider_changes_paragraphs() {
+        let source_sentences = [
+            "This is an AI-powered translation tool for desktop, built on the NSH Mixed framework, with its interface and state managed via TSX.",
+            "For features requiring native code implementation, Rust serves as an extension point.",
+            "The initial interface includes a slim sidebar, a custom title bar, and appearance settings.",
+            "Options such as \"Light,\" \"Dark,\" and \"Follow system settings\" are persisted even after the application is restarted.",
+        ];
+        let [first, second, third, fourth] = source_sentences;
+        let source = format!("{first}\n{second}\n\n{third} {fourth}");
+
+        let cases = [
+            (
+                "Google Cloud",
+                ["\n\n", "\n\n"],
+                [
+                    "这是一个基于 NSH Mixed 框架构建的桌面 AI 翻译工具，其界面和状态由 TSX 管理。",
+                    "对于需要原生代码实现的功能，Rust 可作为扩展点。",
+                    "初始界面包含一个简洁的侧边栏、一个自定义标题栏和外观设置。",
+                    "“浅色”、“深色”和“跟随系统设置”等选项即使在应用程序重启后也会保留。",
+                ],
+            ),
+            (
+                "DeepL",
+                ["\n", "\n\n"],
+                [
+                    "这是一个基于NSH Mixed框架开发的、面向桌面的AI驱动翻译工具，其界面和状态通过TSX进行管理。",
+                    "对于需要原生代码实现的功能，Rust 作为扩展点。",
+                    "初始界面包含一个简洁的侧边栏、自定义标题栏以及外观设置。",
+                    "诸如“浅色”、“深色”和“遵循系统设置”等选项，即使在应用程序重启后也会被保留。",
+                ],
+            ),
+            (
+                "LLM",
+                ["\n", "\n"],
+                [
+                    "这是一个基于NSH Mixed框架构建的桌面AI翻译工具，其界面和状态通过TSX管理。",
+                    "对于需要原生代码实现的功能，Rust作为扩展点。",
+                    "初始界面包括一个窄侧边栏、一个自定义标题栏和外观设置。",
+                    "“浅色”、“深色”和“跟随系统设置”等选项即使在应用程序重启后也会保留。",
+                ],
+            ),
+        ];
+
+        for (engine, [after_first, after_second], target_sentences) in cases {
+            let [first, second, third, fourth] = target_sentences;
+            let plain = format!("{first}{after_first}{second}{after_second}{third}{fourth}");
+            let markdown_blocks: Vec<_> = plain
+                .split("\n\n")
+                .map(|block| Some(block.replace('\n', " ")))
+                .collect();
+            let expected: Vec<_> = source_sentences
+                .into_iter()
+                .zip(target_sentences)
+                .map(|(src, tgt)| (src.to_owned(), tgt.to_owned()))
+                .collect();
+            assert_eq!(
+                aligned_texts(&source, &[Some(plain)]),
+                expected,
+                "{engine} plain text"
+            );
+            assert_eq!(
+                aligned_texts(&source, &markdown_blocks),
+                expected,
+                "{engine} Markdown blocks"
+            );
+        }
+    }
+
+    #[test]
+    fn leaves_bounded_gaps_unpaired_when_clues_are_ambiguous_or_cross_excluded_blocks() {
+        let source = "NSH starts. Rust runs first. Rust runs next. TSX finishes.";
+        let target = "NSH 起步。Rust 首先运行。Rust 随后运行。TSX 结束。";
+        assert_eq!(
+            aligned_texts(source, &[Some(target.into())]),
+            [
+                ("NSH starts.".into(), "NSH 起步。".into()),
+                ("TSX finishes.".into(), "TSX 结束。".into()),
+            ]
+        );
+
+        let source = "NSH starts. Rust runs here. TSX finishes.";
+        let target = [
+            Some("NSH 起步。Rust 在此运行。".into()),
+            None,
+            Some("TSX 结束。".into()),
+        ];
+        assert_eq!(
+            aligned_texts(source, &target),
+            [
+                ("NSH starts.".into(), "NSH 起步。".into()),
+                ("TSX finishes.".into(), "TSX 结束。".into()),
+            ]
+        );
     }
 
     #[test]
@@ -626,7 +860,7 @@ mod tests {
     }
 
     #[test]
-    fn keeps_unanchored_equal_count_unequal_gaps_and_cross_group_sentences_unpaired() {
+    fn keeps_unanchored_equal_counts_unequal_gaps_and_unbounded_cross_group_gaps_unpaired() {
         // Unanchored equal-count text stays unpaired rather than matching by ordinal.
         assert!(
             align_blocks(
@@ -642,7 +876,7 @@ mod tests {
         let unequal_pairs = align_blocks(unequal_src, &[Some(unequal_tgt.to_owned())]);
         assert_eq!(unequal_pairs.len(), 2);
 
-        // Cross-group gaps (across blank lines or target block boundaries) never fill.
+        // One anchor does not fill a gap across blank lines or excluded blocks.
         let cross_blank_src = "Before paragraph.\n\nNSH anchors here.";
         let cross_blank_tgt = "前一段。\n\n这里由 NSH 锚定。";
         let cross_blank = align_blocks(cross_blank_src, &[Some(cross_blank_tgt.to_owned())]);
