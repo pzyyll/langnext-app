@@ -4,6 +4,9 @@ export const FONT_SIZE_STEPS = ["text-sm", "text-base", "text-xl", "text-2xl"] a
 /** Font size in points for each FONT_SIZE_STEPS entry. */
 export const FONT_STEP_POINTS = [14, 16, 20, 24] as const;
 
+/** Line height in points for each FONT_SIZE_STEPS entry (`text-sm` … `text-2xl`). */
+export const FONT_STEP_LINE_HEIGHTS = [20, 24, 28, 32] as const;
+
 export type FontSizeStep = (typeof FONT_SIZE_STEPS)[number];
 
 export const SMALLEST_FONT_STEP = 0;

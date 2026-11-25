@@ -13,6 +13,7 @@ import { motion } from "../motion";
 import {
   clampFontStep,
   FONT_SIZE_STEPS,
+  FONT_STEP_LINE_HEIGHTS,
   comparableMeasureText,
   fieldShouldStepDown,
   FONT_STEP_POINTS,
@@ -160,6 +161,12 @@ export function Textarea(props: TextareaProps) {
     stepped() ? clampFontStep(props.initialFontStep ?? LARGEST_FONT_STEP) : SMALLEST_FONT_STEP,
   );
   const fontClass = () => (stepped() ? FONT_SIZE_STEPS[clampFontStep(fontStep())] : "text-sm");
+  // The native field must carry the step's line height as a value, not only through its class:
+  // the line height and the drawing update together when the step changes.
+  const lineHeight = () =>
+    stepped() && measureClass() === ""
+      ? FONT_STEP_LINE_HEIGHTS[clampFontStep(fontStep())]
+      : undefined;
   const fontWeightClass = () =>
     stepped() && variant() === "frameless" && clampFontStep(fontStep()) >= 2 ? "font-medium" : "";
   const showProbes = () => stepped() && contentWidth() >= 1 && sourceText().length > 0;
@@ -268,6 +275,7 @@ export function Textarea(props: TextareaProps) {
             if (next < 1 || Math.abs(next - contentWidth()) < 1) return;
             contentWidth.set(next);
           }}
+          style={lineHeight() === undefined ? undefined : { lineHeight: lineHeight() }}
           class={`min-h-24 w-full bg-transparent ${fontClass()} ${fontWeightClass()} placeholder:text-muted-foreground ${TEXT_CLASSES[variant()]} ${props.inputClass ?? ""}`}
         />
       </View>

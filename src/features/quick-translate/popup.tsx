@@ -1321,7 +1321,15 @@ export function QuickTranslatePopup(props: QuickTranslatePopupProps) {
           variant="ghost"
           tooltip={t("common.clearInput")}
           accessibilityLabel={t("common.clearInput")}
-          onPress={() => props.session.handleClearSource()}
+          onPress={() => {
+            props.session.handleClearSource();
+            // Return the caret to the empty field's start so the next keystroke starts clean.
+            queueMicrotask(() => {
+              const input = sourceInputRef();
+              input?.focus();
+              input?.setSelection(0, 0);
+            });
+          }}
         >
           <Icon name="mdi:close-circle" tone="muted-foreground" class="size-3.5" />
         </Button>
