@@ -45,6 +45,7 @@ import {
   nativePointerPressBinding,
   readCursorAnchor,
 } from "../platform/quick-translate-native";
+import { logLevel } from "../services/log";
 import {
   createQuickTranslateController as createPureQuickTranslateController,
   POPUP_MIN_SIZE,
@@ -180,6 +181,7 @@ function QuickTranslateWindowBody(props: {
   const headerHeight = signal(0);
   const contentHeight = signal(0);
   const footerHeight = signal(0);
+  let fitId = 0;
   const markdownActionLabel = () =>
     t(markdownEnabledPreference() ? "quickTranslate.showPlainText" : "quickTranslate.showMarkdown");
   const ocrAction = signal<ViewRef | null>(null);
@@ -209,15 +211,46 @@ function QuickTranslateWindowBody(props: {
   });
 
   effect(() => {
+    if (logLevel() !== "info") return;
+    props.controller.traceHeightFit("content-state", {
+      markdown: markdownEnabledPreference(),
+      cards: session.cards().map(({ collapsed, result, backTranslation }) => ({
+        collapsed,
+        result: result.status,
+        resultLength: "text" in result ? (result.text?.length ?? 0) : 0,
+        backTranslation: backTranslation.status,
+      })),
+    });
+  });
+
+  effect(() => {
     const header = headerHeight();
     const content = contentHeight();
     const footer = footerHeight();
-    if (!readyToFit() || header <= 0 || content <= 0 || footer <= 0) return;
+    const ready = readyToFit();
+    if (!ready || header <= 0 || content <= 0 || footer <= 0) {
+      props.controller.traceHeightFit("fit-waiting", { ready, header, content, footer });
+      return;
+    }
+    const id = ++fitId;
+    const height = header + content + footer + ROOT_BORDER_HEIGHT;
+    props.controller.traceHeightFit("fit-scheduled", {
+      fitId: id,
+      header,
+      content,
+      footer,
+      height,
+    });
     // Coalesce layout events and resize outside the native layout pass.
-    const frame = requestAnimationFrame(() =>
-      props.controller.fitContentHeight(header + content + footer + ROOT_BORDER_HEIGHT),
-    );
-    cleanup(() => cancelAnimationFrame(frame));
+    let pending = true;
+    const frame = requestAnimationFrame(() => {
+      pending = false;
+      props.controller.fitContentHeight(height, id);
+    });
+    cleanup(() => {
+      cancelAnimationFrame(frame);
+      if (pending) props.controller.traceHeightFit("fit-cancelled", { fitId: id });
+    });
   });
 
   return (
@@ -352,7 +385,13 @@ function QuickTranslateWindowBody(props: {
       </View>
       <Scroll class="min-h-0 flex-1">
         {/* Measure the natural content height, not the scroll viewport. */}
-        <View class="shrink-0" onLayout={({ bounds }) => contentHeight.set(bounds.size.height)}>
+        <View
+          class="shrink-0"
+          onLayout={({ bounds }) => {
+            props.controller.traceHeightFit("content-layout", { size: bounds.size });
+            contentHeight.set(bounds.size.height);
+          }}
+        >
           <QuickTranslatePopup
             session={session}
             markdownEnabled={markdownEnabledPreference()}
@@ -384,10 +423,7 @@ export function QuickTranslateWindow(props: { controller: QuickTranslateControll
 
   effect(() => {
     const win = props.controller.attachedWindow();
-    const state = win?.state();
-    if (state) {
-      props.controller.verifyInitialBounds(state);
-    }
+    if (win) props.controller.verifyInitialBounds(win.state());
   });
 
   return (

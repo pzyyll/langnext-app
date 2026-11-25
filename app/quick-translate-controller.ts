@@ -1,6 +1,7 @@
 import {
   batch,
   signal,
+  untracked,
   type Accessor,
   type Bounds,
   type InputRef,
@@ -31,6 +32,9 @@ import {
   type PointerPressPoint,
   type ResolvedPopupPlacement,
 } from "../platform/quick-translate";
+import { createLogger } from "../services/log";
+
+const heightLog = createLogger("quick-translate/height");
 
 export const QUICK_TRANSLATE_WINDOW_ID = "quick-translate";
 
@@ -104,9 +108,10 @@ export interface QuickTranslateController {
   hasOpenOverlay: () => boolean;
   attachWindow: (win: WindowRef | null) => void;
   attachSourceInput: (input: InputRef | null) => void;
-  verifyInitialBounds: (state: WindowState) => void;
-  fitContentHeight: (height: number) => void;
+  verifyInitialBounds: (state: WindowState | null) => void;
+  fitContentHeight: (height: number, fitId: number) => void;
   handleBoundsChange: (bounds: Bounds) => void;
+  traceHeightFit: (event: string, details?: Record<string, unknown>) => void;
   setOnCloseCleanup: (callback: (() => void) | null) => void;
 }
 
@@ -119,6 +124,20 @@ function resolveMainWindowDisplay(allDisplays: readonly Display[]): DisplayId | 
 }
 
 const IDLE_OCR_STATE: QuickTranslateOcrState = { phase: "idle", message: null };
+
+function heightFitWindowState(state: WindowState | null | undefined) {
+  return state
+    ? {
+        visible: state.visible,
+        mode: state.mode,
+        bounds: state.bounds,
+        contentSize: state.contentBounds.size,
+        displayId: state.display?.id,
+        workArea: state.display?.visibleBounds,
+        scale: state.scaleFactor,
+      }
+    : null;
+}
 
 /** Owns Quick Translate window open/focus reuse, pin state, overlay tracking, and single-path cleanup. */
 export function createQuickTranslateController(
@@ -160,6 +179,7 @@ export function createQuickTranslateController(
   let userMovedSinceOpen = false;
   let expectingOwnSetBounds = false;
   let openGen = 0;
+  let popupId = 0;
   let draftGen = 0;
   let sourceReadGen = 0;
   let selectionReading = false;
@@ -173,6 +193,10 @@ export function createQuickTranslateController(
   let ocrRunGen = 0;
   let ocrActive = false;
   let ocrAbort: AbortController | null = null;
+
+  const traceHeightFit: QuickTranslateController["traceHeightFit"] = (event, details) => {
+    untracked(() => heightLog.info(event, { popupId, ...details }));
+  };
 
   const focusWindowAndInput = () => {
     (windowRef ?? Window.get(QUICK_TRANSLATE_WINDOW_ID))?.focus();
@@ -217,6 +241,7 @@ export function createQuickTranslateController(
     if (!hadState && windowRef === null && !ocrActive) {
       return;
     }
+    traceHeightFit("closed");
     cancelOcr();
     openGen += 1;
     draftGen += 1;
@@ -272,12 +297,13 @@ export function createQuickTranslateController(
     }
   };
 
-  const open = () => {
+  const openFrom = (trigger: SourceDeliveryKind | "manual") => {
     // While the screen selection runs, a shortcut or copy must not pull the popup forward.
     if (isSelecting()) {
       return;
     }
     if (openSignal()) {
+      traceHeightFit("reused", { trigger });
       focusWindowAndInput();
       return;
     }
@@ -291,6 +317,8 @@ export function createQuickTranslateController(
     needsBoundsCheck = placement.kind === "cursor";
     userMovedSinceOpen = false;
     expectingOwnSetBounds = false;
+    popupId += 1;
+    traceHeightFit("opening", { trigger, placement });
     placementSignal.set(placement);
     openSignal.set(true);
     startPressMonitor();
@@ -301,6 +329,7 @@ export function createQuickTranslateController(
     const seq = lastDeliverySeq + 1;
     lastDeliverySeq = seq;
     draftGen += 1;
+    traceHeightFit("source-delivered", { kind, seq, length: text.length });
     batch(() => {
       sourceSignal.set(text);
       sourceDeliverySignal.set({ kind, seq });
@@ -315,7 +344,7 @@ export function createQuickTranslateController(
     if (isSelecting()) {
       return;
     }
-    open();
+    openFrom("clipboard");
     const capturedOpenGen = openGen;
     const capturedDraftGen = draftGen;
     const readGen = ++sourceReadGen;
@@ -373,7 +402,7 @@ export function createQuickTranslateController(
     if (gen !== sourceReadGen || draftAtDispatch !== draftGen) return;
     // UI Automation focus can change within the same native window and control.
     if (result.status === "stale" || !selectionTargetIsCurrent(target)) return;
-    open();
+    openFrom("selection");
     if (result.status !== "selected" || result.text.trim().length === 0) return;
     // A delivered selection replaces recognition. An empty read leaves it running.
     cancelOcr();
@@ -481,7 +510,7 @@ export function createQuickTranslateController(
 
     const revealWindow = () => {
       if (hadPopup) restoreWindow();
-      else if (!openSignal()) open();
+      else if (!openSignal()) openFrom("ocr");
     };
 
     const reportFailure = (message: string) => {
@@ -583,8 +612,9 @@ export function createQuickTranslateController(
     }
   };
 
-  const verifyInitialBounds = (state: WindowState) => {
-    if (!needsBoundsCheck || userMovedSinceOpen) {
+  const verifyInitialBounds = (state: WindowState | null) => {
+    traceHeightFit("window-state", { state: heightFitWindowState(state), needsBoundsCheck });
+    if (!state || !needsBoundsCheck || userMovedSinceOpen) {
       return;
     }
     needsBoundsCheck = false;
@@ -607,10 +637,9 @@ export function createQuickTranslateController(
       return;
     }
     expectingOwnSetBounds = true;
-    win.setBounds({
-      origin: target.origin,
-      ...(sizeShifted ? { size: target.size } : {}),
-    });
+    const request = { origin: target.origin, ...(sizeShifted ? { size: target.size } : {}) };
+    traceHeightFit("initial-bounds-request", { request });
+    win.setBounds(request);
   };
 
   const openingSize = () => {
@@ -618,17 +647,35 @@ export function createQuickTranslateController(
     return current.kind === "cursor" ? current.bounds.size : current.size;
   };
 
-  const fitContentHeight = (height: number) => {
-    if (!openSignal()) return;
+  const fitContentHeight = (height: number, fitId: number) => {
+    if (!openSignal()) {
+      traceHeightFit("fit-skipped", { fitId, reason: "closed" });
+      return;
+    }
     const win = windowRef;
     const state = win?.state();
-    if (!win || !state?.visible || state.mode !== "normal") return;
+    if (!win || !state?.visible || state.mode !== "normal") {
+      traceHeightFit("fit-skipped", {
+        fitId,
+        reason: !win ? "no-window" : "window-not-ready",
+        state: heightFitWindowState(state),
+      });
+      return;
+    }
     const minHeight = Math.min(POPUP_MIN_SIZE.height, openingSize().height);
     const fit = resolvePopupContentFit(state, height, minHeight);
+    traceHeightFit(fit ? "fit-request" : "fit-no-change", {
+      fitId,
+      height,
+      minHeight,
+      state: heightFitWindowState(state),
+      request: fit,
+    });
     if (fit) win.setBounds(fit);
   };
 
-  const handleBoundsChange = (_bounds: Bounds) => {
+  const handleBoundsChange = (bounds: Bounds) => {
+    traceHeightFit("bounds-changed", { bounds, expectingOwnSetBounds, needsBoundsCheck });
     if (expectingOwnSetBounds) {
       expectingOwnSetBounds = false;
       return;
@@ -653,7 +700,7 @@ export function createQuickTranslateController(
     ocrFocusSeq: () => ocrFocusSeqSignal(),
     dismissalSuspended: () => ocrStateSignal().phase !== "idle",
     autoTranslate: options.autoTranslate ?? (() => autoTranslateSignal()),
-    open,
+    open: () => openFrom("manual"),
     close,
     activateDoubleCopy,
     activateSelectionTranslate,
@@ -690,6 +737,7 @@ export function createQuickTranslateController(
     },
     hasOpenOverlay,
     attachWindow: (win: WindowRef | null) => {
+      traceHeightFit("window-ref", { attached: win !== null });
       windowRef = win;
       attachedWindowSignal.set(win);
     },
@@ -700,6 +748,7 @@ export function createQuickTranslateController(
     verifyInitialBounds,
     fitContentHeight,
     handleBoundsChange,
+    traceHeightFit,
     setOnCloseCleanup: (callback: (() => void) | null) => {
       closeCleanup = callback;
     },
