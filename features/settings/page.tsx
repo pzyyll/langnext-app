@@ -1,11 +1,13 @@
 import { cleanup, platform, Scroll, signal, Text, View, windowSize, type ViewRef } from "nsh";
 import { Radio, RadioGroup } from "nsh/base";
 import { t } from "nsh/i18n";
+import type { NavigationLeaveGuard } from "../../components/layout/navigation-leave-guard";
 import { SplitPane } from "../../components/layout/split-pane";
 import { motion } from "../../components/motion";
 import { Breadcrumb, type BreadcrumbItem } from "../../components/ui/breadcrumb";
 import { Button } from "../../components/ui/button";
 import { Card, SectionHeading } from "../../components/ui/card";
+import { ConfirmDialog } from "../../components/ui/dialog";
 import { Icon } from "../../components/ui/icon";
 import { Select } from "../../components/ui/select";
 import { Switch } from "../../components/ui/switch";
@@ -22,6 +24,7 @@ import { logLevelError, selectLogLevel } from "./log-level";
 import { OcrSection } from "./ocr-section";
 import { ShortcutsSection } from "./shortcuts-section";
 import { TtsSection, type TtsChannelId } from "./tts-section";
+import { WordbookSection } from "./wordbook-section";
 import { selectSilentLaunch, silentLaunch, silentLaunchError } from "./silent-launch";
 import type { TranslationShortcutId, TranslationShortcutSetting } from "./shortcuts";
 import { selectTransparency, transparency, transparencyError } from "./transparency";
@@ -32,7 +35,8 @@ export type SettingsSection =
   | "shortcuts"
   | "language-detection"
   | "ocr"
-  | "tts";
+  | "tts"
+  | "wordbook";
 
 interface SettingsSectionEntry {
   id: SettingsSection;
@@ -63,6 +67,7 @@ const SETTINGS_GROUPS: readonly SettingsGroup[] = [
       { id: "language-detection", labelKey: "settings.sections.languageDetection" },
       { id: "ocr", labelKey: "settings.sections.ocr" },
       { id: "tts", labelKey: "settings.sections.tts" },
+      { id: "wordbook", labelKey: "settings.sections.wordbook" },
     ],
   },
 ];
@@ -300,6 +305,7 @@ function AddChannelHeaderButton(props: {
 export function SettingsPage(props: {
   platformOs?: string;
   onNavigateToModels?: () => void;
+  onRegisterLeaveGuard?: (guard: NavigationLeaveGuard) => () => void;
   shortcuts?: Record<TranslationShortcutId, TranslationShortcutSetting>;
 }) {
   const compact = () => windowSize().width < 860;
@@ -312,6 +318,26 @@ export function SettingsPage(props: {
   const ocrAddBusy = signal(false);
   const ttsAddBusy = signal(false);
   const sectionDialogOpen = signal(false);
+  const wordbookDirty = signal(false);
+  const pendingWordbookLeave = signal<(() => void) | null>(null);
+  let wordbookDiscardConfirmed = false;
+
+  if (props.onRegisterLeaveGuard) {
+    const unregister = props.onRegisterLeaveGuard((proceed) => {
+      if (selectedSection() !== "wordbook" || !wordbookDirty()) return true;
+      pendingWordbookLeave.set(proceed);
+      return false;
+    });
+    cleanup(unregister);
+  }
+
+  const confirmWordbookDiscard = () => {
+    const proceed = pendingWordbookLeave();
+    wordbookDiscardConfirmed = true;
+    pendingWordbookLeave.set(null);
+    wordbookDirty.set(false);
+    proceed?.();
+  };
   let detectionAddButtonNode: ViewRef | null = null;
   let ocrAddButtonNode: ViewRef | null = null;
   let ttsAddButtonNode: ViewRef | null = null;
@@ -405,234 +431,271 @@ export function SettingsPage(props: {
         : "px-6";
 
   return (
-    <SplitPane
-      page="settings"
-      handleAccessibilityLabel={t("settings.resizeLabel")}
-      rail={
-        <View testID="settings-rail" class="min-w-0 flex-1 bg-surface-rail">
-          <View class="h-14 shrink-0 flex-row items-center justify-between gap-2 px-4">
-            <Text role="header" class="min-w-0 truncate text-sm font-semibold text-foreground">
-              {t("settings.title")}
-            </Text>
-          </View>
-          <Scroll class="min-h-0 flex-1">
-            <View
-              role="navigation"
-              accessibilityLabel={t("settings.navLabel")}
-              class="gap-5 px-2.5 py-3"
-            >
-              <Each of={SETTINGS_GROUPS} key={(group) => group.id}>
-                {(group) => (
-                  <View class="gap-1.5">
-                    <Text
-                      testID={`settings-group-${group().id}`}
-                      role="header"
-                      class="min-w-0 truncate px-2 text-xs font-medium text-muted-foreground"
-                    >
-                      {t(group().labelKey)}
-                    </Text>
-                    <View class="gap-0.5">
-                      <Each of={group().sections} key={(item) => item.id}>
-                        {(item) => {
-                          const isSelected = () => selectedSection() === item().id;
-                          return (
-                            <Button
-                              testID={`settings-nav-${item().id}`}
-                              variant="nav"
-                              size="nav"
-                              selected={isSelected()}
-                              label={t(item().labelKey)}
-                              onPress={() => {
-                                selectedSection.set(item().id);
-                                selectedOcrChannel.set(null);
-                                selectedDetectionChannel.set(null);
-                                selectedTtsChannel.set(null);
-                                sectionDialogOpen.set(false);
-                              }}
-                              class="w-full"
-                            />
-                          );
-                        }}
-                      </Each>
-                    </View>
-                  </View>
-                )}
-              </Each>
+    <>
+      <SplitPane
+        page="settings"
+        handleAccessibilityLabel={t("settings.resizeLabel")}
+        rail={
+          <View testID="settings-rail" class="min-w-0 flex-1 bg-surface-rail">
+            <View class="h-14 shrink-0 flex-row items-center justify-between gap-2 px-4">
+              <Text role="header" class="min-w-0 truncate text-sm font-semibold text-foreground">
+                {t("settings.title")}
+              </Text>
             </View>
-          </Scroll>
-        </View>
-      }
-      detail={
-        <View testID="settings-detail" class="min-w-0 flex-1 bg-background">
-          <View class="shrink-0">
-            <View
-              class={`mx-auto h-14 w-full max-w-4xl flex-row items-center justify-between gap-3 ${headerPaddingClass()}`}
-            >
-              <If
-                when={headerBreadcrumb() !== null}
-                else={
-                  <View class="min-w-0 flex-1 flex-row items-center gap-1.5">
-                    <Text
-                      role="header"
-                      class="min-w-0 shrink truncate text-lg font-semibold text-foreground"
-                    >
-                      {t(activeSectionLabelKey())}
-                    </Text>
-                    <If when={selectedSection() === "ocr"}>
-                      <View
-                        testID="settings-ocr-priority-info"
-                        accessibilityLabel={t("settings.ocr.priorityHint")}
-                        tooltip={buildTooltip(t("settings.ocr.priorityHint"), "top", {
-                          align: "start",
-                          disabled: sectionDialogOpen(),
-                        })}
-                        class="shrink-0 items-center justify-center p-1"
-                      >
-                        <Icon name="info" tone="muted-foreground" class="size-4" />
-                      </View>
-                    </If>
-                    <If when={selectedSection() === "tts"}>
-                      <View
-                        testID="settings-tts-priority-info"
-                        accessibilityLabel={t("settings.tts.priorityHint")}
-                        tooltip={buildTooltip(t("settings.tts.priorityHint"), "top", {
-                          align: "start",
-                          disabled: sectionDialogOpen(),
-                        })}
-                        class="shrink-0 items-center justify-center p-1"
-                      >
-                        <Icon name="info" tone="muted-foreground" class="size-4" />
-                      </View>
-                    </If>
-                    <If when={selectedSection() === "language-detection"}>
-                      <View
-                        testID="settings-detection-priority-info"
-                        accessibilityLabel={t("settings.languageDetection.priorityHint")}
-                        tooltip={buildTooltip(t("settings.languageDetection.priorityHint"), "top", {
-                          align: "start",
-                          disabled: sectionDialogOpen(),
-                        })}
-                        class="shrink-0 items-center justify-center p-1"
-                      >
-                        <Icon name="info" tone="muted-foreground" class="size-4" />
-                      </View>
-                    </If>
-                  </View>
-                }
+            <Scroll class="min-h-0 flex-1">
+              <View
+                role="navigation"
+                accessibilityLabel={t("settings.navLabel")}
+                class="gap-5 px-2.5 py-3"
               >
-                <Breadcrumb
-                  testID={headerBreadcrumb()!.testID}
-                  accessibilityLabel={headerBreadcrumb()!.accessibilityLabel}
-                  items={headerBreadcrumb()!.items}
-                />
-              </If>
-              <If when={showDetectionAddButton()}>
-                <AddChannelHeaderButton
-                  testID="settings-detection-add"
-                  label={t("settings.languageDetection.addChannel")}
-                  disabled={detectionAddBusy()}
-                  onRef={(node) => {
-                    detectionAddButtonNode = node;
-                  }}
-                  onPress={() => openDetectionAddDialog?.()}
-                />
-              </If>
-              <If when={showOcrAddButton()}>
-                <AddChannelHeaderButton
-                  testID="settings-ocr-add"
-                  label={t("settings.ocr.addChannel")}
-                  disabled={ocrAddBusy()}
-                  onRef={(node) => {
-                    ocrAddButtonNode = node;
-                  }}
-                  onPress={() => openOcrAddDialog?.()}
-                />
-              </If>
-              <If when={showTtsAddButton()}>
-                <AddChannelHeaderButton
-                  testID="settings-tts-add"
-                  label={t("settings.tts.addChannel")}
-                  disabled={ttsAddBusy()}
-                  onRef={(node) => {
-                    ttsAddButtonNode = node;
-                  }}
-                  onPress={() => openTtsAddDialog?.()}
-                />
-              </If>
-            </View>
+                <Each of={SETTINGS_GROUPS} key={(group) => group.id}>
+                  {(group) => (
+                    <View class="gap-1.5">
+                      <Text
+                        testID={`settings-group-${group().id}`}
+                        role="header"
+                        class="min-w-0 truncate px-2 text-xs font-medium text-muted-foreground"
+                      >
+                        {t(group().labelKey)}
+                      </Text>
+                      <View class="gap-0.5">
+                        <Each of={group().sections} key={(item) => item.id}>
+                          {(item) => {
+                            const isSelected = () => selectedSection() === item().id;
+                            return (
+                              <Button
+                                testID={`settings-nav-${item().id}`}
+                                variant="nav"
+                                size="nav"
+                                selected={isSelected()}
+                                label={t(item().labelKey)}
+                                onPress={() => {
+                                  const apply = () => {
+                                    selectedSection.set(item().id);
+                                    selectedOcrChannel.set(null);
+                                    selectedDetectionChannel.set(null);
+                                    selectedTtsChannel.set(null);
+                                    sectionDialogOpen.set(false);
+                                  };
+                                  if (
+                                    item().id !== selectedSection() &&
+                                    selectedSection() === "wordbook" &&
+                                    wordbookDirty()
+                                  ) {
+                                    pendingWordbookLeave.set(apply);
+                                    return;
+                                  }
+                                  apply();
+                                }}
+                                class="w-full"
+                              />
+                            );
+                          }}
+                        </Each>
+                      </View>
+                    </View>
+                  )}
+                </Each>
+              </View>
+            </Scroll>
           </View>
-          <Scroll class="min-h-0 flex-1">
-            <View
-              class={`mx-auto w-full max-w-4xl ${compact() ? "gap-4 px-4 pb-4 pt-1" : "gap-5 px-6 pb-6 pt-2"}`}
-            >
-              <If when={selectedSection() === "general"}>
-                <GeneralSection compact={compact()} os={currentOs()} />
-              </If>
-              <If when={selectedSection() === "appearance"}>
-                <AppearanceSection compact={compact()} />
-              </If>
-              <If when={selectedSection() === "shortcuts"}>
-                <ShortcutsSection
-                  compact={compact()}
-                  platformOs={currentOs()}
-                  shortcuts={props.shortcuts}
-                />
-              </If>
-              <If when={selectedSection() === "language-detection"}>
-                <LanguageDetectionSection
-                  compact={compact()}
-                  selectedChannel={selectedDetectionChannel()}
-                  onSelectChannel={(channel) => selectedDetectionChannel.set(channel)}
-                  onManageModels={props.onNavigateToModels}
-                  getAddButtonRef={() => detectionAddButtonNode}
-                  onRegisterAddTrigger={(open) => {
-                    openDetectionAddDialog = open;
-                    return () => {
-                      if (openDetectionAddDialog === open) openDetectionAddDialog = null;
-                    };
-                  }}
-                  onAddBusyChange={(busy) => detectionAddBusy.set(busy)}
-                  onDialogOpenChange={(open) => sectionDialogOpen.set(open)}
-                />
-              </If>
-              <If when={selectedSection() === "ocr"}>
-                <OcrSection
-                  compact={compact()}
-                  platformOs={currentOs()}
-                  selectedChannel={selectedOcrChannel()}
-                  onSelectChannel={(channel) => selectedOcrChannel.set(channel)}
-                  onManageModels={props.onNavigateToModels}
-                  getAddButtonRef={() => ocrAddButtonNode}
-                  onRegisterAddTrigger={(open) => {
-                    openOcrAddDialog = open;
-                    return () => {
-                      if (openOcrAddDialog === open) openOcrAddDialog = null;
-                    };
-                  }}
-                  onAddBusyChange={(busy) => ocrAddBusy.set(busy)}
-                  onDialogOpenChange={(open) => sectionDialogOpen.set(open)}
-                />
-              </If>
-              <If when={selectedSection() === "tts"}>
-                <TtsSection
-                  compact={compact()}
-                  selectedChannel={selectedTtsChannel()}
-                  onSelectChannel={(channel) => selectedTtsChannel.set(channel)}
-                  getAddButtonRef={() => ttsAddButtonNode}
-                  onRegisterAddTrigger={(open) => {
-                    openTtsAddDialog = open;
-                    return () => {
-                      if (openTtsAddDialog === open) openTtsAddDialog = null;
-                    };
-                  }}
-                  onAddBusyChange={(busy) => ttsAddBusy.set(busy)}
-                  onDialogOpenChange={(open) => sectionDialogOpen.set(open)}
-                />
-              </If>
+        }
+        detail={
+          <View testID="settings-detail" class="min-w-0 flex-1 bg-background">
+            <View class="shrink-0">
+              <View
+                class={`mx-auto h-14 w-full max-w-4xl flex-row items-center justify-between gap-3 ${headerPaddingClass()}`}
+              >
+                <If
+                  when={headerBreadcrumb() !== null}
+                  else={
+                    <View class="min-w-0 flex-1 flex-row items-center gap-1.5">
+                      <Text
+                        role="header"
+                        class="min-w-0 shrink truncate text-lg font-semibold text-foreground"
+                      >
+                        {t(activeSectionLabelKey())}
+                      </Text>
+                      <If when={selectedSection() === "ocr"}>
+                        <View
+                          testID="settings-ocr-priority-info"
+                          accessibilityLabel={t("settings.ocr.priorityHint")}
+                          tooltip={buildTooltip(t("settings.ocr.priorityHint"), "top", {
+                            align: "start",
+                            disabled: sectionDialogOpen(),
+                          })}
+                          class="shrink-0 items-center justify-center p-1"
+                        >
+                          <Icon name="info" tone="muted-foreground" class="size-4" />
+                        </View>
+                      </If>
+                      <If when={selectedSection() === "tts"}>
+                        <View
+                          testID="settings-tts-priority-info"
+                          accessibilityLabel={t("settings.tts.priorityHint")}
+                          tooltip={buildTooltip(t("settings.tts.priorityHint"), "top", {
+                            align: "start",
+                            disabled: sectionDialogOpen(),
+                          })}
+                          class="shrink-0 items-center justify-center p-1"
+                        >
+                          <Icon name="info" tone="muted-foreground" class="size-4" />
+                        </View>
+                      </If>
+                      <If when={selectedSection() === "language-detection"}>
+                        <View
+                          testID="settings-detection-priority-info"
+                          accessibilityLabel={t("settings.languageDetection.priorityHint")}
+                          tooltip={buildTooltip(
+                            t("settings.languageDetection.priorityHint"),
+                            "top",
+                            {
+                              align: "start",
+                              disabled: sectionDialogOpen(),
+                            },
+                          )}
+                          class="shrink-0 items-center justify-center p-1"
+                        >
+                          <Icon name="info" tone="muted-foreground" class="size-4" />
+                        </View>
+                      </If>
+                    </View>
+                  }
+                >
+                  <Breadcrumb
+                    testID={headerBreadcrumb()!.testID}
+                    accessibilityLabel={headerBreadcrumb()!.accessibilityLabel}
+                    items={headerBreadcrumb()!.items}
+                  />
+                </If>
+                <If when={showDetectionAddButton()}>
+                  <AddChannelHeaderButton
+                    testID="settings-detection-add"
+                    label={t("settings.languageDetection.addChannel")}
+                    disabled={detectionAddBusy()}
+                    onRef={(node) => {
+                      detectionAddButtonNode = node;
+                    }}
+                    onPress={() => openDetectionAddDialog?.()}
+                  />
+                </If>
+                <If when={showOcrAddButton()}>
+                  <AddChannelHeaderButton
+                    testID="settings-ocr-add"
+                    label={t("settings.ocr.addChannel")}
+                    disabled={ocrAddBusy()}
+                    onRef={(node) => {
+                      ocrAddButtonNode = node;
+                    }}
+                    onPress={() => openOcrAddDialog?.()}
+                  />
+                </If>
+                <If when={showTtsAddButton()}>
+                  <AddChannelHeaderButton
+                    testID="settings-tts-add"
+                    label={t("settings.tts.addChannel")}
+                    disabled={ttsAddBusy()}
+                    onRef={(node) => {
+                      ttsAddButtonNode = node;
+                    }}
+                    onPress={() => openTtsAddDialog?.()}
+                  />
+                </If>
+              </View>
             </View>
-          </Scroll>
-        </View>
-      }
-    />
+            <Scroll class="min-h-0 flex-1">
+              <View
+                class={`mx-auto w-full max-w-4xl ${compact() ? "gap-4 px-4 pb-4 pt-1" : "gap-5 px-6 pb-6 pt-2"}`}
+              >
+                <If when={selectedSection() === "general"}>
+                  <GeneralSection compact={compact()} os={currentOs()} />
+                </If>
+                <If when={selectedSection() === "appearance"}>
+                  <AppearanceSection compact={compact()} />
+                </If>
+                <If when={selectedSection() === "shortcuts"}>
+                  <ShortcutsSection
+                    compact={compact()}
+                    platformOs={currentOs()}
+                    shortcuts={props.shortcuts}
+                  />
+                </If>
+                <If when={selectedSection() === "language-detection"}>
+                  <LanguageDetectionSection
+                    compact={compact()}
+                    selectedChannel={selectedDetectionChannel()}
+                    onSelectChannel={(channel) => selectedDetectionChannel.set(channel)}
+                    onManageModels={props.onNavigateToModels}
+                    getAddButtonRef={() => detectionAddButtonNode}
+                    onRegisterAddTrigger={(open) => {
+                      openDetectionAddDialog = open;
+                      return () => {
+                        if (openDetectionAddDialog === open) openDetectionAddDialog = null;
+                      };
+                    }}
+                    onAddBusyChange={(busy) => detectionAddBusy.set(busy)}
+                    onDialogOpenChange={(open) => sectionDialogOpen.set(open)}
+                  />
+                </If>
+                <If when={selectedSection() === "ocr"}>
+                  <OcrSection
+                    compact={compact()}
+                    platformOs={currentOs()}
+                    selectedChannel={selectedOcrChannel()}
+                    onSelectChannel={(channel) => selectedOcrChannel.set(channel)}
+                    onManageModels={props.onNavigateToModels}
+                    getAddButtonRef={() => ocrAddButtonNode}
+                    onRegisterAddTrigger={(open) => {
+                      openOcrAddDialog = open;
+                      return () => {
+                        if (openOcrAddDialog === open) openOcrAddDialog = null;
+                      };
+                    }}
+                    onAddBusyChange={(busy) => ocrAddBusy.set(busy)}
+                    onDialogOpenChange={(open) => sectionDialogOpen.set(open)}
+                  />
+                </If>
+                <If when={selectedSection() === "tts"}>
+                  <TtsSection
+                    compact={compact()}
+                    selectedChannel={selectedTtsChannel()}
+                    onSelectChannel={(channel) => selectedTtsChannel.set(channel)}
+                    getAddButtonRef={() => ttsAddButtonNode}
+                    onRegisterAddTrigger={(open) => {
+                      openTtsAddDialog = open;
+                      return () => {
+                        if (openTtsAddDialog === open) openTtsAddDialog = null;
+                      };
+                    }}
+                    onAddBusyChange={(busy) => ttsAddBusy.set(busy)}
+                    onDialogOpenChange={(open) => sectionDialogOpen.set(open)}
+                  />
+                </If>
+                <If when={selectedSection() === "wordbook"}>
+                  <WordbookSection
+                    compact={compact()}
+                    onDirtyChange={(dirty) => wordbookDirty.set(dirty)}
+                  />
+                </If>
+              </View>
+            </Scroll>
+          </View>
+        }
+      />
+      <ConfirmDialog
+        testID="settings-wordbook-discard"
+        open={pendingWordbookLeave() !== null}
+        title={t("settings.wordbook.discardTitle")}
+        description={t("settings.wordbook.discardDescription")}
+        confirmLabel={t("settings.wordbook.discardConfirm")}
+        onOpenChange={(open) => {
+          if (!open) pendingWordbookLeave.set(null);
+        }}
+        onClose={() => {
+          if (wordbookDiscardConfirmed) wordbookDiscardConfirmed = false;
+        }}
+        onConfirm={confirmWordbookDiscard}
+      />
+    </>
   );
 }

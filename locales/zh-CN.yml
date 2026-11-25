@@ -48,6 +48,7 @@ settings:
     languageDetection: 语言检测
     ocr: OCR
     tts: 语音合成
+    wordbook: 生词本
   theme:
     title: 主题
   appearance:
@@ -331,6 +332,36 @@ settings:
       preferenceInvalid: 请选择受支持的语言。
       preferencesIdentical: 母语与目标语言必须不同。
   wordbook:
+    provider: Anki
+    enable: 启用 Anki
+    prerequisite: 请先启动 Anki Desktop 并启用 AnkiConnect，再测试连接。
+    key: API 密钥
+    keyPlaceholder: 可选
+    keyHelp: 保存的密钥只留在这台电脑上，且不会加密。
+    testConnection: 测试连接
+    checking: 正在测试连接…
+    profile: 用户配置
+    deck: 牌组
+    noteType: 笔记类型
+    sourceField: 来源字段
+    translationField: 译文字段
+    save: 保存
+    saved: 已保存
+    choose: 请选择
+    incompatible: 此笔记类型不能使用，请另选一个。
+    discardTitle: 放弃未保存的生词本更改？
+    discardDescription: 尚未保存的 Anki 选择会丢失。
+    discardConfirm: 放弃
+    removeKey: 移除已保存的密钥
+    failure:
+      unreachable: 请启动 Anki Desktop，并确认已启用 AnkiConnect。
+      unauthorized: 请检查 API 密钥。
+      forbidden: 请检查 API 密钥和 AnkiConnect 的访问权限。
+      unavailable: 请确认已安装并更新 AnkiConnect。
+      noCollection: 请打开一个 Anki 用户配置，然后重新测试连接。
+      staleSession: 请重新测试连接。
+      malformed: Anki 返回了无法识别的结果，请重新测试连接。
+      timeout: Anki 没有响应，请重新测试连接。
     error:
       storageReadFailed: 无法读取已保存的生词本设置。
       storageMalformed: 已保存的生词本设置无法解析。

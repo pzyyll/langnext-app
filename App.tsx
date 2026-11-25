@@ -8,6 +8,7 @@ import { loadModelsState } from "./features/models/store";
 import { ocrSettingsStore } from "./features/ocr/settings";
 import { cleanupTtsPlaybackFiles } from "./features/tts/playback";
 import { ttsSettingsStore } from "./features/tts/settings";
+import { wordbookSettingsStore } from "./features/wordbook/settings";
 import { loadSkippedNoticeDismissal } from "./features/presets/skipped-notice";
 import { presetsStore } from "./features/presets/store";
 import { loadQuickTranslatePreferences } from "./features/quick-translate/preferences";
@@ -44,6 +45,7 @@ async function startApp() {
       languageDetectionStore.load(),
       ocrSettingsStore.load(),
       ttsSettingsStore.load(),
+      wordbookSettingsStore.load(),
       loadSplitRailWidths(),
     ]);
     mount(AppShell);

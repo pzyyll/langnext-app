@@ -1,3 +1,4 @@
+import { signal, Storage } from "nsh";
 import { t } from "nsh/i18n";
 import { createLogger } from "../../services/log";
 
@@ -193,11 +194,21 @@ export function createWordbookSettingsStore(storage: WordbookSettingsStorage) {
   let target: WordbookAnkiTarget | null = null;
   let enabled = false;
   let error: WordbookSettingsError | null = null;
+  const targetSignal = signal<WordbookAnkiTarget | null>(null);
+  const enabledSignal = signal(false);
+  const errorSignal = signal<WordbookSettingsError | null>(null);
+
+  function publish() {
+    targetSignal.set(target ? copyTarget(target) : null);
+    enabledSignal.set(enabled);
+    errorSignal.set(error ? { ...error } : null);
+  }
 
   function clearTo(nextError: WordbookSettingsError | null) {
     target = null;
     enabled = false;
     error = nextError;
+    publish();
   }
 
   function snapshot(): WordbookSettingsSnapshot {
@@ -241,6 +252,7 @@ export function createWordbookSettingsStore(storage: WordbookSettingsStorage) {
     target = copyTarget(next);
     enabled = nextEnabled;
     error = null;
+    publish();
     return { ok: true };
   }
 
@@ -270,7 +282,15 @@ export function createWordbookSettingsStore(storage: WordbookSettingsStorage) {
         const secret = await readCredential(parsed.target.credentialRef);
         if (secret === null) error = errorOf("credential_unreadable");
       }
+      publish();
       return snapshot();
+    },
+    view(): WordbookSettingsSnapshot {
+      return {
+        target: targetSignal(),
+        enabled: enabledSignal(),
+        error: errorSignal(),
+      };
     },
     async save(
       next: WordbookAnkiTarget,
@@ -311,10 +331,15 @@ export function createWordbookSettingsStore(storage: WordbookSettingsStorage) {
         const secret = await readCredential(target.credentialRef);
         if (secret === null) {
           error = errorOf("credential_unreadable");
+          publish();
           return failure("credential_unreadable");
         }
       }
       return write(target, true);
+    },
+    async readApiKey(): Promise<string | null> {
+      if (!target?.credentialRef) return null;
+      return readCredential(target.credentialRef);
     },
     activeBinding(): WordbookAnkiTarget | null {
       if (!enabled || !target || error || !complete(target)) return null;
@@ -322,3 +347,6 @@ export function createWordbookSettingsStore(storage: WordbookSettingsStorage) {
     },
   };
 }
+
+/** The Wordbook binding used by Settings and Quick Translate. */
+export const wordbookSettingsStore = createWordbookSettingsStore(Storage);

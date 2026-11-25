@@ -3155,3 +3155,232 @@ test("tts google: cancelling the overrides dialog keeps the page draft", async (
   await app.waitUntil(() => !app.shows("id:settings-tts-google-override-dialog"));
   expect(app.shows("id:settings-tts-google-override-fr")).toBe(false);
 });
+
+test("wordbook page: opens Anki settings under Integrations without calling Anki", async () => {
+  const app = await open(APP_ENTRY, {
+    ...viewport,
+    storage: { "settings.language": "en" },
+  });
+  await app.press("id:nav-settings");
+  await app.waitFor("id:settings-page");
+  expect(app.shows("id:nav-wordbook")).toBe(false);
+  expect(app.shows("id:settings-group-integrations")).toBe(true);
+  const labels = app.texts();
+  expect(labels.indexOf("Wordbook")).toBeGreaterThan(labels.indexOf("Integrations"));
+  expect(labels.indexOf("Wordbook")).toBeGreaterThan(labels.indexOf("Text-to-Speech"));
+  await app.press("id:settings-nav-wordbook");
+  await app.waitFor("id:settings-wordbook-card");
+  expect(app.texts()).toContain("Wordbook");
+  expect(app.texts()).toContain("Anki");
+  expect(app.texts()).not.toContain("Eudic");
+  expect(app.shows("role:switch[Enable Anki]")).toBe(true);
+  expect(app.storage()["settings.wordbook.anki.v1"]).toBeUndefined();
+  expect(app.requests()).toEqual([]);
+});
+
+const ANKI_URL = "http://127.0.0.1:8765/api/v1";
+
+function ankiNetwork() {
+  return {
+    ["POST " + ANKI_URL]: (request: { body?: string }) => {
+      const body = JSON.parse(request.body ?? "{}") as {
+        id?: unknown;
+        method?: string;
+      };
+      const id = body.id;
+      if (body.method === "collection.get") {
+        return {
+          body: {
+            jsonrpc: "2.0",
+            id,
+            result: { profile: "User 1", session: "sess-9", scheduler: "fsrs" },
+          },
+        };
+      }
+      if (body.method === "decks.list") {
+        return {
+          body: {
+            jsonrpc: "2.0",
+            id,
+            result: [
+              { id: "1550000000000", name: "Vocabulary", kind: "normal" },
+              { id: "1550000000001", name: "Filtered", kind: "filtered" },
+            ],
+          },
+        };
+      }
+      if (body.method === "noteTypes.list") {
+        return {
+          body: {
+            jsonrpc: "2.0",
+            id,
+            result: [{ id: "1550000000003", name: "基础" }],
+          },
+        };
+      }
+      if (body.method === "noteTypes.get") {
+        return {
+          body: {
+            jsonrpc: "2.0",
+            id,
+            result: {
+              id: "1550000000003",
+              name: "基础",
+              kind: "normal",
+              fields: [{ name: "正面" }, { name: "背面" }, { name: "例句" }],
+              templates: [
+                { name: "卡片 1", questionHtml: "{{正面}}", answerHtml: "{{背面}}", deck: null },
+              ],
+            },
+          },
+        };
+      }
+      return {
+        status: 500,
+        body: { jsonrpc: "2.0", id, error: { code: -32601, message: "Method not found." } },
+      };
+    },
+  };
+}
+
+test("wordbook page: saves a tested Anki target and restores it without another call", async () => {
+  const app = await open(APP_ENTRY, {
+    ...viewport,
+    storage: { "settings.language": "en" },
+    network: ankiNetwork(),
+  });
+  await app.press("id:nav-settings");
+  await app.press("id:settings-nav-wordbook");
+  await app.waitFor("id:settings-wordbook-check");
+  expect(app.requests()).toEqual([]);
+  await app.press("id:settings-wordbook-check");
+  await app.waitFor("text:User 1");
+  await app.press("id:settings-wordbook-deck");
+  await app.press("role:option[Vocabulary]");
+  await app.press("id:settings-wordbook-note-type");
+  await app.press("role:option[基础]");
+  await app.waitFor("text:正面");
+  await app.press("id:settings-wordbook-translation");
+  await app.press("role:option[背面]");
+  expect(app.enabled("id:settings-wordbook-save")).toBe(true);
+  await app.press("id:settings-wordbook-save");
+  await app.waitUntil(() => app.storage()["settings.wordbook.anki.v1"] !== undefined);
+  await app.press("id:settings-wordbook-enabled");
+  await app.waitUntil(() => {
+    const raw = app.storage()["settings.wordbook.anki.v1"];
+    return typeof raw === "string" && raw.includes('"enabled":true');
+  });
+  const calls = app.requests().length;
+  await app.press("id:settings-nav-general");
+  await app.press("id:settings-nav-wordbook");
+  expect(app.texts()).toContain("Vocabulary");
+  expect(app.texts()).toContain("基础");
+  expect(app.texts()).toContain("正面");
+  expect(app.texts()).toContain("背面");
+  expect(app.requests()).toHaveLength(calls);
+  const stored = JSON.parse(app.storage()["settings.wordbook.anki.v1"] ?? "") as Record<
+    string,
+    unknown
+  >;
+  expect(stored.session).toBeUndefined();
+  expect(JSON.stringify(stored)).not.toContain("sess-9");
+});
+
+test("wordbook page: asks before leaving unsaved Anki choices", async () => {
+  const app = await open(APP_ENTRY, {
+    ...viewport,
+    storage: { "settings.language": "en" },
+    network: ankiNetwork(),
+  });
+  await app.press("id:nav-settings");
+  await app.press("id:settings-nav-wordbook");
+  await app.press("id:settings-wordbook-check");
+  await app.waitFor("text:User 1");
+  await app.press("id:settings-wordbook-deck");
+  await app.press("role:option[Vocabulary]");
+  await app.press("id:settings-nav-general");
+  await app.waitFor("id:settings-wordbook-discard");
+  await app.press("id:settings-wordbook-discard >> role:button[Cancel]");
+  await app.waitUntil(() => !app.shows("id:settings-wordbook-discard"));
+  expect(app.shows("id:settings-wordbook-card")).toBe(true);
+  expect(app.texts()).toContain("Vocabulary");
+  expect(app.storage()["settings.wordbook.anki.v1"]).toBeUndefined();
+
+  await app.press("id:nav-models");
+  await app.waitFor("id:settings-wordbook-discard");
+  await app.press("id:settings-wordbook-discard >> role:button[Discard]");
+  await app.waitFor("id:models-page");
+  expect(app.storage()["settings.wordbook.anki.v1"]).toBeUndefined();
+});
+
+test("wordbook page: reports a failed connection without saving", async () => {
+  const app = await open(APP_ENTRY, {
+    ...viewport,
+    storage: { "settings.language": "en" },
+    network: { ["POST " + ANKI_URL]: { error: "offline" } },
+  });
+  await app.press("id:nav-settings");
+  await app.press("id:settings-nav-wordbook");
+  await app.press("id:settings-wordbook-check");
+  await app.waitFor("text:Start Anki Desktop and check that AnkiConnect is enabled.");
+  expect(app.storage()["settings.wordbook.anki.v1"]).toBeUndefined();
+  expect(app.shows("id:settings-wordbook-deck")).toBe(false);
+});
+
+test("wordbook page: keeps a masked key out of the binding and can remove it", async () => {
+  const app = await open(APP_ENTRY, {
+    ...viewport,
+    storage: { "settings.language": "en" },
+    network: ankiNetwork(),
+  });
+  await app.press("id:nav-settings");
+  await app.press("id:settings-nav-wordbook");
+  await app.type("id:settings-wordbook-key", "test-key");
+  await app.press("id:settings-wordbook-check");
+  await app.waitFor("text:User 1");
+  await app.press("id:settings-wordbook-deck");
+  await app.press("role:option[Vocabulary]");
+  await app.press("id:settings-wordbook-note-type");
+  await app.press("role:option[基础]");
+  await app.waitFor("text:正面");
+  await app.press("id:settings-wordbook-translation");
+  await app.press("role:option[背面]");
+  await app.press("id:settings-wordbook-save");
+  await app.waitUntil(() => app.storage()["settings.wordbook.anki.v1"] !== undefined);
+  const binding = JSON.parse(app.storage()["settings.wordbook.anki.v1"] ?? "") as {
+    credentialRef?: string;
+  };
+  const ref = binding.credentialRef ?? "";
+  expect(ref.length).toBeGreaterThan(0);
+  expect(JSON.stringify(binding)).not.toContain("test-key");
+  expect(app.storage()["settings.wordbook.anki.credentials." + ref]).toBe("test-key");
+  expect(app.texts()).not.toContain("test-key");
+  await app.press("id:settings-nav-general");
+  await app.press("id:settings-nav-wordbook");
+  expect(app.texts()).not.toContain("test-key");
+  await app.press("id:settings-wordbook-check");
+  await app.waitFor("text:User 1");
+  await app.press("id:settings-wordbook-deck");
+  await app.press("role:option[Vocabulary]");
+  await app.press("id:settings-wordbook-note-type");
+  await app.press("role:option[基础]");
+  await app.waitFor("text:正面");
+  await app.press("id:settings-wordbook-translation");
+  await app.press("role:option[背面]");
+  await app.press("id:settings-wordbook-save");
+  await app.waitUntil(() => {
+    const next = JSON.parse(app.storage()["settings.wordbook.anki.v1"] ?? "") as {
+      credentialRef?: string;
+    };
+    return next.credentialRef === ref;
+  });
+  expect(app.storage()["settings.wordbook.anki.credentials." + ref]).toBe("test-key");
+  await app.press("id:settings-wordbook-remove-key");
+  await app.waitUntil(
+    () => app.storage()["settings.wordbook.anki.credentials." + ref] === undefined,
+  );
+  const removed = JSON.parse(app.storage()["settings.wordbook.anki.v1"] ?? "") as {
+    credentialRef?: string;
+  };
+  expect(removed.credentialRef).toBeUndefined();
+});

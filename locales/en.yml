@@ -48,6 +48,7 @@ settings:
     languageDetection: Language Detection
     ocr: OCR
     tts: Text-to-Speech
+    wordbook: Wordbook
   theme:
     title: Theme
   appearance:
@@ -331,6 +332,36 @@ settings:
       preferenceInvalid: Choose a supported language.
       preferencesIdentical: The native language and the target language must differ.
   wordbook:
+    provider: Anki
+    enable: Enable Anki
+    prerequisite: Start Anki Desktop with AnkiConnect before testing the connection.
+    key: API key
+    keyPlaceholder: Optional
+    keyHelp: A saved key stays on this computer and is not encrypted.
+    testConnection: Test connection
+    checking: Checking the connection…
+    profile: Profile
+    deck: Deck
+    noteType: Note type
+    sourceField: Source field
+    translationField: Translation field
+    save: Save
+    saved: Saved
+    choose: Choose
+    incompatible: This note type cannot be used. Choose another.
+    discardTitle: Discard unsaved Wordbook edits?
+    discardDescription: The Anki choices you have not saved will be lost.
+    discardConfirm: Discard
+    removeKey: Remove saved key
+    failure:
+      unreachable: Start Anki Desktop and check that AnkiConnect is enabled.
+      unauthorized: Check the API key.
+      forbidden: Check the API key and AnkiConnect access.
+      unavailable: Check that AnkiConnect is installed and up to date.
+      noCollection: Open an Anki profile, then test the connection again.
+      staleSession: Test the connection again.
+      malformed: Anki sent an unexpected reply. Test the connection again.
+      timeout: Anki did not answer. Test the connection again.
     error:
       storageReadFailed: Could not read the saved Wordbook settings.
       storageMalformed: The saved Wordbook settings are unreadable.

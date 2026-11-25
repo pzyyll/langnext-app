@@ -15,3 +15,17 @@ The History button opens a recent-action menu in the Quick Translate window. Eac
 | Selected history restores text and result cards | Replace content together and return focus to the source field; use the normal window content fit | Same                    |
 
 History has no drag, live updates, or persistent selection in the menu.
+
+## Wordbook
+
+Settings → Integrations → Wordbook configures one Anki destination. It does not list saved notes, and it has no main sidebar entry.
+
+### Motion Inventory
+
+| Change | Motion | Reduced motion |
+| --- | --- | --- |
+| Test Connection, Save, and enable switch press | Shared `pressScale` and switch thumb feedback | No transition or travel |
+| Deck, note type, and field menus | Shared `popup` and `popupHidden` tokens | No transition or travel |
+| Connection status, field choices, and save result | Replace the status text in place. No layout animation. | Same |
+
+Wordbook has no drag, live updates, or a new route transition.
