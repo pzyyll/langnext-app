@@ -4413,8 +4413,8 @@ test("back-translation: keyboard Tab and Enter/Space open, speak, copy, retry, a
   await app.keyboard.press("enter");
   await app.waitFor("id:quick-translate-card-card-1 >> id:quick-translate-back-translate");
 
-  // Tab from source input past source actions, card header controls, and upper speak/copy to the back-translate pill.
-  for (let step = 0; step < 11; step += 1) {
+  // Tab from source input past source actions, card header controls, aligned result preview, and upper speak/copy to the back-translate pill.
+  for (let step = 0; step < 12; step += 1) {
     await app.keyboard.press("tab");
   }
   await app.keyboard.press("space");
@@ -4964,4 +4964,170 @@ test("sentence highlight markdown: highlights formatted spans across TextView bl
     fragBg,
   );
   expect(aiCalls).toBe(1);
+});
+
+test("sentence highlight keyboard: tabs to eligible results, steps Left/Right with live announcement, clears on blur, and skips unmapped results", async () => {
+  let replyMode: "aligned" | "unmapped" | "markdown" = "aligned";
+  const app = await open(POPUP_HARNESS, {
+    ...viewport,
+    storage: seedWithPresets([makePreset()]),
+    network: {
+      "POST https://api.openai.com/v1/chat/completions": () => ({
+        status: 200,
+        body: {
+          choices: [
+            {
+              message: {
+                content:
+                  replyMode === "aligned"
+                    ? "Use NSH today. Second draft works."
+                    : replyMode === "markdown"
+                      ? "**Use NSH** today. Second _draft_ works."
+                      : "Completely different first line.\nUnrelated second.\nExtra third.",
+              },
+            },
+          ],
+        },
+      }),
+    },
+  });
+
+  await app.waitFor("id:quick-translate-source");
+  await app.type("id:quick-translate-source", "Use NSH today. Second draft works.");
+  await app.keyboard.press("enter");
+  await app.waitFor("id:quick-translate-card-card-1 >> id:quick-translate-result-text");
+
+  const preview = "id:quick-translate-card-card-1 >> id:quick-translate-result-preview";
+  const announcement = "id:quick-translate-sentence-announcement";
+  expect(app.shows(preview)).toBe(true);
+  expect(app.accessibility(preview)?.label).toBe("Translated result");
+  expect(app.accessibility(announcement)?.label ?? "").toBe("");
+
+  // Hovering alone updates highlight without firing screen-reader live announcements.
+  await app.hover(
+    "id:quick-translate-card-card-1 >> id:quick-translate-result-text >> text:Use NSH today.",
+  );
+  const resultBg = app.spanStyle(
+    "id:quick-translate-card-card-1 >> id:result-seg-0",
+  ).backgroundColor;
+  expect(resultBg).toBeTruthy();
+  expect(app.accessibility(announcement)?.label ?? "").toBe("");
+  await app.hover("id:quick-translate-source");
+  expect(
+    app.spanStyle("id:quick-translate-card-card-1 >> id:result-seg-0").backgroundColor,
+  ).toBeUndefined();
+
+  // Tab from source editor stops on eligible result preview wrapper; ArrowRight highlights first sentence.
+  await app.type("id:quick-translate-source", "");
+  let reachedPreview = false;
+  for (let i = 0; i < 16; i += 1) {
+    await app.keyboard.press("tab");
+    await app.keyboard.press("arrowright");
+    if (app.accessibility(preview)?.value) {
+      reachedPreview = true;
+      break;
+    }
+  }
+  expect(reachedPreview).toBe(true);
+  expect(
+    app.spanStyle("id:quick-translate-card-card-1 >> id:result-seg-0").backgroundColor,
+  ).toEqual(resultBg);
+  expect(app.spanStyle("id:quick-translate-source >> text:Use NSH today.").backgroundColor).toEqual(
+    resultBg,
+  );
+  expect(app.accessibility(preview)?.value).toBe("Sentence 1 of 2: Use NSH today.");
+  expect(app.accessibility(announcement)?.label).toBe("Sentence 1 of 2: Use NSH today.");
+
+  // ArrowRight advances to second sentence; ArrowLeft returns to first.
+  await app.keyboard.press("arrowright");
+  expect(
+    app.spanStyle("id:quick-translate-card-card-1 >> id:result-seg-1").backgroundColor,
+  ).toEqual(resultBg);
+  expect(
+    app.spanStyle("id:quick-translate-source >> text:Second draft works.").backgroundColor,
+  ).toEqual(resultBg);
+  expect(app.accessibility(preview)?.value).toBe("Sentence 2 of 2: Second draft works.");
+  expect(app.accessibility(announcement)?.label).toBe("Sentence 2 of 2: Second draft works.");
+
+  await app.keyboard.press("arrowleft");
+  expect(app.spanStyle("id:quick-translate-source >> text:Use NSH today.").backgroundColor).toEqual(
+    resultBg,
+  );
+  expect(app.accessibility(preview)?.value).toBe("Sentence 1 of 2: Use NSH today.");
+
+  // Tabbing away blurs wrapper and clears keyboard preview & value, and ArrowRight no longer activates it.
+  await app.keyboard.press("tab");
+  expect(
+    app.spanStyle("id:quick-translate-source >> text:Use NSH today.").backgroundColor,
+  ).toBeUndefined();
+  expect(app.accessibility(preview)?.value ?? "").toBe("");
+  await app.keyboard.press("arrowright");
+  expect(
+    app.spanStyle("id:quick-translate-source >> text:Use NSH today.").backgroundColor,
+  ).toBeUndefined();
+
+  // Keyboard traversal works in Markdown mode too, and Enter inside source still submits.
+  replyMode = "markdown";
+  await app.press("id:harness-toggle-markdown");
+  await app.type("id:quick-translate-source", "");
+  await app.keyboard.press("enter");
+  await app.waitFor("id:quick-translate-card-card-1 >> id:result-seg-1");
+  let reachedMarkdownPreview = false;
+  for (let i = 0; i < 16; i += 1) {
+    await app.keyboard.press("tab");
+    await app.keyboard.press("arrowright");
+    if (app.accessibility(preview)?.value) {
+      reachedMarkdownPreview = true;
+      break;
+    }
+  }
+  expect(reachedMarkdownPreview).toBe(true);
+  expect(app.spanStyle("id:quick-translate-source >> text:Use NSH today.").backgroundColor).toEqual(
+    resultBg,
+  );
+
+  // Unmapped results expose no focusable result preview stop.
+  replyMode = "unmapped";
+  await app.press("id:harness-toggle-markdown");
+  await app.clear("id:quick-translate-source");
+  await app.waitFor("id:quick-translate-card-card-1 >> id:quick-translate-result-text", {
+    state: "gone",
+  });
+  await app.type("id:quick-translate-source", "Alpha source 123.");
+  await app.keyboard.press("enter");
+  await app.waitUntil(
+    () =>
+      app.shows("id:quick-translate-card-card-1 >> id:quick-translate-result-text") &&
+      app.texts().some((line) => line.includes("Completely different first line.")),
+  );
+  expect(app.shows(preview)).toBe(false);
+});
+
+test("sentence highlight keyboard: localizes zh-CN preview label and live sentence announcement", async () => {
+  const preview = "id:quick-translate-card-card-1 >> id:quick-translate-result-preview";
+  const announcement = "id:quick-translate-sentence-announcement";
+  const zhApp = await open(POPUP_HARNESS, {
+    ...viewport,
+    storage: seedWithPresets([makePreset()], {
+      "settings.language": "zh-CN",
+    }),
+    network: {
+      "POST https://api.openai.com/v1/chat/completions": {
+        status: 200,
+        body: { choices: [{ message: { content: "今天使用 NSH。第二句草稿有效。" } }] },
+      },
+    },
+  });
+  await zhApp.waitFor("id:quick-translate-source");
+  await zhApp.type("id:quick-translate-source", "First NSH sentence. Second draft.");
+  await zhApp.keyboard.press("enter");
+  await zhApp.waitFor(preview);
+  expect(zhApp.accessibility(preview)?.label).toBe("译文内容");
+  for (let i = 0; i < 16; i += 1) {
+    await zhApp.keyboard.press("tab");
+    await zhApp.keyboard.press("arrowright");
+    if (zhApp.accessibility(preview)?.value) break;
+  }
+  expect(zhApp.accessibility(preview)?.value).toBe("第 1 / 2 句：First NSH sentence.");
+  expect(zhApp.accessibility(announcement)?.label).toBe("第 1 / 2 句：First NSH sentence.");
 });

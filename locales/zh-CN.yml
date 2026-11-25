@@ -868,6 +868,11 @@ quickTranslate:
   sourceCharacters: "字符数：%{count}"
   collapseSource: 收起输入框
   editSource: 编辑输入框
+  resultPreviewLabel: 译文内容
+  resultPreviewHint: 按左右方向键可高亮匹配的源文本句子。
+  previousSentence: 上一句对齐文本
+  nextSentence: 下一句对齐文本
+  sentencePreviewValue: "第 %{current} / %{total} 句：%{text}"
   error:
     blankInput: 请输入要翻译的文本。
     presetDisabled: 所选预设已停用，请在“预设”中启用或选择其他预设。
