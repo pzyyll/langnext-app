@@ -530,51 +530,19 @@ function PresetCardRow(props: PresetCardRowProps) {
             <If when={isBackTranslationOpen()}>
               <View
                 testID="quick-translate-back-translation"
-                class="mx-4 mt-1 mb-1.5 gap-1 rounded-r-lg border-l-2 border-brand/40 bg-brand-soft/45 py-1.5 pr-1.5 pl-3 dark:bg-brand-soft/30"
+                class={`mx-4 mt-1 mb-1.5 gap-1 rounded-r-lg border-l-2 border-brand/40 bg-brand-soft/45 px-3 pt-1.5 pb-2.5 ${motion.navigationFeedback} hover:border-brand/70 hover:bg-brand/10 dark:bg-brand-soft/30 dark:hover:bg-brand/15`}
               >
-                <View class="flex-row items-start justify-between gap-2">
-                  <View class="min-w-0 flex-1 flex-row items-start gap-1.5 pt-0.5">
-                    <Icon
-                      name="mdi:arrow-right-bottom"
-                      tone="brand"
-                      class="mt-0.5 size-3.5 shrink-0"
-                    />
-                    <View class="min-w-0 flex-1">
-                      <If when={backTranslation().status === "loading"}>
-                        <Text
-                          testID="quick-translate-back-translation-status"
-                          class="text-xs text-muted-foreground"
-                        >
-                          {t("quickTranslate.backTranslating")}
-                        </Text>
-                      </If>
-                      <If when={backTranslation().status === "success"}>
-                        <TranslationOutput
-                          testID="quick-translate-back-translation-text"
-                          size="sm"
-                          text={(() => {
-                            const bt = backTranslation();
-                            return bt.status === "success" ? bt.text : "";
-                          })()}
-                          markdownEnabled={props.markdownEnabled}
-                          streaming={false}
-                        />
-                      </If>
-                      <If when={backTranslation().status === "error"}>
-                        <Text
-                          testID="quick-translate-back-translation-error"
-                          role="alert"
-                          class="text-xs text-destructive"
-                        >
-                          {(() => {
-                            const bt = backTranslation();
-                            return bt.status === "error" ? bt.message : "";
-                          })()}
-                        </Text>
-                      </If>
-                    </View>
+                <View class="flex-row items-center justify-between gap-2">
+                  <View class="min-w-0 flex-1 flex-row items-center gap-1.5">
+                    <Icon name="mdi:arrow-right-bottom" tone="brand" class="size-3.5 shrink-0" />
+                    <Text
+                      testID="quick-translate-back-translation-title"
+                      class="truncate text-xs font-semibold text-brand"
+                    >
+                      {t("quickTranslate.backTranslationTitle")}
+                    </Text>
                   </View>
-                  <View class="shrink-0 flex-row items-center gap-0.5">
+                  <View class="-mr-1.5 shrink-0 flex-row items-center gap-0.5">
                     <If
                       when={(() => {
                         const bt = backTranslation();
@@ -651,32 +619,66 @@ function PresetCardRow(props: PresetCardRowProps) {
                     </Button>
                   </View>
                 </View>
-                <If when={props.backTranslationSpeakError() !== null}>
-                  <Text
-                    testID="quick-translate-speak-back-translation-error"
-                    role="alert"
-                    class="text-xs text-destructive"
-                  >
-                    {props.backTranslationSpeakError() ?? ""}
-                  </Text>
-                </If>
-                <If
-                  when={(() => {
-                    const bt = backTranslation();
-                    return bt.status === "success" && bt.copyError !== null;
-                  })()}
-                >
-                  <Text
-                    testID="quick-translate-copy-back-translation-error"
-                    role="alert"
-                    class="text-xs text-destructive"
-                  >
-                    {(() => {
+                <View class="min-w-0 gap-1">
+                  <If when={backTranslation().status === "loading"}>
+                    <Text
+                      testID="quick-translate-back-translation-status"
+                      class="text-xs text-muted-foreground"
+                    >
+                      {t("quickTranslate.backTranslating")}
+                    </Text>
+                  </If>
+                  <If when={backTranslation().status === "success"}>
+                    <TranslationOutput
+                      testID="quick-translate-back-translation-text"
+                      size="sm"
+                      text={(() => {
+                        const bt = backTranslation();
+                        return bt.status === "success" ? bt.text : "";
+                      })()}
+                      markdownEnabled={props.markdownEnabled}
+                      streaming={false}
+                    />
+                  </If>
+                  <If when={backTranslation().status === "error"}>
+                    <Text
+                      testID="quick-translate-back-translation-error"
+                      role="alert"
+                      class="text-xs text-destructive"
+                    >
+                      {(() => {
+                        const bt = backTranslation();
+                        return bt.status === "error" ? bt.message : "";
+                      })()}
+                    </Text>
+                  </If>
+                  <If when={props.backTranslationSpeakError() !== null}>
+                    <Text
+                      testID="quick-translate-speak-back-translation-error"
+                      role="alert"
+                      class="text-xs text-destructive"
+                    >
+                      {props.backTranslationSpeakError() ?? ""}
+                    </Text>
+                  </If>
+                  <If
+                    when={(() => {
                       const bt = backTranslation();
-                      return bt.status === "success" ? (bt.copyError ?? "") : "";
+                      return bt.status === "success" && bt.copyError !== null;
                     })()}
-                  </Text>
-                </If>
+                  >
+                    <Text
+                      testID="quick-translate-copy-back-translation-error"
+                      role="alert"
+                      class="text-xs text-destructive"
+                    >
+                      {(() => {
+                        const bt = backTranslation();
+                        return bt.status === "success" ? (bt.copyError ?? "") : "";
+                      })()}
+                    </Text>
+                  </If>
+                </View>
               </View>
             </If>
             <View class="flex-row items-center justify-between gap-2 px-4 pt-1 pb-2.5">

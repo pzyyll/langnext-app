@@ -3306,6 +3306,10 @@ test("back-translation: lifetime closes completed lower area without closing for
 
   await app.press("id:quick-translate-card-card-1 >> id:quick-translate-back-translate");
   await app.waitFor("id:quick-translate-card-card-1 >> id:quick-translate-back-translation-text");
+  expect(
+    app.shows("id:quick-translate-card-card-1 >> id:quick-translate-back-translation-title"),
+  ).toBe(true);
+  expect(app.texts()).toContain(t("quickTranslate.backTranslationTitle"));
   expect(app.shows(`role:button[${t("quickTranslate.backTranslate")}]`)).toBe(true);
   expect(app.texts()).not.toContain(t("quickTranslate.backTranslate"));
   await app.hover("id:quick-translate-card-card-1 >> id:quick-translate-copy");
@@ -4411,7 +4415,13 @@ test("back-translation: renders zh-CN localization across states and actions", a
   await app.waitFor("id:quick-translate-card-card-1 >> text:正在回译…");
   await app.waitFor("id:quick-translate-card-card-1 >> id:quick-translate-copy-back-translation");
   expect(app.shows("role:button[回译]")).toBe(true);
-  expect(app.texts()).not.toContain("回译");
+  expect(
+    app.shows("id:quick-translate-card-card-1 >> id:quick-translate-back-translation-title"),
+  ).toBe(true);
+  expect(app.texts()).toContain("回译");
+  expect(
+    app.shows("id:quick-translate-card-card-1 >> id:quick-translate-back-translate >> text:回译"),
+  ).toBe(false);
   expect(app.texts()).not.toContain("已回译");
   expect(app.shows("role:button[朗读回译文]")).toBe(true);
   expect(app.shows("role:button[复制回译文]")).toBe(true);
@@ -4422,5 +4432,9 @@ test("back-translation: renders zh-CN localization across states and actions", a
   expect(app.shows("role:button[已复制回译文]")).toBe(true);
 
   await app.press("id:quick-translate-card-card-1 >> id:quick-translate-close-back-translation");
+  await app.waitUntil(
+    () => !app.shows("id:quick-translate-card-card-1 >> id:quick-translate-back-translation"),
+  );
   await app.waitFor("role:button[回译]");
+  expect(app.texts()).not.toContain("回译");
 });

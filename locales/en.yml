@@ -852,6 +852,7 @@ quickTranslate:
     rejected: Anki could not create the card. Check the selected note type.
     unconfirmed: Could not confirm the add. Check Anki before trying again.
   backTranslate: Back-translate
+  backTranslationTitle: Back-translation
   backTranslating: Back-translating…
   closeBackTranslation: Close back-translation
   retryBackTranslation: Retry back-translation

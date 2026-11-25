@@ -852,6 +852,7 @@ quickTranslate:
     rejected: Anki 未能创建卡片，请检查所选笔记类型。
     unconfirmed: 无法确认是否加入成功。请先查看 Anki，再重试。
   backTranslate: 回译
+  backTranslationTitle: 回译
   backTranslating: 正在回译…
   closeBackTranslation: 关闭回译
   retryBackTranslation: 重试回译
