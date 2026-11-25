@@ -1959,6 +1959,32 @@ test("selection screenshot recovery: missing OCR setup shows its own feedback wi
   expect(app.shows(recovery)).toBe(false);
 });
 
+test("selection screenshot recovery: the unreadable row renders in dark mode with reduced motion in Chinese", async () => {
+  const seed: Record<string, string> = { ...ocrSeed() };
+  delete seed[OCR_STORAGE_KEY];
+  const app = await open(HARNESS_ENTRY, {
+    ...viewport,
+    colorScheme: "dark",
+    reducedMotion: true,
+    storage: { ...seed, "settings.language": "zh-CN" },
+  });
+  const recovery = "id:quick-translate-source-toolbar >> id:quick-translate-selection-screenshot";
+
+  await app.press("id:harness-tray-quick-translate");
+  await app.waitFor("id:quick-translate-source");
+  await app.press("id:quick-translate-pin");
+  await app.keyboard.press(DEFAULT_SELECTION_TRANSLATE_SHORTCUT);
+  await app.waitUntil(() => app.texts().some((text) => text.includes("selReads=1|")));
+  await app.press("id:harness-finish-selection-unavailable");
+  await app.waitFor("id:quick-translate-source-toolbar >> id:quick-translate-selection-status");
+
+  expect(app.texts()).toContain("无法读取选中文本。");
+  expect(app.texts()).toContain("截图翻译");
+  expect(app.shows(recovery)).toBe(true);
+  expect(app.shows("id:quick-translate-footer")).toBe(true);
+  expect(app.window("quick-translate").state()?.visible).toBe(true);
+});
+
 test("selection hint activation: a drag release shows one button and only a click reads and translates", async () => {
   const selected = "Selected line one\nSelected line two";
   const app = await open(HARNESS_ENTRY, {
@@ -1998,6 +2024,9 @@ test("selection hint activation: a drag release shows one button and only a clic
   expect(app.window("quick-translate").state()).toBeNull();
   const placed = app.window("selection-hint").state()!;
   expect(placed.display).toBe(app.window("main").state()?.display);
+  // Opening it takes no focus: the window that had it keeps it.
+  expect(placed.focused).toBe(false);
+  expect(app.window("main").state()?.focused).toBe(true);
 
   await app.press("id:selection-hint-translate");
   await app.waitUntil(() => app.texts().some((text) => text.includes("selReads=1|")));
