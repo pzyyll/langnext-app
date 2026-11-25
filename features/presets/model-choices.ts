@@ -1,6 +1,8 @@
 import { t } from "nsh/i18n";
 import type { ProviderChannel } from "../../modules/ai/contracts/channel";
 import type { ProviderModel } from "../../modules/ai/contracts/model";
+import type { ProviderPresentation } from "../../modules/ai/ui/contracts";
+import { providerSettingsRegistry } from "../../modules/ai/ui/registry";
 import {
   isEffectiveProtocolSupported,
   resolveEffectiveCapabilities,
@@ -8,7 +10,7 @@ import {
   type ModelPurpose,
 } from "../models/model-helpers";
 import { modelsStore } from "../models/store";
-import type { ModelChoice, TranslationPreset } from "./types";
+import type { ModelChoice, PresetEngine, TranslationPreset } from "./types";
 
 export interface ModelBindingInfo {
   id: string;
@@ -151,6 +153,40 @@ export function resolveModelBindingInfo(
     available: true,
     reason: null,
   };
+}
+
+/** What a preset summary leads with: its service brand, or the primary model's channel mark. */
+export type PresetChannelMark =
+  | { kind: "deepl" }
+  | { kind: "google-cloud" }
+  | { kind: "provider"; presentation: ProviderPresentation };
+
+/** Resolves the channel mark for an engine and the model it translates with. */
+export function resolvePresetChannelMark(
+  engineKind: PresetEngine["kind"],
+  primaryModelId: string | null,
+): PresetChannelMark | null {
+  if (engineKind === "deepl") {
+    return { kind: "deepl" };
+  }
+  if (engineKind === "google-cloud") {
+    return { kind: "google-cloud" };
+  }
+  if (!primaryModelId) return null;
+  const model = modelsStore.models().find((entry) => entry.id === primaryModelId);
+  if (!model) return null;
+  const channel = modelsStore.channels().find((entry) => entry.id === model.providerId);
+  const presentation = channel ? providerSettingsRegistry.find(channel.presetId) : null;
+  return presentation === null ? null : { kind: "provider", presentation };
+}
+
+/** Resolves a saved preset's channel mark from its engine and primary model. */
+export function presetChannelMark(
+  preset: Pick<TranslationPreset, "engine">,
+): PresetChannelMark | null {
+  const engine = preset.engine;
+  const primaryModelId = engine.kind === "ai" ? (engine.modelIds[0] ?? null) : null;
+  return resolvePresetChannelMark(engine.kind, primaryModelId);
 }
 
 /** Formats a concise rail summary for a preset's ordered model list. */

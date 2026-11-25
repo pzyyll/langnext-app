@@ -1319,3 +1319,64 @@ test("presets ui: Google Cloud", async () => {
   expect(reopened.texts()).toContain("Google Cloud Translation");
   expect(reopened.requests()).toHaveLength(0);
 });
+
+test("presets ui: rail summaries lead with the channel mark", async () => {
+  const deepseek = makeChannel({
+    id: "ch-deepseek",
+    presetId: "deepseek",
+    displayName: "DeepSeek",
+    enabled: true,
+  });
+  const deepseekModel = makeModel({
+    id: "m-deepseek",
+    providerId: "ch-deepseek",
+    modelKey: "deepseek-chat",
+    enabled: true,
+  });
+  const googlePreset: TranslationPreset = {
+    id: "p-google",
+    name: "Google Cloud",
+    enabled: true,
+    createdAt: "2026-01-01T00:00:00.000Z",
+    updatedAt: "2026-01-01T00:00:00.000Z",
+    engine: { kind: "google-cloud", credentialRef: "ref-google" },
+  };
+  const app = await open(APP_ENTRY, {
+    ...viewport,
+    storage: makeSeedStorage({
+      channels: [deepseek],
+      models: [deepseekModel],
+      extra: {
+        [PRESETS_STORAGE_KEY]: JSON.stringify({
+          version: 1,
+          items: [
+            makePresetRecord("p-ai", "AI DeepSeek", ["m-deepseek"]),
+            makeDeepLPresetRecord("p-deepl", "DeepL Free", "ref-deepl"),
+            googlePreset,
+            makePresetRecord("p-missing", "Removed Model", ["m-gone"]),
+          ],
+        }),
+      },
+    }),
+  });
+
+  await app.press("id:nav-presets");
+  await app.waitFor("id:preset-name");
+
+  // An AI preset leads with its primary model channel; DeepL and Google Cloud with their service.
+  expect(app.shows("id:preset-item-p-ai >> id:preset-item-mark")).toBe(true);
+  expect(app.shows("id:preset-item-p-deepl >> id:preset-item-mark")).toBe(true);
+  expect(app.shows("id:preset-item-p-google >> id:preset-item-mark")).toBe(true);
+  // A binding this build cannot resolve keeps the summary text and shows no mark.
+  expect(app.shows("id:preset-item-p-missing >> id:preset-item-mark")).toBe(false);
+
+  // A new draft gains its mark as soon as the primary model is chosen.
+  await app.press("id:add-preset-button");
+  await choosePresetType(app, "ai");
+  await app.waitFor("id:preset-draft-item");
+  expect(app.shows("id:preset-draft-item >> id:preset-draft-mark")).toBe(false);
+  await app.press("id:preset-primary-model");
+  await app.waitFor("role:option[DeepSeek · deepseek-chat]");
+  await app.press("role:option[DeepSeek · deepseek-chat]");
+  expect(app.shows("id:preset-draft-item >> id:preset-draft-mark")).toBe(true);
+});

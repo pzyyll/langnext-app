@@ -30,10 +30,9 @@ import { Textarea } from "../../components/ui/textarea";
 import { TranslationOutput } from "../../components/ui/translation-output";
 import googleCloudIcon from "../../assets/icons/google-cloud.svg";
 import { ProviderMark } from "../../modules/ai/ui/provider-mark";
-import { providerSettingsRegistry } from "../../modules/ai/ui/registry";
 import { languageResolutionErrorMessage } from "../language-detection/messages";
 import { AUTO_LANGUAGE, type LanguageId, type SourceLanguageId } from "../presets/languages";
-import { modelsStore } from "../models/store";
+import { presetChannelMark } from "../presets/model-choices";
 import type { TranslationPreset } from "../presets/types";
 import { synthesizeSpeech } from "../tts/channels";
 import { googlePreferencesSignature } from "../tts/google-preferences";
@@ -207,15 +206,12 @@ export function QuickTranslateFooter(props: { session: QuickTranslateSession }) 
 /** Visual engine indicator on the preset chip, its option rows, and the add-preset menu: DeepL mark, known AI provider mark, or brand dot. */
 function PresetLeadingMark(props: { preset: TranslationPreset | null; testID?: string }) {
   const providerMark = () => {
-    const preset = props.preset;
-    if (!preset || preset.engine.kind !== "ai") return null;
-    const primaryModelId = preset.engine.modelIds[0];
-    if (!primaryModelId) return null;
-    const model = modelsStore.models().find((item) => item.id === primaryModelId);
-    if (!model) return null;
-    const channel = modelsStore.channels().find((item) => item.id === model.providerId);
-    if (!channel || channel.presetId === "custom") return null;
-    return providerSettingsRegistry.find(channel.presetId);
+    if (!props.preset) return null;
+    const mark = presetChannelMark(props.preset);
+    if (mark?.kind !== "provider" || mark.presentation.providerTypeId === "custom") {
+      return null;
+    }
+    return mark.presentation;
   };
 
   return (

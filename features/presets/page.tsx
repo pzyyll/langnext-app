@@ -31,7 +31,14 @@ import {
   type PresetDraft,
 } from "./draft";
 import { PresetEditor, type FocusableEditorField } from "./editor";
-import { readAvailableModelChoices, summarizePreset, summarizePresetModels } from "./model-choices";
+import {
+  presetChannelMark,
+  readAvailableModelChoices,
+  resolvePresetChannelMark,
+  summarizePreset,
+  summarizePresetModels,
+} from "./model-choices";
+import { PresetMark } from "./preset-mark";
 import type { TemplateEditableField } from "./prompt-templates";
 import { dismissSkippedNotice, skippedNoticeDismissed } from "./skipped-notice";
 import { presetsStore } from "./store";
@@ -199,6 +206,10 @@ export function PresetsPage(props: PresetsPageProps) {
     if (draft.engineKind === "deepl") return t("presets.engine.deepl");
     if (draft.engineKind === "google-cloud") return t("presets.engine.googleCloud");
     return summarizePresetModels(draft.primaryModelId ? [draft.primaryModelId] : []);
+  };
+  const draftChannelMark = () => {
+    const draft = draftSignal();
+    return draft ? resolvePresetChannelMark(draft.engineKind, draft.primaryModelId) : null;
   };
 
   const clearErrors = () => {
@@ -573,9 +584,16 @@ export function PresetsPage(props: PresetsPageProps) {
                                   </Text>
                                   <Badge tone="warning" label={t("presets.editor.unsaved")} />
                                 </View>
-                                <Text class="truncate text-xs text-muted-foreground">
-                                  {draftEngineSummary()}
-                                </Text>
+                                <View class="w-full min-w-0 flex-row items-center gap-1">
+                                  <PresetMark
+                                    testID="preset-draft-mark"
+                                    mark={draftChannelMark}
+                                    class="size-3 shrink-0"
+                                  />
+                                  <Text class="min-w-0 flex-1 truncate text-xs text-muted-foreground">
+                                    {draftEngineSummary()}
+                                  </Text>
+                                </View>
                               </View>
                             </View>
                           </View>
@@ -666,9 +684,16 @@ export function PresetsPage(props: PresetsPageProps) {
                                           />
                                         </If>
                                       </View>
-                                      <Text class="truncate text-xs text-muted-foreground">
-                                        {summarizePreset(preset())}
-                                      </Text>
+                                      <View class="w-full min-w-0 flex-row items-center gap-1">
+                                        <PresetMark
+                                          testID="preset-item-mark"
+                                          mark={() => presetChannelMark(preset())}
+                                          class="size-3 shrink-0"
+                                        />
+                                        <Text class="min-w-0 flex-1 truncate text-xs text-muted-foreground">
+                                          {summarizePreset(preset())}
+                                        </Text>
+                                      </View>
                                     </View>
                                   </Button>
                                 </View>
