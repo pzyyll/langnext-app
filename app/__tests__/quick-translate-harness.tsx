@@ -1,5 +1,5 @@
 import { keymap, mount, signal, Storage, Text, View } from "nsh";
-import { Tray, Window, type MenuItem, type TrayOptions } from "nsh/desktop";
+import { displays, Tray, Window, type MenuItem, type TrayOptions } from "nsh/desktop";
 import { t } from "nsh/i18n";
 import { loadSplitRailWidths } from "../../components/layout/split-rail";
 import { Button } from "../../components/ui/button";
@@ -17,7 +17,10 @@ import {
   SELECTION_TRANSLATE_SHORTCUT_STORAGE_KEY,
 } from "../../features/settings/shortcuts";
 import { loadTransparency } from "../../features/settings/transparency";
-import type { DoubleCopyActivationEvent } from "../../platform/quick-translate";
+import type {
+  DoubleCopyActivationEvent,
+  SelectionGestureEvent,
+} from "../../platform/quick-translate";
 import type { ScreenCaptureOutcome } from "../../platform/screen-capture";
 import type { SelectionTextRead } from "../../platform/selection-text";
 import { initializeAiModules } from "../ai-setup";
@@ -87,8 +90,24 @@ function QuickTranslateHarness(config: {
 
   let finishSelection: ((result: SelectionTextRead) => void) | undefined;
   const selectionReadCount = signal(0);
+  const selectionUiaOnlyCount = signal(0);
+  let selectionTargetCurrent = true;
   const selectionText = "Selected line one\nSelected line two";
   const shortcutBindings = new Map<string, () => void>();
+  let selectionGestureListener: ((event: SelectionGestureEvent) => void) | null = null;
+  const selectionGestureRegisterCount = signal(0);
+  const selectionGestureStopCount = signal(0);
+
+  /** A release in points on the first display, converted to the hook's physical offsets. */
+  const releaseOnFirstDisplay = (x: number, y: number) => {
+    const display = displays()[0];
+    if (!display) return null;
+    return {
+      displayId: display.id,
+      offsetX: (x - display.bounds.origin.x) * display.scaleFactor,
+      offsetY: (y - display.bounds.origin.y) * display.scaleFactor,
+    };
+  };
 
   return (
     <View class="flex-1">
@@ -130,13 +149,26 @@ function QuickTranslateHarness(config: {
             },
             selectionText: {
               snapshot: () => "target-1",
-              isCurrent: () => true,
-              read: () => {
+              isCurrent: () => selectionTargetCurrent,
+              read: (_target, options) => {
                 selectionReadCount.set(selectionReadCount() + 1);
+                if (options?.uiaOnly === true) {
+                  selectionUiaOnlyCount.set(selectionUiaOnlyCount() + 1);
+                }
                 return new Promise<SelectionTextRead>((resolve) => {
                   finishSelection = resolve;
                 });
               },
+            },
+          }}
+          selectionGesture={{
+            onSelectionGesture(listener) {
+              selectionGestureRegisterCount.set(selectionGestureRegisterCount() + 1);
+              selectionGestureListener = listener;
+              return () => {
+                selectionGestureStopCount.set(selectionGestureStopCount() + 1);
+                if (selectionGestureListener === listener) selectionGestureListener = null;
+              };
             },
           }}
           doubleCopy={{
@@ -278,6 +310,50 @@ function QuickTranslateHarness(config: {
           }}
         />
         <Button
+          testID="harness-selection-hint-candidate"
+          label="Harness Selection Hint"
+          size="sm"
+          onPress={() => {
+            const release = releaseOnFirstDisplay(120, 160);
+            if (release === null) return;
+            selectionGestureListener?.({ kind: "candidate", release, target: "target-1" });
+          }}
+        />
+        <Button
+          testID="harness-selection-hint-candidate-edge"
+          label="Harness Edge Hint"
+          size="sm"
+          onPress={() => {
+            const display = displays()[0];
+            if (!display) return;
+            const work = display.visibleBounds;
+            const release = releaseOnFirstDisplay(
+              work.origin.x + work.size.width - 8,
+              work.origin.y + work.size.height - 8,
+            );
+            if (release === null) return;
+            selectionGestureListener?.({ kind: "candidate", release, target: "target-1" });
+          }}
+        />
+        <Button
+          testID="harness-selection-hint-press"
+          label="Harness Hint Press"
+          size="sm"
+          onPress={() => {
+            const press = releaseOnFirstDisplay(4, 4);
+            if (press === null) return;
+            selectionGestureListener?.({ kind: "press", press });
+          }}
+        />
+        <Button
+          testID="harness-selection-hint-target-gone"
+          label="Harness Target Gone"
+          size="sm"
+          onPress={() => {
+            selectionTargetCurrent = false;
+          }}
+        />
+        <Button
           testID="harness-trigger-double-copy-valid"
           label="Harness Double Copy Valid"
           size="sm"
@@ -311,8 +387,16 @@ function QuickTranslateHarness(config: {
             return work ? `quick-work-area:${work.origin.y}:${work.size.height}` : "";
           })()}
         </Text>
+        <Text testID="harness-display-metrics">
+          {(() => {
+            const display = displays()[0];
+            if (!display) return "display:none";
+            const work = display.visibleBounds;
+            return `display:${work.origin.x}:${work.origin.y}:${work.size.width}:${work.size.height}`;
+          })()}
+        </Text>
         <Text testID="harness-metrics">
-          {`ocrCap=${ocrCaptureCount()}|ocrCaption=${ocrCaptureCaption()}|reg=${registerCount()}|unreg=${unregisterCount()}|dcReg=${doubleCopyRegisterCount()}|dcStop=${doubleCopyStopCount()}|dcReads=${clipboardReadCount()}|ppReg=${pointerPressRegisterCount()}|ppStop=${pointerPressStopCount()}|selReads=${selectionReadCount()}|shortcuts=${shortcutList()}|tray=${trayMenuLabels()}|mainHidden=${mainHidden()}`}
+          {`ocrCap=${ocrCaptureCount()}|ocrCaption=${ocrCaptureCaption()}|reg=${registerCount()}|unreg=${unregisterCount()}|dcReg=${doubleCopyRegisterCount()}|dcStop=${doubleCopyStopCount()}|dcReads=${clipboardReadCount()}|ppReg=${pointerPressRegisterCount()}|ppStop=${pointerPressStopCount()}|selReads=${selectionReadCount()}|selUia=${selectionUiaOnlyCount()}|sgReg=${selectionGestureRegisterCount()}|sgStop=${selectionGestureStopCount()}|shortcuts=${shortcutList()}|tray=${trayMenuLabels()}|mainHidden=${mainHidden()}`}
         </Text>
       </View>
     </View>

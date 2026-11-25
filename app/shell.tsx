@@ -1,5 +1,13 @@
 import { cleanup, effect, platform, signal, untracked, View } from "nsh";
-import { Application, currentWindow, titleBar, Tray, Window, type TrayOptions } from "nsh/desktop";
+import {
+  Application,
+  currentWindow,
+  displays,
+  titleBar,
+  Tray,
+  Window,
+  type TrayOptions,
+} from "nsh/desktop";
 import { t } from "nsh/i18n";
 import trayIcon from "../assets/logos/icon.svg";
 import { AppMenu } from "../components/app-menu";
@@ -10,10 +18,15 @@ import { ToastViewport } from "../components/ui/toast";
 import { ModelsPage } from "../features/models/page";
 import { PresetsPage } from "../features/presets/page";
 import { SettingsPage } from "../features/settings/page";
-import type { TranslationShortcutBinding } from "../features/settings/shortcuts";
+import { formatShortcut, type TranslationShortcutBinding } from "../features/settings/shortcuts";
 import { silentLaunch } from "../features/settings/silent-launch";
 import { transparency } from "../features/settings/transparency";
-import type { DoubleCopyBinding } from "../platform/quick-translate";
+import {
+  resolveSelectionHintPlacement,
+  type DoubleCopyBinding,
+  type PointerPressPoint,
+  type SelectionGestureBinding,
+} from "../platform/quick-translate";
 import { canCaptureScreen } from "../platform/screen-capture";
 import {
   createQuickTranslateController,
@@ -22,6 +35,11 @@ import {
   registerTranslationShortcuts,
   type QuickTranslateControllerOptions,
 } from "./quick-translate";
+import {
+  SELECTION_HINT_SIZE,
+  SelectionHintWindow,
+  type SelectionHintCandidate,
+} from "./selection-hint";
 
 /** The app bar's height, which the platform centers the system's window
  * controls in: the same value as `window.titleBar.height` in nsh.json. */
@@ -30,6 +48,8 @@ const TITLE_BAR_HEIGHT = 42;
 export interface AppShellProps {
   globalShortcut?: TranslationShortcutBinding;
   doubleCopy?: DoubleCopyBinding;
+  /** Left-button presses and possible text drags; unregistered until the opt-in is on. */
+  selectionGesture?: SelectionGestureBinding;
   trayModule?: Pick<typeof Tray, "set">;
   platformOs?: string;
   quickTranslateOptions?: QuickTranslateControllerOptions;
@@ -85,6 +105,46 @@ export function AppShell(props: AppShellProps = {}) {
     currentOs,
     shortcuts?.isRecordingInForeground,
   );
+
+  const selectionHint = signal<SelectionHintCandidate | null>(null);
+  const selectionHintPress = signal<PointerPressPoint | null>(null);
+  const selectionShortcutLabel = () => {
+    const chord = shortcuts?.settings["selection-translate"].shortcut() ?? null;
+    return chord === null ? null : formatShortcut(chord);
+  };
+
+  // The hint shows only where a display resolves; the press that began the drag never dismisses it.
+  let stopSelectionGesture: (() => void) | null = null;
+  const selectionGesture = props.selectionGesture;
+  if (selectionGesture && !stopSelectionGesture) {
+    stopSelectionGesture = selectionGesture.onSelectionGesture((event) => {
+      if (event.kind === "press") {
+        selectionHintPress.set(event.press);
+        return;
+      }
+      const placement = resolveSelectionHintPlacement(
+        event.release,
+        displays(),
+        SELECTION_HINT_SIZE,
+      );
+      if (placement === null) return;
+      selectionHintPress.set(null);
+      selectionHint.set({ release: event.release, target: event.target, ...placement });
+    });
+  }
+  cleanup(() => {
+    stopSelectionGesture?.();
+    stopSelectionGesture = null;
+    selectionHint.set(null);
+  });
+
+  // Quick Translate or its screenshot workflow takes the screen from the hint.
+  effect(() => {
+    if (selectionHint() === null) return;
+    if (quickTranslate.isOpen() || quickTranslate.ocrState().phase !== "idle") {
+      selectionHint.set(null);
+    }
+  });
 
   const win = currentWindow();
   effect(() => win.set({ backdrop: transparency() ? "popover" : "none" }));
@@ -174,6 +234,13 @@ export function AppShell(props: AppShellProps = {}) {
         </If>
       </View>
       <ToastViewport />
+      <SelectionHintWindow
+        hint={selectionHint}
+        press={selectionHintPress}
+        shortcut={selectionShortcutLabel}
+        onTranslate={(target) => void quickTranslate.activateSelectionFromHint(target)}
+        onDismiss={() => selectionHint.set(null)}
+      />
       <QuickTranslateWindow controller={quickTranslate} />
     </View>
   );

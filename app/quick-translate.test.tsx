@@ -23,6 +23,7 @@ import { GOOGLE_CLOUD_TTS_URL } from "../features/tts/google-cloud";
 import { DEFAULT_GOOGLE_VOICE_PREFERENCES } from "../features/tts/google-preferences";
 import { TTS_STORAGE_KEY, ttsCredentialStorageKey } from "../features/tts/settings";
 import { createQuickTranslateController, POPUP_MIN_SIZE } from "./quick-translate-controller";
+import { SELECTION_HINT_DURATION_MS } from "./selection-hint";
 
 const HARNESS_ENTRY = "./__tests__/quick-translate-harness.tsx";
 const HARNESS_SHORTCUT_MODE_KEY = "__test.qt.shortcutMode";
@@ -1955,6 +1956,113 @@ test("selection screenshot recovery: missing OCR setup shows its own feedback wi
   expect(app.texts().some((text) => text.includes("ocrCap=0|"))).toBe(true);
   expect(app.requests()).toHaveLength(0);
   expect(app.shows(recovery)).toBe(false);
+});
+
+test("selection hint activation: a drag release shows one button and only a click reads and translates", async () => {
+  const selected = "Selected line one\nSelected line two";
+  const app = await open(HARNESS_ENTRY, {
+    ...viewport,
+    clock: {},
+    storage: {
+      ...makeSeedStorage({
+        channels: [makeChannel({ adapterId: "openai-compatible", enabled: true })],
+        models: [makeModel({ enabled: true })],
+        credentials: { "ch-1": "sk-test" },
+      }),
+      [PRESETS_STORAGE_KEY]: JSON.stringify({ version: 1, items: [quickPreset] }),
+      [QUICK_TRANSLATE_PREFERENCES_KEY]: popupPreferences({
+        cards: [{ id: "card-1", presetId: "preset-1", templateId: null, collapsed: false }],
+      }),
+      "settings.language": "en",
+    },
+    network: {
+      "POST https://api.openai.com/v1/chat/completions": {
+        status: 200,
+        body: { choices: [{ message: { content: "Translated selection" } }] },
+      },
+    },
+  });
+
+  await app.waitUntil(() => app.texts().some((text) => text.includes("sgReg=1|")));
+  expect(app.window("selection-hint").state()).toBeNull();
+
+  await app.press("id:harness-selection-hint-candidate");
+  await app.waitUntil(() => app.window("selection-hint").state()?.visible === true);
+  // The button alone reads nothing: no target read, clipboard call, capture, or request.
+  expect(app.texts().join(" ")).toContain("selReads=0|");
+  expect(app.texts().join(" ")).toContain("dcReads=0|");
+  expect(app.texts().join(" ")).toContain("ocrCap=0|");
+  expect(app.requests()).toHaveLength(0);
+  expect(app.window("quick-translate").state()).toBeNull();
+  const placed = app.window("selection-hint").state()!;
+  expect(placed.display).toBe(app.window("main").state()?.display);
+
+  await app.press("id:selection-hint-translate");
+  await app.waitUntil(() => app.texts().some((text) => text.includes("selReads=1|")));
+  expect(app.texts().join(" ")).toContain("selUia=1|");
+  await app.press("id:harness-finish-selection");
+  await app.waitUntil(() => app.requests().length === 1);
+
+  expect(JSON.parse(app.requests()[0]!.body!).messages[1].content).toBe(selected);
+  expect(app.window("quick-translate").state()?.visible).toBe(true);
+  expect(app.window("selection-hint").state()?.visible).not.toBe(true);
+});
+
+test("selection hint activation: a stale, expired, outside-pressed, or edge hint opens nothing unwanted", async () => {
+  const app = await open(HARNESS_ENTRY, {
+    ...viewport,
+    clock: {},
+    storage: { "settings.language": "en" },
+  });
+
+  // A target that is no longer current opens nothing and reads nothing.
+  await app.press("id:harness-selection-hint-candidate");
+  await app.waitUntil(() => app.window("selection-hint").state()?.visible === true);
+  await app.press("id:harness-selection-hint-target-gone");
+  await app.press("id:selection-hint-translate");
+  await app.wait(50);
+  expect(app.texts().join(" ")).toContain("selReads=0|");
+  expect(app.window("quick-translate").state()).toBeNull();
+  expect(app.window("selection-hint").state()?.visible).not.toBe(true);
+
+  // A press outside dismisses it before any read.
+  await app.press("id:harness-selection-hint-candidate");
+  await app.waitUntil(() => app.window("selection-hint").state()?.visible === true);
+  await app.press("id:harness-selection-hint-press");
+  await app.waitUntil(() => app.window("selection-hint").state()?.visible !== true);
+  expect(app.texts().join(" ")).toContain("selReads=0|");
+
+  // Three seconds without a click dismiss it too.
+  await app.press("id:harness-selection-hint-candidate");
+  await app.waitUntil(() => app.window("selection-hint").state()?.visible === true);
+  await app.clock!.runFor(SELECTION_HINT_DURATION_MS + 100);
+  await app.waitUntil(() => app.window("selection-hint").state()?.visible !== true);
+  expect(app.texts().join(" ")).toContain("selReads=0|");
+  expect(app.requests()).toHaveLength(0);
+
+  // Near the work-area edge the hint flips and clamps, and stays fully inside the display.
+  await app.press("id:harness-selection-hint-candidate-edge");
+  await app.waitUntil(() => app.window("selection-hint").state()?.visible === true);
+  const edge = app.window("selection-hint").state()!;
+  const displayMetrics = app.texts().find((text) => text.startsWith("display:"))!;
+  const [workX, workY, workWidth, workHeight] = displayMetrics
+    .slice("display:".length)
+    .split(":")
+    .map(Number);
+  expect(edge.bounds.origin.x).toBeGreaterThanOrEqual(workX - 1);
+  expect(edge.bounds.origin.y).toBeGreaterThanOrEqual(workY - 1);
+  expect(edge.bounds.origin.x + edge.bounds.size.width).toBeLessThanOrEqual(workX + workWidth + 1);
+  expect(edge.bounds.origin.y + edge.bounds.size.height).toBeLessThanOrEqual(
+    workY + workHeight + 1,
+  );
+  // The release was 8 pt inside the corner, so a below-right placement could not fit.
+  expect(edge.bounds.origin.x + edge.bounds.size.width).toBeLessThanOrEqual(
+    workX + workWidth - 8 + 1,
+  );
+  expect(edge.bounds.origin.y + edge.bounds.size.height).toBeLessThanOrEqual(
+    workY + workHeight - 8 + 1,
+  );
+  expect(app.texts().join(" ")).toContain("selReads=0|");
 });
 
 test("selection controller: recognition keeps the first delivery", async () => {

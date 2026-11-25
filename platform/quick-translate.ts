@@ -14,6 +14,15 @@ export interface PointerPressBinding {
   onPointerPress: (listener: (event: PointerPressPoint) => void) => () => void;
 }
 
+/** A left button press, or the release of a possible text drag with the target it captured. */
+export type SelectionGestureEvent =
+  | { kind: "press"; press: PointerPressPoint }
+  | { kind: "candidate"; release: PointerPressPoint; target: string };
+
+export interface SelectionGestureBinding {
+  onSelectionGesture: (listener: (event: SelectionGestureEvent) => void) => () => void;
+}
+
 /** Double-Ctrl+C Raw Input monitoring is only supported on Windows. */
 export function canUseDoubleCopy(os: string): boolean {
   return os === "windows";
@@ -95,6 +104,54 @@ export function resolveAnchoredDisplayPoint(
     point: {
       x: display.bounds.origin.x + anchor.offsetX / display.scaleFactor,
       y: display.bounds.origin.y + anchor.offsetY / display.scaleFactor,
+    },
+  };
+}
+
+/** Distance in points between a drag release and the hint's nearest edge. */
+const SELECTION_HINT_OFFSET_PT = 12;
+
+/** Where a drag-release hint goes: its display and a work-area-fitting top-left corner. */
+export interface ResolvedSelectionHintPlacement {
+  display: DisplayId;
+  origin: Point;
+}
+
+/**
+ * Places a small hint beside a drag release: below and right of the pointer, flipped above and
+ * left when the work area ends there, then clamped into the work area.
+ * Returns null when the release names no display, or its work area has no size.
+ */
+export function resolveSelectionHintPlacement(
+  release: PointerPressPoint | null | undefined,
+  availableDisplays: readonly Display[],
+  size: Size,
+): ResolvedSelectionHintPlacement | null {
+  const resolved = resolveAnchoredDisplayPoint(release, availableDisplays);
+  if (!resolved) return null;
+
+  const work = resolved.display.visibleBounds;
+  if (work.size.width <= 0 || work.size.height <= 0) return null;
+  const right = work.origin.x + work.size.width;
+  const bottom = work.origin.y + work.size.height;
+  const width = Math.min(size.width, work.size.width);
+  const height = Math.min(size.height, work.size.height);
+
+  // Flip before clamping, so the hint never lands on the pointer at the edge it avoids.
+  let x = resolved.point.x + SELECTION_HINT_OFFSET_PT;
+  if (x + width > right) {
+    x = resolved.point.x - SELECTION_HINT_OFFSET_PT - width;
+  }
+  let y = resolved.point.y + SELECTION_HINT_OFFSET_PT;
+  if (y + height > bottom) {
+    y = resolved.point.y - SELECTION_HINT_OFFSET_PT - height;
+  }
+
+  return {
+    display: resolved.display.id,
+    origin: {
+      x: clamp(x, work.origin.x, right - width),
+      y: clamp(y, work.origin.y, bottom - height),
     },
   };
 }

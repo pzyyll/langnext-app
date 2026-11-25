@@ -8,6 +8,12 @@ export type SelectionTextRead =
   | { status: "unavailable" }
   | { status: "stale" };
 
+/** How one read may obtain the text. */
+export interface SelectionTextReadOptions {
+  /** Forbids the simulated copy: only UI Automation may answer. */
+  uiaOnly?: boolean;
+}
+
 /** Reads the foreground selection captured by `snapshot`. Tests substitute this port. */
 export interface SelectionTextPort {
   /** Opaque foreground target, or `null` when no window is in front. */
@@ -15,7 +21,7 @@ export interface SelectionTextPort {
   /** Whether `target` still names the foreground window and its focused control. */
   isCurrent(target: string): boolean;
   /** Reads the selection captured in `target`. */
-  read(target: string): Promise<SelectionTextRead>;
+  read(target: string, options?: SelectionTextReadOptions): Promise<SelectionTextRead>;
 }
 
 /** Foreground selection uses UI Automation, so only Windows offers it. */
@@ -42,10 +48,11 @@ export function createSelectionTextPort(allowCopyFallback: () => boolean): Selec
         return false;
       }
     },
-    async read(target) {
+    async read(target, options) {
       if (!canReadSelectionText(platform.os)) return { status: "unavailable" };
+      const allowCopy = options?.uiaOnly === true ? false : allowCopyFallback();
       try {
-        const result = await SelectionTextNative.read(target, allowCopyFallback());
+        const result = await SelectionTextNative.read(target, allowCopy);
         if (result.status === "selected" && typeof result.text === "string") {
           return { status: "selected", text: result.text };
         }

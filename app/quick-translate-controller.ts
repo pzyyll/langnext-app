@@ -99,6 +99,8 @@ export interface QuickTranslateController {
   close: () => void;
   activateDoubleCopy: (event: DoubleCopyActivationEvent) => Promise<void>;
   activateSelectionTranslate: () => Promise<void>;
+  /** Reads and delivers the selection captured by a drag release, after the user clicks. */
+  activateSelectionFromHint: (target: string) => Promise<void>;
   startOcr: () => Promise<void>;
   setPinned: (pinned: boolean) => void;
   togglePinned: () => void;
@@ -175,6 +177,7 @@ export function createQuickTranslateController(
     target: string;
     gen: number;
     draftAtDispatch: number;
+    uiaOnly: boolean;
     done: () => void;
   } | null = null;
   let lastDeliverySeq = 0;
@@ -363,9 +366,9 @@ export function createQuickTranslateController(
     deliverSource(copiedText, "clipboard");
   };
 
-  const readSelection = async (target: string): Promise<SelectionTextRead> => {
+  const readSelection = async (target: string, uiaOnly: boolean): Promise<SelectionTextRead> => {
     try {
-      return await selectionText!.read(target);
+      return await selectionText!.read(target, uiaOnly ? { uiaOnly: true } : undefined);
     } catch {
       return { status: "unavailable" };
     }
@@ -405,10 +408,15 @@ export function createQuickTranslateController(
   };
 
   /** One UI Automation read at a time. A newer press replaces the single queued target. */
-  const runSelectionRead = async (target: string, gen: number, draftAtDispatch: number) => {
+  const runSelectionRead = async (
+    target: string,
+    gen: number,
+    draftAtDispatch: number,
+    uiaOnly: boolean,
+  ) => {
     selectionReading = true;
     try {
-      const result = await readSelection(target);
+      const result = await readSelection(target, uiaOnly);
       applySelectionResult(target, result, gen, draftAtDispatch);
     } finally {
       selectionReading = false;
@@ -425,7 +433,9 @@ export function createQuickTranslateController(
       next.done();
       return;
     }
-    void runSelectionRead(next.target, next.gen, next.draftAtDispatch).finally(next.done);
+    void runSelectionRead(next.target, next.gen, next.draftAtDispatch, next.uiaOnly).finally(
+      next.done,
+    );
   };
 
   /** Reads the foreground selection before the popup takes focus, then translates it once. */
@@ -447,11 +457,34 @@ export function createQuickTranslateController(
     if (selectionReading) {
       queuedSelection?.done();
       await new Promise<void>((resolve) => {
-        queuedSelection = { target, gen, draftAtDispatch, done: resolve };
+        queuedSelection = { target, gen, draftAtDispatch, uiaOnly: false, done: resolve };
       });
       return;
     }
-    await runSelectionRead(target, gen, draftAtDispatch);
+    await runSelectionRead(target, gen, draftAtDispatch, false);
+  };
+
+  /**
+   * Reads the selection captured by a drag release, after the user clicked its hint.
+   *
+   * UI Automation is the only reader here: this path never simulates a copy. A target that is no
+   * longer current opens nothing.
+   */
+  const activateSelectionFromHint = async (target: string): Promise<void> => {
+    if (!selectionText) return;
+    if (isSelecting()) return;
+    if (!selectionTargetIsCurrent(target)) return;
+    setSelectionFeedback(null);
+    const gen = ++sourceReadGen;
+    const draftAtDispatch = draftGen;
+    if (selectionReading) {
+      queuedSelection?.done();
+      await new Promise<void>((resolve) => {
+        queuedSelection = { target, gen, draftAtDispatch, uiaOnly: true, done: resolve };
+      });
+      return;
+    }
+    await runSelectionRead(target, gen, draftAtDispatch, true);
   };
 
   const waitForHidden = async (win: WindowRef, signal: AbortSignal): Promise<boolean> => {
@@ -685,6 +718,7 @@ export function createQuickTranslateController(
     close,
     activateDoubleCopy,
     activateSelectionTranslate,
+    activateSelectionFromHint,
     startOcr,
     setPinned: (pinned: boolean) => pinnedSignal.set(pinned),
     togglePinned: () => pinnedSignal.set(!pinnedSignal()),
