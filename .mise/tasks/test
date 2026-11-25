@@ -2,4 +2,5 @@
 #MISE description="Run Rust and headless UI tests."
 set -euo pipefail
 
+cargo test --manifest-path ext/langnext-native/Cargo.toml
 nsh test . "$@"

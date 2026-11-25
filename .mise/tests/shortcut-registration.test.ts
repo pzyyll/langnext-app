@@ -3,7 +3,7 @@ import {
   QUICK_TRANSLATE_SHORTCUT_STORAGE_KEY,
   SCREENSHOT_TRANSLATE_SHORTCUT_STORAGE_KEY,
   SELECTION_TRANSLATE_SHORTCUT_STORAGE_KEY,
-} from "../../features/settings/shortcuts";
+} from "../../src/features/settings/shortcuts";
 
 // Run with --target windows. Headless NSH does not answer native hotkey registration.
 test("Windows records and registers independent translation shortcuts", async () => {

@@ -3,4 +3,4 @@
 set -euo pipefail
 
 pnpm exec oxlint .
-cargo clippy --all-targets -- -D warnings
+cargo clippy --manifest-path ext/langnext-native/Cargo.toml --all-targets -- -D warnings

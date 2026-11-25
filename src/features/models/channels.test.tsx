@@ -1,0 +1,2183 @@
+import { expect, open, type StubResponse, test } from "nsh/test";
+import {
+  CREDENTIAL_KEY_PREFIX,
+  credentialStorageKey,
+  MODELS_STORAGE_KEY,
+  PROVIDERS_STORAGE_KEY,
+} from "./store";
+import type { ProviderChannel } from "../../modules/ai/contracts/channel";
+import type { ProviderModel } from "../../modules/ai/contracts/model";
+import {
+  catalogCache,
+  emptyCatalogCache,
+  makeChannel,
+  makeModel,
+  makeSeedStorage,
+  startDraftFromEmptyState,
+  startDraftFromRail,
+} from "./__tests__/fixtures";
+
+const APP_ENTRY = "../../../App.tsx";
+const MODELS_DEV_REQUEST = "GET https://models.dev/models.json";
+const viewport = { width: 1040, height: 720, platform: "windows" as const };
+
+test("provider channels: saves an empty OpenAI draft offline", async () => {
+  const app = await open(APP_ENTRY, {
+    ...viewport,
+    storage: { ...emptyCatalogCache(), "settings.language": "en" },
+  });
+
+  await app.press("id:empty-add-channel-button");
+  await app.waitFor("id:add-channel-dialog");
+
+  await app.press("id:provider-preset-openai");
+  await app.waitUntil(() => !app.shows("id:add-channel-dialog"));
+  await app.waitFor("id:provider-editor");
+
+  expect(app.storage()["models.v2.providers"]).toBeUndefined();
+  expect(app.requests()).toHaveLength(0);
+
+  await app.clear("id:channel-name-input");
+  await app.type("id:channel-name-input", "OpenAI Direct");
+
+  await app.press("id:save-channel-button");
+  await app.waitUntil(() => app.storage()["models.v2.providers"] !== undefined);
+
+  expect(app.requests()).toHaveLength(0);
+
+  const reopened = await open(APP_ENTRY, {
+    ...viewport,
+    storage: app.storage(),
+  });
+  expect(reopened.shows("id:provider-editor")).toBe(true);
+  expect(reopened.texts()).toContain("OpenAI Direct");
+  expect(reopened.texts()).toContain("OpenAI Responses");
+  expect(reopened.texts()).toContain("No models yet");
+  expect(reopened.requests()).toHaveLength(0);
+});
+
+test("provider channels: rail subtitle shows the provider, not the API type", async () => {
+  const openai = makeChannel({
+    id: "ch-openai",
+    presetId: "openai",
+    displayName: "Work",
+    adapterId: "openai-compatible",
+  });
+  const deepseek = makeChannel({
+    id: "ch-deepseek",
+    presetId: "deepseek",
+    displayName: "Proxied",
+    adapterId: "anthropic",
+    enabled: false,
+    sortOrder: 1,
+  });
+
+  const app = await open(APP_ENTRY, {
+    ...viewport,
+    storage: makeSeedStorage({
+      channels: [openai, deepseek],
+      credentials: { [openai.id]: "sk-oai", [deepseek.id]: "sk-ds" },
+    }),
+  });
+
+  await app.waitFor("id:channels-rail");
+  expect(app.shows("id:channel-item-ch-openai >> text:OpenAI")).toBe(true);
+  expect(app.shows("id:channel-item-ch-deepseek >> text:DeepSeek")).toBe(true);
+  expect(app.shows("id:channel-item-ch-openai >> text:OpenAI Chat Completions")).toBe(false);
+  expect(app.shows("id:channel-item-ch-deepseek >> text:Anthropic Messages")).toBe(false);
+});
+
+test("provider channels: repeated saved channel switches isolate connection fields and models", async () => {
+  const openai = makeChannel();
+  const deepseek = makeChannel({
+    id: "ch-deepseek",
+    presetId: "deepseek",
+    displayName: "DeepSeek Main",
+    adapterId: "openai-compatible",
+    baseUrl: "https://api.deepseek.com",
+    hasCredential: false,
+    sortOrder: 1,
+  });
+  const app = await open(APP_ENTRY, {
+    ...viewport,
+    storage: makeSeedStorage({
+      channels: [openai, deepseek],
+      models: [
+        makeModel({ modelKey: "gpt-4o" }),
+        makeModel({
+          id: "m-deepseek",
+          providerId: deepseek.id,
+          modelKey: "deepseek-chat",
+          sourceAdapterId: "openai-compatible",
+        }),
+      ],
+      credentials: { [openai.id]: "sk-openai" },
+    }),
+  });
+  await app.waitFor("id:model-row-gpt-4o");
+  const storageBefore = app.storage();
+
+  for (const channel of [deepseek, openai, deepseek, openai]) {
+    // Leave unsaved input and search state in the editor that is about to go away.
+    await app.clear("id:connection-url-input");
+    await app.type("id:connection-url-input", "https://unsaved.example.com/v1");
+    await app.type("id:connection-token-input", "sk-unsaved");
+    await app.type("id:models-search-input", "no-match");
+    await app.press(`id:channel-item-${channel.id}`);
+    await app.waitUntil(() => app.value("id:connection-url-input") === channel.baseUrl);
+
+    expect(app.count("id:provider-editor")).toBe(1);
+    expect(app.count("id:connection-card")).toBe(1);
+    expect(app.count("id:models-card")).toBe(1);
+    expect(app.count("id:connection-url-input")).toBe(1);
+    expect(app.count("id:connection-token-input")).toBe(1);
+    expect(app.value("id:connection-token-input")).toBe("");
+    expect(app.value("id:models-search-input")).toBe("");
+    expect(app.shows("id:save-channel-button")).toBe(false);
+    expect(app.shows("id:model-row-gpt-4o")).toBe(channel.id === openai.id);
+    expect(app.shows("id:model-row-deepseek-chat")).toBe(channel.id === deepseek.id);
+    expect(app.shows("id:provider-editor >> text:OpenAI Responses")).toBe(channel.id === openai.id);
+    expect(app.shows("id:provider-editor >> text:OpenAI Chat Completions")).toBe(
+      channel.id === deepseek.id,
+    );
+    expect(app.shows("text:Stored token retained (type to replace)")).toBe(channel.hasCredential);
+    expect(app.shows("text:Paste API key")).toBe(!channel.hasCredential);
+  }
+
+  // A cleared credential must not leave the next channel's field read-only.
+  await app.press("id:clear-token-button");
+  expect(app.enabled("id:connection-token-input")).toBe(false);
+  await app.press(`id:channel-item-${deepseek.id}`);
+  expect(app.enabled("id:connection-token-input")).toBe(true);
+  expect(app.storage()).toEqual(storageBefore);
+  expect(app.requests()).toHaveLength(0);
+});
+
+test("provider channels: same-channel updates retain pending connection edits", async () => {
+  const channel = makeChannel();
+  const app = await open(APP_ENTRY, {
+    ...viewport,
+    storage: makeSeedStorage({
+      channels: [channel],
+      models: [makeModel()],
+      credentials: { [channel.id]: "sk-openai" },
+    }),
+  });
+  await app.waitFor("id:model-row-gpt-4o");
+  await app.clear("id:connection-url-input");
+  await app.type("id:connection-url-input", "https://unsaved.example.com/v1");
+  await app.type("id:connection-token-input", "sk-replacement");
+  await app.type("id:models-search-input", "gpt");
+
+  await app.press("id:channel-enabled-switch");
+  await app.waitUntil(() => JSON.parse(app.storage()[PROVIDERS_STORAGE_KEY]!)[0].enabled === false);
+
+  expect(app.count("id:provider-editor")).toBe(1);
+  expect(app.value("id:connection-url-input")).toBe("https://unsaved.example.com/v1");
+  expect(app.value("id:connection-token-input")).toBe("sk-replacement");
+  expect(app.value("id:models-search-input")).toBe("gpt");
+  expect(app.shows("id:save-channel-button")).toBe(true);
+  expect(app.shows("id:model-row-gpt-4o")).toBe(true);
+  expect(app.storage()[credentialStorageKey(channel.id)]).toBe("sk-openai");
+  expect(app.requests()).toHaveLength(0);
+});
+
+test("provider channels: Gemini has one fixed default API", async () => {
+  const app = await open(APP_ENTRY, {
+    ...viewport,
+    storage: { ...emptyCatalogCache(), "settings.language": "en" },
+  });
+
+  await app.press("id:empty-add-channel-button");
+  await app.waitFor("id:add-channel-dialog");
+  await app.press("id:provider-preset-gemini");
+  await app.waitUntil(() => !app.shows("id:add-channel-dialog"));
+  await app.waitFor("id:provider-editor");
+
+  expect(app.value("id:channel-name-input")).toBe("Google Gemini");
+  expect(app.value("id:connection-url-input")).toBe("https://generativelanguage.googleapis.com");
+  expect(app.shows("id:connection-adapter-select")).toBe(false);
+  expect(app.texts()).toContain("Gemini API");
+  expect(app.texts()).not.toContain("OpenAI Chat Completions");
+  expect(app.texts()).not.toContain("OpenAI Responses");
+  expect(app.texts()).not.toContain("Anthropic Messages");
+});
+
+test("provider channels: Anthropic has one fixed default API", async () => {
+  const app = await open(APP_ENTRY, {
+    ...viewport,
+    storage: { ...emptyCatalogCache(), "settings.language": "en" },
+  });
+
+  await app.press("id:empty-add-channel-button");
+  await app.waitFor("id:add-channel-dialog");
+  await app.press("id:provider-preset-anthropic");
+  await app.waitUntil(() => !app.shows("id:add-channel-dialog"));
+  await app.waitFor("id:provider-editor");
+
+  expect(app.value("id:channel-name-input")).toBe("Anthropic");
+  expect(app.value("id:connection-url-input")).toBe("https://api.anthropic.com");
+  expect(app.shows("id:connection-adapter-select")).toBe(false);
+  expect(app.texts()).toContain("Anthropic Messages");
+  expect(app.texts()).not.toContain("OpenAI Chat Completions");
+  expect(app.texts()).not.toContain("Gemini API");
+});
+
+test("provider channels: OpenAI defaults to Responses and allows only Chat and Responses", async () => {
+  const app = await open(APP_ENTRY, {
+    ...viewport,
+    storage: { ...emptyCatalogCache(), "settings.language": "en" },
+  });
+
+  await app.press("id:empty-add-channel-button");
+  await app.waitFor("id:add-channel-dialog");
+  await app.press("id:provider-preset-openai");
+  await app.waitUntil(() => !app.shows("id:add-channel-dialog"));
+  await app.waitFor("id:provider-editor");
+
+  expect(app.value("id:channel-name-input")).toBe("OpenAI");
+  expect(app.value("id:connection-url-input")).toBe("https://api.openai.com/v1");
+  expect(app.shows("id:connection-adapter-select")).toBe(true);
+  expect(app.texts()).toContain("OpenAI Responses");
+
+  await app.press("id:connection-adapter-select");
+  await app.waitFor("role:option[OpenAI Chat Completions]");
+  expect(app.shows("role:option[OpenAI Responses]")).toBe(true);
+  expect(app.shows("role:option[Anthropic Messages]")).toBe(false);
+  expect(app.shows("role:option[Gemini API]")).toBe(false);
+  expect(app.shows("role:option[DeepSeek]")).toBe(false);
+});
+
+test("provider channels: DeepSeek allows Chat, Responses, and Messages without DeepSeek protocol", async () => {
+  const app = await open(APP_ENTRY, {
+    ...viewport,
+    storage: { ...emptyCatalogCache(), "settings.language": "en" },
+  });
+
+  await app.press("id:empty-add-channel-button");
+  await app.waitFor("id:add-channel-dialog");
+  await app.press("id:provider-preset-deepseek");
+  await app.waitUntil(() => !app.shows("id:add-channel-dialog"));
+  await app.waitFor("id:provider-editor");
+
+  expect(app.value("id:channel-name-input")).toBe("DeepSeek");
+  expect(app.value("id:connection-url-input")).toBe("https://api.deepseek.com");
+  expect(app.texts()).toContain("OpenAI Chat Completions");
+
+  await app.press("id:connection-adapter-select");
+  await app.waitFor("role:option[OpenAI Chat Completions]");
+  expect(app.shows("role:option[OpenAI Responses]")).toBe(true);
+  expect(app.shows("role:option[Anthropic Messages]")).toBe(true);
+  expect(app.shows("role:option[Gemini API]")).toBe(false);
+  expect(app.shows("role:option[DeepSeek]")).toBe(false);
+});
+
+test("provider channels: Custom allows all four protocols with no preset URL", async () => {
+  const app = await open(APP_ENTRY, {
+    ...viewport,
+    storage: { ...emptyCatalogCache(), "settings.language": "en" },
+  });
+
+  await app.press("id:empty-add-channel-button");
+  await app.waitFor("id:add-channel-dialog");
+  await app.press("id:provider-preset-custom");
+  await app.waitUntil(() => !app.shows("id:add-channel-dialog"));
+  await app.waitFor("id:provider-editor");
+
+  expect(app.value("id:channel-name-input")).toBe("Custom");
+  expect(app.value("id:connection-url-input")).toBe("");
+  expect(app.texts()).toContain("OpenAI Chat Completions");
+
+  await app.press("id:connection-adapter-select");
+  await app.waitFor("role:option[OpenAI Chat Completions]");
+  expect(app.shows("role:option[OpenAI Responses]")).toBe(true);
+  expect(app.shows("role:option[Anthropic Messages]")).toBe(true);
+  expect(app.shows("role:option[Gemini API]")).toBe(true);
+  expect(app.shows("role:option[DeepSeek]")).toBe(false);
+});
+
+test("provider channels: picker dismissal keeps selection and proxy URL keeps preset", async () => {
+  const emptyApp = await open(APP_ENTRY, {
+    ...viewport,
+    storage: { ...emptyCatalogCache(), "settings.language": "en" },
+  });
+  await emptyApp.press("id:empty-add-channel-button");
+  await emptyApp.waitFor("id:add-channel-dialog");
+  expect(emptyApp.texts()).not.toContain("Base URL");
+  expect(emptyApp.texts()).not.toContain("API Key");
+  await emptyApp.press("role:button[Cancel]");
+  await emptyApp.waitUntil(() => !emptyApp.shows("id:add-channel-dialog"));
+  expect(emptyApp.shows("id:empty-add-channel-button")).toBe(true);
+  expect(emptyApp.shows("id:provider-editor")).toBe(false);
+
+  const savedChannel = makeChannel({ id: "ch-saved", displayName: "Saved OpenAI" });
+  const app = await open(APP_ENTRY, {
+    ...viewport,
+    storage: makeSeedStorage({
+      channels: [savedChannel],
+      credentials: { "ch-saved": "sk-dummy-saved" },
+    }),
+  });
+
+  await app.press("id:add-channel-button");
+  await app.waitFor("id:add-channel-dialog");
+  expect(app.shows("id:connection-url-input")).toBe(true);
+  await app.keyboard.press("escape");
+  await app.waitUntil(() => !app.shows("id:add-channel-dialog"));
+  expect(app.texts()).toContain("Saved OpenAI");
+  expect(app.shows("id:draft-channel-card")).toBe(false);
+
+  await startDraftFromRail(app, "openai");
+  expect(app.shows("id:draft-channel-card")).toBe(true);
+
+  await app.clear("id:connection-url-input");
+  await app.type("id:connection-url-input", "https://api.anthropic.com/gateway");
+  expect(app.texts()).toContain("OpenAI");
+
+  await app.press("id:connection-adapter-select");
+  await app.waitFor("role:option[OpenAI Chat Completions]");
+  expect(app.shows("role:option[OpenAI Responses]")).toBe(true);
+  expect(app.shows("role:option[Anthropic Messages]")).toBe(false);
+  expect(app.shows("role:option[Gemini API]")).toBe(false);
+});
+
+test("provider channels: edits manual models before first save", async () => {
+  const app = await open(APP_ENTRY, {
+    ...viewport,
+    storage: { ...emptyCatalogCache(), "settings.language": "en" },
+  });
+
+  await startDraftFromEmptyState(app, "openai");
+
+  await app.press("id:add-model-button");
+  await app.waitFor("id:add-model-dialog");
+  await app.type("id:add-model-key-input", "not-a-real-model");
+  await app.press("id:confirm-add-model");
+  await app.waitUntil(() => !app.shows("id:add-model-dialog"));
+  await app.waitFor("id:model-row-not-a-real-model");
+
+  await app.press("id:configure-model-not-a-real-model");
+  await app.waitFor("id:edit-model-dialog");
+  await app.type("id:edit-model-name-input", "Custom Offline Model");
+  await app.press("id:edit-model-cap-image");
+  await app.press("id:edit-model-cap-pdf");
+  await app.type("id:edit-model-context-input", "64000");
+  await app.type("id:edit-model-max-tokens-input", "4096");
+  await app.press("id:confirm-edit-model");
+  await app.waitUntil(() => !app.shows("id:edit-model-dialog"));
+
+  expect(app.texts()).toContain("Custom Offline Model");
+  expect(app.texts()).toContain("64K ctx");
+  expect(app.texts()).toContain("4096 out");
+
+  // Manual models start enabled; toggling updates in memory and stays persisted-free.
+  await app.press("id:toggle-model-not-a-real-model");
+  await app.press("id:models-filter-select");
+  await app.waitFor("role:option[Disabled]");
+  await app.press("role:option[Disabled]");
+  expect(app.shows("id:model-row-not-a-real-model")).toBe(true);
+
+  await app.press("id:toggle-model-not-a-real-model");
+  expect(app.shows("id:model-row-not-a-real-model")).toBe(false);
+  await app.press("id:models-filter-select");
+  await app.waitFor("role:option[All]");
+  await app.press("role:option[All]");
+  expect(app.shows("id:model-row-not-a-real-model")).toBe(true);
+
+  const storage = app.storage();
+  expect(storage[PROVIDERS_STORAGE_KEY]).toBeUndefined();
+  expect(storage[MODELS_STORAGE_KEY]).toBeUndefined();
+  expect(Object.keys(storage).some((k) => k.startsWith(CREDENTIAL_KEY_PREFIX))).toBe(false);
+});
+
+test("provider channels: removes draft model entries without writing storage", async () => {
+  const app = await open(APP_ENTRY, {
+    ...viewport,
+    storage: { ...emptyCatalogCache(), "settings.language": "en" },
+  });
+
+  await startDraftFromEmptyState(app, "openai");
+
+  await app.press("id:add-model-button");
+  await app.waitFor("id:add-model-dialog");
+  await app.type("id:add-model-key-input", "draft-model-1");
+  await app.press("id:confirm-add-model");
+  await app.waitUntil(() => !app.shows("id:add-model-dialog"));
+
+  await app.press("id:add-model-button");
+  await app.waitFor("id:add-model-dialog");
+  await app.type("id:add-model-key-input", "draft-model-2");
+  await app.press("id:confirm-add-model");
+  await app.waitUntil(() => !app.shows("id:add-model-dialog"));
+
+  expect(app.shows("id:model-row-draft-model-1")).toBe(true);
+  expect(app.shows("id:model-row-draft-model-2")).toBe(true);
+
+  await app.press("id:select-models-button");
+  await app.press("id:select-model-draft-model-1");
+  await app.press("id:bulk-delete-models-button");
+  await app.waitFor("id:bulk-delete-models-dialog");
+  await app.press("role:button[Delete]");
+  await app.waitUntil(() => !app.shows("id:bulk-delete-models-dialog"));
+
+  expect(app.shows("id:model-row-draft-model-1")).toBe(false);
+  expect(app.shows("id:model-row-draft-model-2")).toBe(true);
+
+  const storage = app.storage();
+  expect(storage[PROVIDERS_STORAGE_KEY]).toBeUndefined();
+  expect(storage[MODELS_STORAGE_KEY]).toBeUndefined();
+  expect(Object.keys(storage).some((k) => k.startsWith(CREDENTIAL_KEY_PREFIX))).toBe(false);
+});
+
+test("provider channels: closing model dialogs keeps channel draft intact", async () => {
+  const app = await open(APP_ENTRY, {
+    ...viewport,
+    storage: { ...emptyCatalogCache(), "settings.language": "en" },
+  });
+
+  await startDraftFromEmptyState(app, "openai");
+  await app.clear("id:channel-name-input");
+  await app.type("id:channel-name-input", "My Draft Channel");
+
+  await app.press("id:add-model-button");
+  await app.waitFor("id:add-model-dialog");
+  await app.type("id:add-model-key-input", "never-added-model");
+  await app.press("id:add-model-dialog >> role:button[Cancel]");
+  await app.waitUntil(() => !app.shows("id:add-model-dialog"));
+
+  expect(app.shows("id:draft-channel-card")).toBe(true);
+  expect(app.value("id:channel-name-input")).toBe("My Draft Channel");
+  expect(app.shows("id:model-row-never-added-model")).toBe(false);
+
+  await app.press("id:add-model-button");
+  await app.waitFor("id:add-model-dialog");
+  await app.type("id:add-model-key-input", "kept-draft-model");
+  await app.press("id:confirm-add-model");
+  await app.waitUntil(() => !app.shows("id:add-model-dialog"));
+
+  await app.press("id:configure-model-kept-draft-model");
+  await app.waitFor("id:edit-model-dialog");
+  await app.type("id:edit-model-name-input", "Ignored Name");
+  await app.press("id:edit-model-dialog >> role:button[Cancel]");
+  await app.waitUntil(() => !app.shows("id:edit-model-dialog"));
+
+  expect(app.shows("id:draft-channel-card")).toBe(true);
+  expect(app.value("id:channel-name-input")).toBe("My Draft Channel");
+  expect(app.shows("id:model-row-kept-draft-model")).toBe(true);
+  expect(app.texts()).not.toContain("Ignored Name");
+  expect(app.storage()[PROVIDERS_STORAGE_KEY]).toBeUndefined();
+  expect(app.storage()[MODELS_STORAGE_KEY]).toBeUndefined();
+});
+
+test("provider channels: models inherit default API until overridden", async () => {
+  const app = await open(APP_ENTRY, {
+    ...viewport,
+    storage: { ...emptyCatalogCache(), "settings.language": "en" },
+  });
+
+  await startDraftFromEmptyState(app, "openai");
+
+  await app.press("id:add-model-button");
+  await app.waitFor("id:add-model-dialog");
+  await app.press("id:add-model-api-select");
+  await app.waitFor("role:option[OpenAI Chat Completions]");
+  expect(app.shows("role:option[Use channel default]")).toBe(true);
+  expect(app.shows("role:option[OpenAI Responses]")).toBe(true);
+  expect(app.shows("role:option[Anthropic Messages]")).toBe(false);
+  expect(app.shows("role:option[Gemini API]")).toBe(false);
+  await app.press("role:option[Use channel default]");
+  await app.type("id:add-model-key-input", "model-inherited");
+  await app.press("id:confirm-add-model");
+  await app.waitUntil(() => !app.shows("id:add-model-dialog"));
+
+  await app.press("id:add-model-button");
+  await app.waitFor("id:add-model-dialog");
+  await app.type("id:add-model-key-input", "model-chat");
+  await app.press("id:add-model-api-select");
+  await app.waitFor("role:option[OpenAI Chat Completions]");
+  await app.press("role:option[OpenAI Chat Completions]");
+  await app.press("id:confirm-add-model");
+  await app.waitUntil(() => !app.shows("id:add-model-dialog"));
+
+  expect(app.shows("id:model-row-model-inherited >> text:Default (OpenAI Responses)")).toBe(true);
+  expect(app.shows("id:model-row-model-chat >> text:OpenAI Chat Completions")).toBe(true);
+
+  await app.press("id:connection-adapter-select");
+  await app.waitFor("role:option[OpenAI Chat Completions]");
+  await app.press("role:option[OpenAI Chat Completions]");
+
+  expect(app.shows("id:model-row-model-inherited >> text:Default (OpenAI Chat Completions)")).toBe(
+    true,
+  );
+  expect(app.shows("id:model-row-model-chat >> text:OpenAI Chat Completions")).toBe(true);
+
+  await app.press("id:connection-adapter-select");
+  await app.waitFor("role:option[OpenAI Responses]");
+  await app.press("role:option[OpenAI Responses]");
+
+  expect(app.shows("id:model-row-model-inherited >> text:Default (OpenAI Responses)")).toBe(true);
+  expect(app.shows("id:model-row-model-chat >> text:OpenAI Chat Completions")).toBe(true);
+});
+
+test("provider channels: clearing a model override restores inheritance", async () => {
+  const app = await open(APP_ENTRY, {
+    ...viewport,
+    storage: { ...emptyCatalogCache(), "settings.language": "en" },
+  });
+
+  await startDraftFromEmptyState(app, "openai");
+
+  await app.press("id:add-model-button");
+  await app.waitFor("id:add-model-dialog");
+  await app.type("id:add-model-key-input", "model-clearable");
+  await app.press("id:add-model-api-select");
+  await app.waitFor("role:option[OpenAI Chat Completions]");
+  await app.press("role:option[OpenAI Chat Completions]");
+  await app.press("id:confirm-add-model");
+  await app.waitUntil(() => !app.shows("id:add-model-dialog"));
+  expect(app.shows("id:model-row-model-clearable >> text:OpenAI Chat Completions")).toBe(true);
+
+  await app.press("id:configure-model-model-clearable");
+  await app.waitFor("id:edit-model-dialog");
+  await app.press("id:edit-model-api-select");
+  await app.waitFor("role:option[Use channel default]");
+  expect(app.shows("role:option[OpenAI Chat Completions]")).toBe(true);
+  expect(app.shows("role:option[OpenAI Responses]")).toBe(true);
+  expect(app.shows("role:option[Anthropic Messages]")).toBe(false);
+  expect(app.shows("role:option[Gemini API]")).toBe(false);
+  await app.press("role:option[Use channel default]");
+  await app.press("id:confirm-edit-model");
+  await app.waitUntil(() => !app.shows("id:edit-model-dialog"));
+
+  expect(app.shows("id:model-row-model-clearable >> text:Default (OpenAI Responses)")).toBe(true);
+
+  await app.press("id:connection-adapter-select");
+  await app.waitFor("role:option[OpenAI Chat Completions]");
+  await app.press("role:option[OpenAI Chat Completions]");
+  expect(app.shows("id:model-row-model-clearable >> text:Default (OpenAI Chat Completions)")).toBe(
+    true,
+  );
+});
+
+test("provider channels: saved channel editor filters model overrides and preserves inheritance", async () => {
+  const channel = makeChannel({
+    id: "ch-saved-openai",
+    presetId: "openai",
+    displayName: "Saved OpenAI",
+    adapterId: "openai-responses",
+  });
+  const inheritedFromChatSource = makeModel({
+    id: "m-inherited",
+    providerId: channel.id,
+    modelKey: "gpt-4.1",
+    sourceAdapterId: "openai-compatible",
+    apiTypeOverride: null,
+    enabled: true,
+  });
+  const overriddenModel = makeModel({
+    id: "m-overridden",
+    providerId: channel.id,
+    modelKey: "gpt-4o-mini",
+    sourceAdapterId: "openai-responses",
+    apiTypeOverride: "openai-compatible",
+    enabled: true,
+  });
+
+  const app = await open(APP_ENTRY, {
+    ...viewport,
+    storage: makeSeedStorage({
+      channels: [channel],
+      models: [inheritedFromChatSource, overriddenModel],
+      credentials: { [channel.id]: "sk-dummy-openai" },
+    }),
+  });
+
+  expect(app.shows("id:model-row-gpt-4.1 >> text:Default (OpenAI Responses)")).toBe(true);
+  expect(app.shows("id:model-row-gpt-4o-mini >> text:OpenAI Chat Completions")).toBe(true);
+
+  await app.press("id:configure-model-gpt-4o-mini");
+  await app.waitFor("id:edit-model-dialog");
+  await app.press("id:edit-model-api-select");
+  await app.waitFor("role:option[Use channel default]");
+  expect(app.shows("role:option[OpenAI Chat Completions]")).toBe(true);
+  expect(app.shows("role:option[OpenAI Responses]")).toBe(true);
+  expect(app.shows("role:option[Anthropic Messages]")).toBe(false);
+  await app.press("role:option[Use channel default]");
+  await app.press("id:confirm-edit-model");
+  await app.waitUntil(() => !app.shows("id:edit-model-dialog"));
+
+  expect(app.shows("id:model-row-gpt-4o-mini >> text:Default (OpenAI Responses)")).toBe(true);
+
+  await app.press("id:connection-adapter-select");
+  await app.waitFor("role:option[OpenAI Chat Completions]");
+  await app.press("role:option[OpenAI Chat Completions]");
+  await app.press("id:save-channel-button");
+  await app.waitUntil(() => !app.shows("id:save-channel-button"));
+
+  expect(app.shows("id:model-row-gpt-4.1 >> text:Default (OpenAI Chat Completions)")).toBe(true);
+  expect(app.shows("id:model-row-gpt-4o-mini >> text:Default (OpenAI Chat Completions)")).toBe(
+    true,
+  );
+
+  const reopened = await open(APP_ENTRY, {
+    ...viewport,
+    storage: app.storage(),
+  });
+  expect(reopened.shows("id:model-row-gpt-4.1 >> text:Default (OpenAI Chat Completions)")).toBe(
+    true,
+  );
+  expect(reopened.shows("id:model-row-gpt-4o-mini >> text:Default (OpenAI Chat Completions)")).toBe(
+    true,
+  );
+});
+
+test("provider channels: DeepSeek model allows Messages override without Gemini", async () => {
+  const app = await open(APP_ENTRY, {
+    ...viewport,
+    storage: { ...emptyCatalogCache(), "settings.language": "en" },
+  });
+
+  await startDraftFromEmptyState(app, "deepseek");
+
+  await app.press("id:add-model-button");
+  await app.waitFor("id:add-model-dialog");
+  await app.type("id:add-model-key-input", "deepseek-reasoner");
+  await app.press("id:confirm-add-model");
+  await app.waitUntil(() => !app.shows("id:add-model-dialog"));
+
+  await app.press("id:add-model-button");
+  await app.waitFor("id:add-model-dialog");
+  await app.type("id:add-model-key-input", "deepseek-chat");
+  await app.press("id:add-model-api-select");
+  await app.waitFor("role:option[Anthropic Messages]");
+  expect(app.shows("role:option[Use channel default]")).toBe(true);
+  expect(app.shows("role:option[OpenAI Chat Completions]")).toBe(true);
+  expect(app.shows("role:option[OpenAI Responses]")).toBe(true);
+  expect(app.shows("role:option[Gemini API]")).toBe(false);
+  expect(app.shows("role:option[DeepSeek]")).toBe(false);
+  await app.press("role:option[Anthropic Messages]");
+  await app.press("id:confirm-add-model");
+  await app.waitUntil(() => !app.shows("id:add-model-dialog"));
+
+  expect(
+    app.shows("id:model-row-deepseek-reasoner >> text:Default (OpenAI Chat Completions)"),
+  ).toBe(true);
+  expect(app.shows("id:model-row-deepseek-chat >> text:Anthropic Messages")).toBe(true);
+
+  await app.press("id:connection-adapter-select");
+  await app.waitFor("role:option[OpenAI Responses]");
+  await app.press("role:option[OpenAI Responses]");
+
+  expect(app.shows("id:model-row-deepseek-reasoner >> text:Default (OpenAI Responses)")).toBe(true);
+  expect(app.shows("id:model-row-deepseek-chat >> text:Anthropic Messages")).toBe(true);
+});
+
+test("provider channels: draft discovery uses current proxy inputs", async () => {
+  const app = await open(APP_ENTRY, {
+    ...viewport,
+    storage: { ...emptyCatalogCache(), "settings.language": "en" },
+    network: {
+      "GET https://proxy.example.com/custom-prefix/models": {
+        status: 200,
+        body: {
+          data: [{ id: "gpt-4.1-mini", display_name: "GPT-4.1 Mini" }],
+        },
+      },
+    },
+  });
+
+  await startDraftFromEmptyState(app, "openai");
+  await app.press("id:connection-adapter-select");
+  await app.waitFor("role:option[OpenAI Chat Completions]");
+  await app.press("role:option[OpenAI Chat Completions]");
+
+  await app.clear("id:connection-url-input");
+  await app.type("id:connection-url-input", "https://proxy.example.com/custom-prefix/");
+  await app.type("id:connection-token-input", "sk-draft-proxy-key");
+
+  await app.press("id:get-models-button");
+  await app.waitFor("id:model-row-gpt-4.1-mini");
+
+  expect(app.requests()).toHaveLength(1);
+  expect(app.requests()[0]!.url).toBe("https://proxy.example.com/custom-prefix/models");
+  expect(app.requests()[0]!.headers.authorization).toBe("Bearer sk-draft-proxy-key");
+  expect(app.shows("id:model-row-gpt-4.1-mini >> text:Default (OpenAI Chat Completions)")).toBe(
+    true,
+  );
+  expect(app.storage()[PROVIDERS_STORAGE_KEY]).toBeUndefined();
+  expect(app.storage()[MODELS_STORAGE_KEY]).toBeUndefined();
+});
+
+test("provider channels: dirty saved editor tests and fetches with keep, replace, and clear credentials", async () => {
+  const channel = makeChannel({
+    id: "ch-dirty-saved",
+    presetId: "openai",
+    displayName: "Dirty Saved",
+    adapterId: "openai-compatible",
+    baseUrl: "https://api.openai.com/v1",
+    hasCredential: true,
+  });
+
+  const app = await open(APP_ENTRY, {
+    ...viewport,
+    storage: makeSeedStorage({
+      channels: [channel],
+      credentials: { [channel.id]: "sk-saved-secret" },
+    }),
+    network: {
+      "GET https://proxy.example.com/v1/models": {
+        status: 200,
+        body: { data: [{ id: "gpt-4.1-mini" }] },
+      },
+    },
+  });
+
+  await app.press("id:connection-adapter-select");
+  await app.waitFor("role:option[OpenAI Responses]");
+  await app.press("role:option[OpenAI Responses]");
+  await app.clear("id:connection-url-input");
+  await app.type("id:connection-url-input", "https://proxy.example.com/v1");
+
+  await app.press("id:test-connection-button");
+  await app.waitUntil(() => app.requests().length === 1);
+  expect(app.requests()[0]!.url).toBe("https://proxy.example.com/v1/models");
+  expect(app.requests()[0]!.headers.authorization).toBe("Bearer sk-saved-secret");
+
+  await app.type("id:connection-token-input", "sk-replacement-secret");
+  await app.press("id:test-connection-button");
+  await app.waitUntil(() => app.requests().length === 2);
+  expect(app.requests()[1]!.headers.authorization).toBe("Bearer sk-replacement-secret");
+
+  await app.press("id:clear-token-button");
+  await app.press("id:get-models-button");
+  await app.waitFor("id:model-row-gpt-4.1-mini");
+  expect(app.requests()).toHaveLength(3);
+  expect(app.requests()[2]!.headers.authorization).toBeUndefined();
+
+  const stored = JSON.parse(app.storage()[PROVIDERS_STORAGE_KEY]!) as Array<{
+    baseUrl: string | null;
+  }>;
+  expect(stored[0]!.baseUrl).toBe("https://api.openai.com/v1");
+});
+
+test("provider channels: Custom without URL saves locally but rejects network actions", async () => {
+  const app = await open(APP_ENTRY, {
+    ...viewport,
+    storage: { ...emptyCatalogCache(), "settings.language": "en" },
+  });
+
+  await startDraftFromEmptyState(app, "custom");
+  expect(app.value("id:connection-url-input")).toBe("");
+
+  await app.press("id:test-connection-button");
+  await app.waitUntil(() =>
+    app.texts().some((t) => t.includes("Base URL is required before testing or fetching models.")),
+  );
+  expect(app.requests()).toHaveLength(0);
+
+  await app.press("id:get-models-button");
+  await app.waitUntil(() =>
+    app
+      .texts()
+      .some((t) =>
+        t.includes("Sync error: Base URL is required before testing or fetching models."),
+      ),
+  );
+  expect(app.requests()).toHaveLength(0);
+
+  await app.press("id:save-channel-button");
+  await app.waitUntil(() => app.storage()[PROVIDERS_STORAGE_KEY] !== undefined);
+  expect(app.requests()).toHaveLength(0);
+
+  const reopened = await open(APP_ENTRY, {
+    ...viewport,
+    storage: app.storage(),
+  });
+  expect(reopened.value("id:connection-url-input")).toBe("");
+  await reopened.press("id:test-connection-button");
+  await reopened.waitUntil(() =>
+    reopened
+      .texts()
+      .some((t) => t.includes("Base URL is required before testing or fetching models.")),
+  );
+  expect(reopened.requests()).toHaveLength(0);
+});
+
+test("provider channels: resync preserves one configured model per ID", async () => {
+  const deepseek = makeChannel({
+    id: "ch-deepseek",
+    presetId: "deepseek",
+    displayName: "DeepSeek",
+    adapterId: "openai-compatible",
+    baseUrl: "https://api.deepseek.com",
+  });
+
+  const app = await open(APP_ENTRY, {
+    ...viewport,
+    storage: makeSeedStorage({
+      channels: [deepseek],
+      credentials: { [deepseek.id]: "sk-ds-dummy" },
+    }),
+    network: {
+      "GET https://api.deepseek.com/models": {
+        status: 200,
+        body: { data: [{ id: "deepseek-chat", display_name: "DeepSeek Chat" }] },
+      },
+      "GET https://proxy.example.com/ds/models": {
+        status: 200,
+        body: { data: [{ id: "deepseek-chat", display_name: "DeepSeek V4" }] },
+      },
+    },
+  });
+
+  await app.press("id:get-models-button");
+  await app.waitFor("id:model-row-deepseek-chat");
+
+  await app.press("id:toggle-model-deepseek-chat");
+  await app.press("id:configure-model-deepseek-chat");
+  await app.waitFor("id:edit-model-dialog");
+  await app.type("id:edit-model-name-input", "DeepSeek Primary");
+  await app.press("id:edit-model-api-select");
+  await app.waitFor("role:option[Anthropic Messages]");
+  await app.press("role:option[Anthropic Messages]");
+  await app.type("id:edit-model-context-input", "128000");
+  await app.type("id:edit-model-max-tokens-input", "8192");
+  await app.press("id:confirm-edit-model");
+  await app.waitUntil(() => !app.shows("id:edit-model-dialog"));
+
+  await app.press("id:connection-adapter-select");
+  await app.waitFor("role:option[OpenAI Responses]");
+  await app.press("role:option[OpenAI Responses]");
+  await app.clear("id:connection-url-input");
+  await app.type("id:connection-url-input", "https://proxy.example.com/ds");
+
+  await app.press("id:get-models-button");
+  await app.waitUntil(() => app.requests().length === 2);
+
+  expect(app.count("id:model-row-deepseek-chat")).toBe(1);
+  expect(app.texts()).toContain("DeepSeek Primary");
+  expect(app.shows("id:model-row-deepseek-chat >> text:Anthropic Messages")).toBe(true);
+  expect(app.texts()).toContain("128K ctx");
+  expect(app.texts()).toContain("8192 out");
+
+  await app.press("id:models-filter-select");
+  await app.waitFor("role:option[Enabled]");
+  await app.press("role:option[Enabled]");
+  expect(app.count("id:model-row-deepseek-chat")).toBe(1);
+});
+
+test("provider channels: resync tracks missing, manual, duplicate IDs, and failed syncs across reopen", async () => {
+  const deepseek = makeChannel({
+    id: "ch-deepseek",
+    presetId: "deepseek",
+    displayName: "DeepSeek",
+    adapterId: "openai-compatible",
+    baseUrl: "https://api.deepseek.com",
+  });
+  const seededChat = makeModel({
+    id: "m-ds-chat",
+    providerId: deepseek.id,
+    modelKey: "deepseek-chat",
+    sourceAdapterId: "openai-compatible",
+    origin: "remote",
+    syncStatus: "active",
+    enabled: true,
+    displayName: "DeepSeek Chat",
+  });
+  const seededLegacy = makeModel({
+    id: "m-ds-legacy",
+    providerId: deepseek.id,
+    modelKey: "legacy-ds",
+    sourceAdapterId: "openai-compatible",
+    origin: "remote",
+    syncStatus: "active",
+    enabled: false,
+    displayName: "Legacy DS",
+  });
+  const seededManual = makeModel({
+    id: "m-ds-manual",
+    providerId: deepseek.id,
+    modelKey: "manual-custom",
+    sourceAdapterId: "openai-compatible",
+    origin: "manual",
+    syncStatus: "active",
+    enabled: true,
+    displayNameOverride: "Manual Custom",
+  });
+
+  const app = await open(APP_ENTRY, {
+    ...viewport,
+    storage: makeSeedStorage({
+      channels: [deepseek],
+      models: [seededChat, seededLegacy, seededManual],
+      credentials: { [deepseek.id]: "sk-ds-dummy" },
+    }),
+    network: {
+      "GET https://api.deepseek.com/models": {
+        status: 200,
+        body: {
+          data: [
+            { id: "deepseek-chat", display_name: "DeepSeek Chat" },
+            { id: "deepseek-reasoner", display_name: "DeepSeek Reasoner" },
+          ],
+        },
+      },
+      "GET https://fail.deepseek.example.com/models": {
+        status: 500,
+        body: { error: { message: "Upstream catalog unavailable" } },
+      },
+    },
+  });
+
+  await app.press("id:get-models-button");
+  await app.waitFor("id:model-row-deepseek-reasoner");
+
+  expect(app.shows("id:model-row-legacy-ds >> text:Missing")).toBe(true);
+  expect(app.shows("id:model-row-manual-custom")).toBe(true);
+  expect(app.shows("id:model-row-manual-custom >> text:Missing")).toBe(false);
+
+  // Adding a manual duplicate ID under a different API override is rejected.
+  await app.press("id:add-model-button");
+  await app.waitFor("id:add-model-dialog");
+  await app.type("id:add-model-key-input", "deepseek-chat");
+  await app.press("id:add-model-api-select");
+  await app.waitFor("role:option[Anthropic Messages]");
+  await app.press("role:option[Anthropic Messages]");
+  await app.press("id:confirm-add-model");
+  await app.waitUntil(() =>
+    app.texts().some((t) => t.includes('Model "deepseek-chat" already exists in this channel.')),
+  );
+  expect(app.shows("id:add-model-dialog")).toBe(true);
+  expect(app.count("id:model-row-deepseek-chat")).toBe(1);
+  await app.press("id:add-model-dialog >> role:button[Cancel]");
+  await app.waitUntil(() => !app.shows("id:add-model-dialog"));
+
+  // A failed fetch preserves the current model list.
+  await app.clear("id:connection-url-input");
+  await app.type("id:connection-url-input", "https://fail.deepseek.example.com");
+  await app.press("id:get-models-button");
+  await app.waitUntil(() =>
+    app.texts().some((t) => t.includes("Provider returned server error (HTTP 500)")),
+  );
+
+  const reopened = await open(APP_ENTRY, {
+    ...viewport,
+    storage: app.storage(),
+  });
+  await reopened.waitFor("id:model-row-deepseek-reasoner");
+
+  expect(reopened.count("id:model-row-deepseek-chat")).toBe(1);
+  expect(reopened.shows("id:model-row-legacy-ds >> text:Missing")).toBe(true);
+  expect(reopened.shows("id:model-row-manual-custom")).toBe(true);
+  expect(reopened.shows("id:model-row-manual-custom >> text:Missing")).toBe(false);
+
+  const persisted = JSON.parse(reopened.storage()[MODELS_STORAGE_KEY]!) as ProviderModel[];
+  expect(persisted).toHaveLength(4);
+  expect(persisted.find((m) => m.modelKey === "deepseek-chat")?.id).toBe("m-ds-chat");
+  expect(persisted.find((m) => m.modelKey === "deepseek-chat")?.enabled).toBe(true);
+  expect(persisted.find((m) => m.modelKey === "deepseek-reasoner")?.enabled).toBe(false);
+  expect(persisted.find((m) => m.modelKey === "legacy-ds")?.syncStatus).toBe("missing");
+  expect(persisted.find((m) => m.modelKey === "manual-custom")?.syncStatus).toBe("active");
+});
+
+test("provider channels: saves manual and fetched draft models locally", async () => {
+  const app = await open(APP_ENTRY, {
+    ...viewport,
+    storage: { ...emptyCatalogCache(), "settings.language": "en" },
+    network: {
+      "GET https://proxy.example.com/ds/models": {
+        status: 200,
+        body: {
+          data: [{ id: "deepseek-chat", display_name: "DeepSeek Chat" }],
+        },
+      },
+      "GET https://bad.example.com/ds/models": {
+        status: 401,
+        body: { error: { message: "Invalid API key" } },
+      },
+    },
+  });
+
+  await startDraftFromEmptyState(app, "deepseek");
+
+  await app.clear("id:channel-name-input");
+  await app.type("id:channel-name-input", "DeepSeek Draft");
+
+  await app.press("id:connection-adapter-select");
+  await app.waitFor("role:option[OpenAI Responses]");
+  await app.press("role:option[OpenAI Responses]");
+
+  await app.clear("id:connection-url-input");
+  await app.type("id:connection-url-input", "https://proxy.example.com/ds");
+  await app.type("id:connection-token-input", "sk-ds-draft");
+
+  // Fetch remote model into the draft.
+  await app.press("id:get-models-button");
+  await app.waitFor("id:model-row-deepseek-chat");
+
+  // Add a manual model that does not exist remotely.
+  await app.press("id:add-model-button");
+  await app.waitFor("id:add-model-dialog");
+  await app.type("id:add-model-key-input", "does-not-exist-v9");
+  await app.type("id:add-model-name-input", "Local Nonexistent");
+  await app.press("id:add-model-api-select");
+  await app.waitFor("role:option[Anthropic Messages]");
+  await app.press("role:option[Anthropic Messages]");
+  await app.press("id:confirm-add-model");
+  await app.waitUntil(() => !app.shows("id:add-model-dialog"));
+  await app.waitFor("id:model-row-does-not-exist-v9");
+
+  // Trigger a 401 catalog error before saving.
+  await app.clear("id:connection-url-input");
+  await app.type("id:connection-url-input", "https://bad.example.com/ds");
+  await app.press("id:get-models-button");
+  await app.waitUntil(() =>
+    app.texts().some((t) => t.includes("Authentication failed (HTTP 401)")),
+  );
+
+  const requestsBeforeSave = app.requests().length;
+  await app.press("id:save-channel-button");
+  await app.waitUntil(() => !app.shows("id:cancel-channel-button"));
+
+  expect(app.requests()).toHaveLength(requestsBeforeSave);
+
+  // Saved channel transition retains connection inputs, and cancelling Connection edits
+  // does not roll back model edits.
+  expect(app.value("id:connection-url-input")).toBe("https://bad.example.com/ds");
+  await app.clear("id:connection-url-input");
+  await app.type("id:connection-url-input", "https://changed.example.com");
+  await app.press("id:toggle-model-deepseek-chat");
+  await app.waitUntil(() =>
+    JSON.parse(app.storage()[MODELS_STORAGE_KEY]!).some(
+      (m: ProviderModel) => m.modelKey === "deepseek-chat" && m.enabled,
+    ),
+  );
+  await app.press("role:button[Cancel]");
+  expect(app.value("id:connection-url-input")).toBe("https://bad.example.com/ds");
+
+  const reopened = await open(APP_ENTRY, {
+    ...viewport,
+    storage: app.storage(),
+  });
+  await reopened.waitFor("id:model-row-does-not-exist-v9");
+
+  expect(reopened.requests()).toHaveLength(0);
+  expect(reopened.texts()).toContain("DeepSeek Draft");
+  expect(reopened.texts()).toContain("OpenAI Responses");
+  expect(reopened.value("id:connection-url-input")).toBe("https://bad.example.com/ds");
+  expect(reopened.shows("id:model-row-does-not-exist-v9 >> text:Local Nonexistent")).toBe(true);
+  expect(reopened.shows("id:model-row-does-not-exist-v9 >> text:Anthropic Messages")).toBe(true);
+  expect(reopened.shows("id:model-row-deepseek-chat")).toBe(true);
+
+  const persisted = JSON.parse(reopened.storage()[MODELS_STORAGE_KEY]!) as ProviderModel[];
+  expect(persisted).toHaveLength(2);
+  expect(persisted.find((m) => m.modelKey === "deepseek-chat")?.enabled).toBe(true);
+  expect(persisted.find((m) => m.modelKey === "does-not-exist-v9")?.enabled).toBe(true);
+});
+
+test("provider channels: saves draft offline with empty key after network failure", async () => {
+  const app = await open(APP_ENTRY, {
+    ...viewport,
+    storage: { ...emptyCatalogCache(), "settings.language": "en" },
+    network: {
+      "GET https://unreachable.example.com/v1/models": {
+        status: 503,
+        body: { error: { message: "Service unavailable" } },
+      },
+    },
+  });
+
+  await startDraftFromEmptyState(app, "custom");
+  await app.clear("id:channel-name-input");
+  await app.type("id:channel-name-input", "Local Custom");
+  await app.type("id:connection-url-input", "https://unreachable.example.com/v1");
+
+  await app.press("id:test-connection-button");
+  await app.waitUntil(() => app.requests().length === 1);
+
+  await app.press("id:add-model-button");
+  await app.waitFor("id:add-model-dialog");
+  await app.type("id:add-model-key-input", "local-gguf");
+  await app.press("id:confirm-add-model");
+  await app.waitUntil(() => !app.shows("id:add-model-dialog"));
+
+  await app.press("id:save-channel-button");
+  await app.waitUntil(() => !app.shows("id:cancel-channel-button"));
+
+  expect(app.requests()).toHaveLength(1);
+  expect(app.shows("id:model-row-local-gguf")).toBe(true);
+
+  const reopened = await open(APP_ENTRY, {
+    ...viewport,
+    storage: app.storage(),
+  });
+  await reopened.waitFor("id:model-row-local-gguf");
+  expect(reopened.requests()).toHaveLength(0);
+  expect(reopened.texts()).toContain("Local Custom");
+  expect(
+    reopened.storage()[
+      `${CREDENTIAL_KEY_PREFIX}${JSON.parse(reopened.storage()[PROVIDERS_STORAGE_KEY]!)[0].id}`
+    ],
+  ).toBeUndefined();
+});
+
+test("provider channels: channel switch retains draft until discard", async () => {
+  const openai = makeChannel({ id: "ch-openai", presetId: "openai", displayName: "OpenAI Main" });
+  const anthropic = makeChannel({
+    id: "ch-anthropic",
+    presetId: "anthropic",
+    displayName: "Anthropic Main",
+    adapterId: "anthropic",
+    baseUrl: "https://api.anthropic.com",
+  });
+
+  const app = await open(APP_ENTRY, {
+    ...viewport,
+    storage: makeSeedStorage({
+      channels: [openai, anthropic],
+      credentials: { [openai.id]: "sk-oai", [anthropic.id]: "sk-ant" },
+    }),
+  });
+
+  await startDraftFromRail(app, "deepseek");
+  await app.clear("id:channel-name-input");
+  await app.type("id:channel-name-input", "DeepSeek Unsaved");
+  await app.press("id:connection-adapter-select");
+  await app.waitFor("role:option[OpenAI Responses]");
+  await app.press("role:option[OpenAI Responses]");
+  await app.clear("id:connection-url-input");
+  await app.type("id:connection-url-input", "https://proxy.example.com/ds");
+  await app.type("id:connection-token-input", "sk-draft-secret");
+  await app.press("id:channel-enabled-switch");
+
+  await app.press("id:add-model-button");
+  await app.waitFor("id:add-model-dialog");
+  await app.type("id:add-model-key-input", "draft-local");
+  await app.press("id:confirm-add-model");
+  await app.waitUntil(() => !app.shows("id:add-model-dialog"));
+
+  const storageBefore = JSON.stringify(app.storage());
+
+  await app.press("id:channel-item-ch-anthropic");
+  await app.waitFor("id:discard-draft-dialog");
+
+  await app.press("id:discard-draft-dialog >> role:button[Cancel]");
+  await app.waitUntil(() => !app.shows("id:discard-draft-dialog"));
+
+  expect(app.shows("id:draft-channel-card")).toBe(true);
+  expect(app.value("id:channel-name-input")).toBe("DeepSeek Unsaved");
+  expect(app.value("id:connection-url-input")).toBe("https://proxy.example.com/ds");
+  expect(app.value("id:connection-token-input")).toBe("sk-draft-secret");
+  expect(app.shows("id:model-row-draft-local")).toBe(true);
+
+  await app.press("id:channel-item-ch-anthropic");
+  await app.waitFor("id:discard-draft-dialog");
+  await app.press("id:discard-draft-dialog >> role:button[Discard]");
+  await app.waitUntil(() => !app.shows("id:discard-draft-dialog"));
+
+  expect(app.shows("id:draft-channel-card")).toBe(false);
+  expect(app.texts()).not.toContain("DeepSeek Unsaved");
+  expect(app.value("id:connection-url-input")).toBe("https://api.anthropic.com");
+  expect(JSON.stringify(app.storage())).toBe(storageBefore);
+});
+
+test("provider channels: draft Cancel returns to previous channel or empty state without saving", async () => {
+  // Part 1: cancelling a draft when saved channels exist restores the previous channel.
+  const openai = makeChannel({
+    id: "ch-openai",
+    presetId: "openai",
+    displayName: "OpenAI Main",
+    baseUrl: "https://api.openai.com/v1",
+  });
+  const appWithChannel = await open(APP_ENTRY, {
+    ...viewport,
+    storage: makeSeedStorage({
+      channels: [openai],
+      credentials: { [openai.id]: "sk-oai" },
+    }),
+  });
+
+  await startDraftFromRail(appWithChannel, "deepseek");
+  await appWithChannel.clear("id:channel-name-input");
+  await appWithChannel.type("id:channel-name-input", "Cancelled Draft");
+  await appWithChannel.press("id:add-model-button");
+  await appWithChannel.waitFor("id:add-model-dialog");
+  await appWithChannel.type("id:add-model-key-input", "draft-temp");
+  await appWithChannel.press("id:confirm-add-model");
+  await appWithChannel.waitUntil(() => !appWithChannel.shows("id:add-model-dialog"));
+
+  const storageBefore = JSON.stringify(appWithChannel.storage());
+
+  await appWithChannel.press("id:cancel-channel-button");
+  await appWithChannel.waitFor("id:discard-draft-dialog");
+  await appWithChannel.press("id:discard-draft-dialog >> role:button[Cancel]");
+  await appWithChannel.waitUntil(() => !appWithChannel.shows("id:discard-draft-dialog"));
+  expect(appWithChannel.value("id:channel-name-input")).toBe("Cancelled Draft");
+  expect(appWithChannel.shows("id:model-row-draft-temp")).toBe(true);
+
+  await appWithChannel.press("id:cancel-channel-button");
+  await appWithChannel.waitFor("id:discard-draft-dialog");
+  await appWithChannel.press("id:discard-draft-dialog >> role:button[Discard]");
+  await appWithChannel.waitUntil(() => !appWithChannel.shows("id:discard-draft-dialog"));
+
+  expect(appWithChannel.shows("id:draft-channel-card")).toBe(false);
+  expect(appWithChannel.texts()).toContain("OpenAI Main");
+  expect(appWithChannel.value("id:connection-url-input")).toBe("https://api.openai.com/v1");
+  expect(JSON.stringify(appWithChannel.storage())).toBe(storageBefore);
+
+  // Part 2: cancelling a draft started from empty state returns to empty state.
+  const emptyApp = await open(APP_ENTRY, {
+    ...viewport,
+    storage: { ...emptyCatalogCache(), "settings.language": "en" },
+  });
+  await startDraftFromEmptyState(emptyApp, "openai");
+  await emptyApp.clear("id:channel-name-input");
+  await emptyApp.type("id:channel-name-input", "Empty Draft");
+  const emptyStorageBefore = JSON.stringify(emptyApp.storage());
+
+  await emptyApp.press("id:cancel-channel-button");
+  await emptyApp.waitFor("id:discard-draft-dialog");
+  await emptyApp.press("id:discard-draft-dialog >> role:button[Discard]");
+  await emptyApp.waitUntil(() => !emptyApp.shows("id:discard-draft-dialog"));
+
+  expect(emptyApp.shows("id:empty-add-channel-button")).toBe(true);
+  expect(emptyApp.texts()).not.toContain("Empty Draft");
+  expect(JSON.stringify(emptyApp.storage())).toBe(emptyStorageBefore);
+});
+
+test("provider channels: leaving Models waits for discard confirmation", async () => {
+  const app = await open(APP_ENTRY, {
+    ...viewport,
+    storage: { ...emptyCatalogCache(), "settings.language": "en" },
+  });
+
+  await startDraftFromEmptyState(app, "openai");
+  await app.clear("id:channel-name-input");
+  await app.type("id:channel-name-input", "Draft Before Nav");
+  await app.press("id:add-model-button");
+  await app.waitFor("id:add-model-dialog");
+  await app.type("id:add-model-key-input", "draft-guard-model");
+  await app.press("id:confirm-add-model");
+  await app.waitUntil(() => !app.shows("id:add-model-dialog"));
+
+  // Cancelling a model dialog does not trigger the page-level discard guard.
+  await app.press("id:add-model-button");
+  await app.waitFor("id:add-model-dialog");
+  await app.type("id:add-model-key-input", "cancelled-model");
+  await app.press("id:add-model-dialog >> role:button[Cancel]");
+  await app.waitUntil(() => !app.shows("id:add-model-dialog"));
+  expect(app.shows("id:discard-draft-dialog")).toBe(false);
+  expect(app.shows("id:model-row-draft-guard-model")).toBe(true);
+
+  const storageBefore = JSON.stringify(app.storage());
+
+  // Trying to leave Models keeps Models mounted behind the discard dialog.
+  await app.press("id:nav-settings");
+  await app.waitFor("id:discard-draft-dialog");
+  expect(app.shows("id:models-page")).toBe(true);
+
+  await app.press("id:discard-draft-dialog >> role:button[Cancel]");
+  await app.waitUntil(() => !app.shows("id:discard-draft-dialog"));
+  expect(app.shows("id:models-page")).toBe(true);
+  expect(app.value("id:channel-name-input")).toBe("Draft Before Nav");
+  expect(app.shows("id:model-row-draft-guard-model")).toBe(true);
+
+  await app.press("id:nav-settings");
+  await app.waitFor("id:discard-draft-dialog");
+  await app.press("id:discard-draft-dialog >> role:button[Discard]");
+  await app.waitUntil(() => !app.shows("id:discard-draft-dialog"));
+
+  await app.waitUntil(() => !app.shows("id:models-page"));
+  expect(app.texts()).not.toContain("Draft Before Nav");
+  expect(JSON.stringify(app.storage())).toBe(storageBefore);
+
+  // Returning to Models shows clean state with no active leave guard blocking exit.
+  await app.press("id:nav-models");
+  await app.waitFor("id:models-page");
+  expect(app.shows("id:empty-add-channel-button")).toBe(true);
+
+  await app.press("id:nav-settings");
+  await app.waitUntil(() => !app.shows("id:models-page"));
+  expect(app.shows("id:discard-draft-dialog")).toBe(false);
+});
+
+test("provider channels: starting another draft confirms discarding active draft", async () => {
+  const openai = makeChannel({ id: "ch-openai", presetId: "openai", displayName: "OpenAI Main" });
+  const app = await open(APP_ENTRY, {
+    ...viewport,
+    storage: makeSeedStorage({
+      channels: [openai],
+      credentials: { [openai.id]: "sk-oai" },
+    }),
+  });
+
+  await startDraftFromRail(app, "deepseek");
+  await app.clear("id:channel-name-input");
+  await app.type("id:channel-name-input", "First Draft");
+  await app.press("id:add-model-button");
+  await app.waitFor("id:add-model-dialog");
+  await app.type("id:add-model-key-input", "first-draft-model");
+  await app.press("id:confirm-add-model");
+  await app.waitUntil(() => !app.shows("id:add-model-dialog"));
+
+  const storageBefore = JSON.stringify(app.storage());
+
+  await app.press("id:add-channel-button");
+  await app.waitFor("id:discard-draft-dialog");
+  await app.press("id:discard-draft-dialog >> role:button[Cancel]");
+  await app.waitUntil(() => !app.shows("id:discard-draft-dialog"));
+
+  expect(app.shows("id:add-channel-dialog")).toBe(false);
+  expect(app.value("id:channel-name-input")).toBe("First Draft");
+  expect(app.shows("id:model-row-first-draft-model")).toBe(true);
+
+  await app.press("id:add-channel-button");
+  await app.waitFor("id:discard-draft-dialog");
+  await app.press("id:discard-draft-dialog >> role:button[Discard]");
+  await app.waitUntil(() => !app.shows("id:discard-draft-dialog"));
+  await app.waitFor("id:add-channel-dialog");
+
+  await app.press("id:provider-preset-anthropic");
+  await app.waitUntil(() => !app.shows("id:add-channel-dialog"));
+  expect(app.value("id:channel-name-input")).toBe("Anthropic");
+  expect(app.shows("id:model-row-first-draft-model")).toBe(false);
+  expect(app.texts()).not.toContain("First Draft");
+  expect(JSON.stringify(app.storage())).toBe(storageBefore);
+});
+
+test("provider channels: stale catalog cannot populate a replacement draft", async () => {
+  const pendingResolvers: Array<(response: StubResponse) => void> = [];
+
+  const app = await open(APP_ENTRY, {
+    ...viewport,
+    storage: { ...emptyCatalogCache(), "settings.language": "en" },
+    network: {
+      "GET https://api.openai.com/v1/models": () =>
+        new Promise<StubResponse>((resolve) => {
+          pendingResolvers.push(resolve);
+        }),
+    },
+  });
+
+  await startDraftFromEmptyState(app, "openai");
+  await app.type("id:connection-token-input", "sk-openai-dummy");
+  const firstFetch = app.press("id:get-models-button");
+  await app.waitUntil(() => app.requests().length === 1);
+
+  // Mid-request input edits invalidate the pending catalog immediately so user can keep working.
+  await app.clear("id:connection-url-input");
+  await app.type("id:connection-url-input", "https://proxy.example.com/v1");
+  await app.waitUntil(() => app.enabled("id:get-models-button"));
+
+  // Switch back to the delayed route to also verify discard -> replacement draft isolation.
+  await app.clear("id:connection-url-input");
+  await app.type("id:connection-url-input", "https://api.openai.com/v1");
+  const secondFetch = app.press("id:get-models-button");
+  await app.waitUntil(() => app.requests().length === 2);
+
+  await app.press("id:cancel-channel-button");
+  await app.waitFor("id:discard-draft-dialog");
+  await app.press("id:discard-draft-dialog >> role:button[Discard]");
+  await app.waitUntil(() => !app.shows("id:discard-draft-dialog"));
+
+  await startDraftFromEmptyState(app, "anthropic");
+
+  for (const resolve of pendingResolvers) {
+    resolve({
+      status: 200,
+      body: { data: [{ id: "stale-gpt-model", display_name: "Stale GPT" }] },
+    });
+  }
+  await Promise.all([firstFetch, secondFetch]);
+  await app.wait(50);
+
+  expect(app.shows("id:model-row-stale-gpt-model")).toBe(false);
+  expect(app.texts()).not.toContain("Stale GPT");
+  expect(app.value("id:channel-name-input")).toBe("Anthropic");
+  expect(app.value("id:connection-url-input")).toBe("https://api.anthropic.com");
+});
+
+test("provider channels: switching saved channels and editing connection mid-request drop stale responses", async () => {
+  const pendingResolvers: Array<(response: StubResponse) => void> = [];
+  const openai = makeChannel({
+    id: "ch-openai",
+    presetId: "openai",
+    displayName: "OpenAI Main",
+    adapterId: "openai-responses",
+    baseUrl: "https://api.openai.com/v1",
+  });
+  const anthropic = makeChannel({
+    id: "ch-anthropic",
+    presetId: "anthropic",
+    displayName: "Anthropic Main",
+    adapterId: "anthropic",
+    baseUrl: "https://api.anthropic.com",
+  });
+  const existingModel = makeModel({
+    id: "m-oai-keep",
+    providerId: openai.id,
+    modelKey: "gpt-4.1",
+    sourceAdapterId: "openai-responses",
+    enabled: true,
+    displayName: "GPT-4.1",
+  });
+
+  const app = await open(APP_ENTRY, {
+    ...viewport,
+    storage: makeSeedStorage({
+      channels: [openai, anthropic],
+      models: [existingModel],
+      credentials: { [openai.id]: "sk-oai", [anthropic.id]: "sk-ant" },
+    }),
+    network: {
+      "GET https://api.openai.com/v1/models": () =>
+        new Promise<StubResponse>((resolve) => {
+          pendingResolvers.push(resolve);
+        }),
+    },
+  });
+
+  // Changing API type or API key mid-request invalidates the in-flight request.
+  const firstFetch = app.press("id:get-models-button");
+  await app.waitUntil(() => app.requests().length === 1);
+  await app.press("id:connection-adapter-select");
+  await app.waitFor("role:option[OpenAI Chat Completions]");
+  await app.press("role:option[OpenAI Chat Completions]");
+  await app.waitUntil(() => app.enabled("id:get-models-button"));
+
+  const secondFetch = app.press("id:get-models-button");
+  await app.waitUntil(() => app.requests().length === 2);
+  await app.type("id:connection-token-input", "sk-replacement");
+  await app.waitUntil(() => app.enabled("id:get-models-button"));
+
+  // Resolve the first two stale responses with errors/models: neither should apply.
+  pendingResolvers[0]?.({ status: 401, body: { error: { message: "Stale 401" } } });
+  pendingResolvers[1]?.({ status: 200, body: { data: [{ id: "stale-mid-edit" }] } });
+  await Promise.all([firstFetch, secondFetch]);
+  await app.wait(50);
+  expect(app.shows("id:model-row-stale-mid-edit")).toBe(false);
+  expect(app.texts().some((t) => t.includes("HTTP 401"))).toBe(false);
+
+  // Switch saved channels while a request is pending; delayed response must not affect either channel.
+  const thirdFetch = app.press("id:get-models-button");
+  await app.waitUntil(() => app.requests().length === 3);
+  await app.press("id:channel-item-ch-anthropic");
+  await app.waitUntil(() => app.value("id:connection-url-input") === "https://api.anthropic.com");
+
+  pendingResolvers[2]?.({
+    status: 200,
+    body: { data: [{ id: "stale-after-switch" }] },
+  });
+  await thirdFetch;
+  await app.wait(50);
+
+  expect(app.shows("id:model-row-stale-after-switch")).toBe(false);
+  await app.press("id:channel-item-ch-openai");
+  await app.waitFor("id:model-row-gpt-4.1");
+  expect(app.shows("id:model-row-stale-after-switch")).toBe(false);
+  expect(JSON.parse(app.storage()[MODELS_STORAGE_KEY]!) as ProviderModel[]).toHaveLength(1);
+});
+
+test("provider channels: saving during a pending fetch keeps visible models and lets saved channel fetch again", async () => {
+  let callCount = 0;
+  let resolveFirst!: (response: StubResponse) => void;
+
+  const app = await open(APP_ENTRY, {
+    ...viewport,
+    storage: { ...emptyCatalogCache(), "settings.language": "en" },
+    network: {
+      "GET https://api.openai.com/v1/models": () => {
+        callCount += 1;
+        if (callCount === 1) {
+          return new Promise<StubResponse>((resolve) => {
+            resolveFirst = resolve;
+          });
+        }
+        return {
+          status: 200,
+          body: { data: [{ id: "fresh-after-save", display_name: "Fresh After Save" }] },
+        };
+      },
+    },
+  });
+
+  await startDraftFromEmptyState(app, "openai");
+  await app.type("id:connection-token-input", "sk-oai-draft");
+
+  await app.press("id:add-model-button");
+  await app.waitFor("id:add-model-dialog");
+  await app.type("id:add-model-key-input", "manual-visible");
+  await app.press("id:confirm-add-model");
+  await app.waitUntil(() => !app.shows("id:add-model-dialog"));
+
+  // Start slow fetch, then press Save before it resolves.
+  const draftFetch = app.press("id:get-models-button");
+  await app.waitUntil(() => app.requests().length === 1);
+
+  await app.press("id:save-channel-button");
+  await app.waitUntil(() => !app.shows("id:cancel-channel-button"));
+
+  // Late settlement of draft-owned fetch does not leak into the saved channel.
+  resolveFirst({
+    status: 200,
+    body: { data: [{ id: "stale-after-save", display_name: "Stale After Save" }] },
+  });
+  await draftFetch;
+  await app.wait(50);
+
+  expect(app.shows("id:model-row-manual-visible")).toBe(true);
+  expect(app.shows("id:model-row-stale-after-save")).toBe(false);
+
+  // Saved channel is unblocked and can run a fresh fetch.
+  await app.press("id:get-models-button");
+  await app.waitFor("id:model-row-fresh-after-save");
+  expect(app.shows("id:model-row-stale-after-save")).toBe(false);
+});
+
+test("provider channels: draft HTTP consent follows the current root", async () => {
+  const app = await open(APP_ENTRY, {
+    ...viewport,
+    storage: { ...emptyCatalogCache(), "settings.language": "en" },
+    network: {
+      "GET http://one.example.com/models": {
+        status: 200,
+        body: { data: [{ id: "m-one" }] },
+      },
+      "GET http://one.example.com:8080/models": {
+        status: 200,
+        body: { data: [{ id: "m-port" }] },
+      },
+      "GET http://two.example.com/v1/models": {
+        status: 200,
+        body: { data: [{ id: "m-two" }] },
+      },
+    },
+  });
+
+  await startDraftFromEmptyState(app, "custom");
+  await app.type("id:connection-url-input", "http://one.example.com");
+  await app.type("id:connection-token-input", "sk-http");
+  await app.waitFor("id:connection-insecure-checkbox");
+
+  // Confirm first non-loopback HTTP root.
+  await app.press("id:connection-insecure-checkbox");
+  await app.press("id:test-connection-button");
+  await app.waitUntil(() => app.requests().length === 1);
+
+  // Extending the confirmed URL without clearing to empty still switches root and must reset consent.
+  await app.type("id:connection-url-input", ":8080");
+
+  await app.press("id:test-connection-button");
+  await app.waitUntil(() =>
+    app
+      .texts()
+      .some((t) => t.includes("Confirm using unencrypted http:// before testing this host.")),
+  );
+  expect(app.requests()).toHaveLength(1);
+
+  // Replacing with another non-loopback HTTP root also requires fresh confirmation.
+  await app.clear("id:connection-url-input");
+  await app.type("id:connection-url-input", "http://two.example.com/v1");
+
+  await app.press("id:get-models-button");
+  await app.waitUntil(() =>
+    app
+      .texts()
+      .some((t) => t.includes("Confirm using unencrypted http:// before fetching models.")),
+  );
+  expect(app.requests()).toHaveLength(1);
+
+  await app.press("id:save-channel-button");
+  await app.waitUntil(() =>
+    app.texts().some((t) => t.includes("Confirm unencrypted http:// before saving this channel.")),
+  );
+  expect(app.storage()[PROVIDERS_STORAGE_KEY]).toBeUndefined();
+
+  // Confirm the new HTTP root -> fetch and save succeed.
+  await app.press("id:connection-insecure-checkbox");
+  await app.press("id:get-models-button");
+  await app.waitFor("id:model-row-m-two");
+  await app.press("id:save-channel-button");
+  await app.waitUntil(() => !app.shows("id:cancel-channel-button"));
+
+  expect(app.requests().map((r) => r.url)).toEqual([
+    "http://one.example.com/models",
+    "http://two.example.com/v1/models",
+  ]);
+});
+
+test("provider channels: loopback HTTP, URL validation, and positive numeric limits", async () => {
+  const app = await open(APP_ENTRY, {
+    ...viewport,
+    storage: { ...emptyCatalogCache(), "settings.language": "en" },
+    network: {
+      "GET http://127.0.0.1:11434/v1/models": {
+        status: 200,
+        body: { data: [{ id: "llama3.2", display_name: "Llama 3.2" }] },
+      },
+    },
+  });
+
+  await startDraftFromEmptyState(app, "custom");
+
+  // Invalid URL syntax and non-HTTP schemes reject without requests or saving.
+  await app.type("id:connection-url-input", "ftp://bad.example.com");
+  await app.waitUntil(() =>
+    app.texts().some((t) => t.includes("Base URL must start with https:// or http://.")),
+  );
+  await app.press("id:save-channel-button");
+  expect(app.storage()[PROVIDERS_STORAGE_KEY]).toBeUndefined();
+
+  await app.clear("id:connection-url-input");
+  await app.type("id:connection-url-input", "not-a-url");
+  await app.waitUntil(() =>
+    app.texts().some((t) => t.includes("Enter a valid http:// or https:// base URL.")),
+  );
+
+  // Loopback HTTP works without an insecure confirmation checkbox.
+  await app.clear("id:connection-url-input");
+  await app.type("id:connection-url-input", "http://127.0.0.1:11434/v1");
+  expect(app.shows("id:connection-insecure-checkbox")).toBe(false);
+
+  await app.press("id:get-models-button");
+  await app.waitFor("id:model-row-llama3.2");
+
+  // Numeric limits validate positive integers before applying.
+  await app.press("id:configure-model-llama3.2");
+  await app.waitFor("id:edit-model-dialog");
+  await app.type("id:edit-model-context-input", "0");
+  await app.press("id:confirm-edit-model");
+  await app.waitUntil(() =>
+    app.texts().some((t) => t.includes("Context Limit must be greater than 0.")),
+  );
+  await app.clear("id:edit-model-context-input");
+  await app.type("id:edit-model-context-input", "64000");
+  await app.type("id:edit-model-max-tokens-input", "-5");
+  await app.press("id:confirm-edit-model");
+  await app.waitUntil(() =>
+    app.texts().some((t) => t.includes("Max Tokens must be a positive whole number.")),
+  );
+  await app.clear("id:edit-model-max-tokens-input");
+  await app.type("id:edit-model-max-tokens-input", "4096");
+  await app.press("id:confirm-edit-model");
+  await app.waitUntil(() => !app.shows("id:edit-model-dialog"));
+
+  await app.press("id:save-channel-button");
+  await app.waitUntil(() => !app.shows("id:cancel-channel-button"));
+  expect(app.texts()).toContain("64K ctx");
+  expect(app.texts()).toContain("4096 out");
+});
+
+test("provider channels: keep, replace, and clear preserve credential isolation across reopen", async () => {
+  const app = await open(APP_ENTRY, {
+    ...viewport,
+    storage: { ...emptyCatalogCache(), "settings.language": "en" },
+    network: {
+      "GET https://api.openai.com/v1/models": {
+        status: 200,
+        body: { data: [{ id: "gpt-4.1" }] },
+      },
+      "GET https://proxy.example.com/v1/models": {
+        status: 200,
+        body: { data: [{ id: "gpt-4.1" }] },
+      },
+    },
+  });
+
+  await startDraftFromEmptyState(app, "openai");
+  await app.type("id:connection-token-input", "sk-initial-secret");
+  await app.press("id:save-channel-button");
+  await app.waitUntil(() => !app.shows("id:cancel-channel-button"));
+
+  const created = (JSON.parse(app.storage()[PROVIDERS_STORAGE_KEY]!) as ProviderChannel[])[0]!;
+  expect(app.storage()[PROVIDERS_STORAGE_KEY]).not.toContain("sk-initial-secret");
+  expect(app.storage()[credentialStorageKey(created.id)]).toBe("sk-initial-secret");
+
+  // Keep credential while updating base URL; reopen retains secret isolation.
+  await app.clear("id:connection-url-input");
+  await app.type("id:connection-url-input", "https://proxy.example.com/v1");
+  await app.press("id:save-channel-button");
+  await app.waitUntil(() => !app.shows("id:save-channel-button"));
+
+  const reopenedKeep = await open(APP_ENTRY, {
+    ...viewport,
+    storage: app.storage(),
+    network: {
+      "GET https://proxy.example.com/v1/models": {
+        status: 200,
+        body: { data: [{ id: "gpt-4.1" }] },
+      },
+    },
+  });
+  expect(reopenedKeep.storage()[PROVIDERS_STORAGE_KEY]).not.toContain("sk-initial-secret");
+  await reopenedKeep.press("id:test-connection-button");
+  await reopenedKeep.waitUntil(() => reopenedKeep.requests().length === 1);
+  expect(reopenedKeep.requests()[0]!.headers.authorization).toBe("Bearer sk-initial-secret");
+
+  // Replace credential and reopen.
+  await reopenedKeep.type("id:connection-token-input", "sk-rotated-secret");
+  await reopenedKeep.press("id:save-channel-button");
+  await reopenedKeep.waitUntil(
+    () => reopenedKeep.storage()[credentialStorageKey(created.id)] === "sk-rotated-secret",
+  );
+  expect(reopenedKeep.storage()[PROVIDERS_STORAGE_KEY]).not.toContain("sk-rotated-secret");
+
+  const reopenedReplace = await open(APP_ENTRY, {
+    ...viewport,
+    storage: reopenedKeep.storage(),
+  });
+  expect(reopenedReplace.storage()[credentialStorageKey(created.id)]).toBe("sk-rotated-secret");
+  expect(reopenedReplace.shows("id:clear-token-button")).toBe(true);
+
+  // Clear credential and reopen.
+  await reopenedReplace.press("id:clear-token-button");
+  await reopenedReplace.press("id:save-channel-button");
+  await reopenedReplace.waitUntil(
+    () => reopenedReplace.storage()[credentialStorageKey(created.id)] === undefined,
+  );
+
+  const reopenedClear = await open(APP_ENTRY, {
+    ...viewport,
+    storage: reopenedReplace.storage(),
+  });
+  expect(reopenedClear.storage()[credentialStorageKey(created.id)]).toBeUndefined();
+  expect(reopenedClear.shows("id:clear-token-button")).toBe(false);
+});
+
+test("provider channels: keyboard completes the provider draft flow", async () => {
+  const app = await open(APP_ENTRY, {
+    ...viewport,
+    storage: { ...emptyCatalogCache(), "settings.language": "en" },
+  });
+
+  // Escape dismisses picker without creating a draft.
+  await app.press("id:empty-add-channel-button");
+  await app.waitFor("id:add-channel-dialog");
+  await app.keyboard.press("escape");
+  await app.waitUntil(() => !app.shows("id:add-channel-dialog"));
+  expect(app.shows("id:draft-channel-card")).toBe(false);
+
+  // Reopen picker, verify each preset card renders its decorative Avatar without duplicating the label, and choose OpenAI.
+  await app.press("id:empty-add-channel-button");
+  await app.waitFor("id:add-channel-dialog");
+  expect(app.count("id:add-channel-dialog >> role:image")).toBe(5);
+  for (const label of ["OpenAI", "Google Gemini", "Anthropic", "DeepSeek", "Custom"]) {
+    expect(app.shows(`id:add-channel-dialog >> role:image[${label}]`)).toBe(false);
+    expect(app.shows(`id:add-channel-dialog >> role:button[${label}]`)).toBe(true);
+  }
+  await app.press("id:provider-preset-openai");
+  await app.waitUntil(() => !app.shows("id:add-channel-dialog"));
+  await app.waitFor("id:draft-channel-card");
+
+  // Inside AddModelDialog, back cancels cleanly and Return submits from input.
+  // Headless NSH 0.6 gives Escape to an auto-focused input and does not close
+  // the dialog. `back` still dismisses it. Native hosts honor `closeOnEscape`.
+  await app.press("id:add-model-button");
+  await app.waitFor("id:add-model-dialog");
+  await app.back();
+  await app.waitUntil(() => !app.shows("id:add-model-dialog"));
+
+  await app.press("id:add-model-button");
+  await app.waitFor("id:add-model-dialog");
+  await app.type("id:add-model-key-input", "aborted-via-back");
+  await app.back();
+  await app.waitUntil(() => !app.shows("id:add-model-dialog"));
+  expect(app.shows("id:model-row-aborted-via-back")).toBe(false);
+
+  await app.press("id:add-model-button");
+  await app.waitFor("id:add-model-dialog");
+  await app.type("id:add-model-key-input", "kbd-m1");
+  await app.submit("id:add-model-key-input");
+  await app.waitUntil(() => !app.shows("id:add-model-dialog"));
+  await app.waitFor("id:model-row-kbd-m1");
+
+  // Inside EditModelDialog, back cancels cleanly and Return submits from input.
+  await app.press("id:configure-model-kbd-m1");
+  await app.waitFor("id:edit-model-dialog");
+  await app.type("id:edit-model-name-input", "Aborted Edit");
+  await app.back();
+  await app.waitUntil(() => !app.shows("id:edit-model-dialog"));
+  expect(app.texts()).not.toContain("Aborted Edit");
+
+  await app.press("id:configure-model-kbd-m1");
+  await app.waitFor("id:edit-model-dialog");
+  await app.type("id:edit-model-name-input", "Keyboard Model");
+  await app.submit("id:edit-model-name-input");
+  await app.waitUntil(() => !app.shows("id:edit-model-dialog"));
+  expect(app.texts()).toContain("Keyboard Model");
+
+  // Back on discard confirmation preserves the draft and restores draft input focus.
+  await app.press("id:cancel-channel-button");
+  await app.waitFor("id:discard-draft-dialog");
+  await app.back();
+  await app.waitUntil(() => !app.shows("id:discard-draft-dialog"));
+  expect(app.shows("id:draft-channel-card")).toBe(true);
+  expect(app.shows("id:model-row-kbd-m1")).toBe(true);
+
+  await app.press("id:save-channel-button");
+  await app.waitUntil(() => !app.shows("id:cancel-channel-button"));
+  expect(app.shows("id:model-row-kbd-m1")).toBe(true);
+  expect(app.texts()).toContain("Keyboard Model");
+});
+
+test("provider channels: renders zh-CN localization without missing keys", async () => {
+  const app = await open(APP_ENTRY, {
+    ...viewport,
+    storage: { ...emptyCatalogCache(), "settings.language": "zh-CN" },
+  });
+
+  expect(app.texts()).toContain("添加渠道");
+  await app.press("id:empty-add-channel-button");
+  await app.waitFor("id:add-channel-dialog");
+  expect(app.texts()).toContain("Google Gemini");
+  expect(app.texts()).toContain("自定义");
+
+  await app.press("id:provider-preset-deepseek");
+  await app.waitUntil(() => !app.shows("id:add-channel-dialog"));
+  await app.waitFor("id:draft-channel-card");
+
+  const draftTexts = app.texts();
+  expect(draftTexts).toContain("未保存");
+  expect(draftTexts).toContain("服务商");
+  expect(draftTexts).toContain("显示名称");
+  expect(draftTexts).toContain("保存");
+  expect(draftTexts).toContain("取消");
+  expect(draftTexts.some((text) => text.startsWith("models.") || text.startsWith("common."))).toBe(
+    false,
+  );
+
+  // Trigger validation & add model & discard dialog in zh-CN.
+  await app.clear("id:channel-name-input");
+  await app.press("id:save-channel-button");
+  await app.waitUntil(() => app.texts().some((text) => text.includes("显示名称为必填项")));
+  await app.type("id:channel-name-input", "DeepSeek 中文");
+
+  await app.press("id:add-model-button");
+  await app.waitFor("id:add-model-dialog");
+  await app.type("id:add-model-key-input", "deepseek-chat");
+  await app.press("id:confirm-add-model");
+  await app.waitUntil(() => !app.shows("id:add-model-dialog"));
+  expect(app.shows("id:model-row-deepseek-chat >> text:默认（OpenAI Chat Completions）")).toBe(
+    true,
+  );
+
+  await app.press("id:cancel-channel-button");
+  await app.waitFor("id:discard-draft-dialog");
+  const discardTexts = app.texts();
+  expect(discardTexts).toContain("放弃草稿");
+  expect(discardTexts).toContain("放弃");
+  expect(discardTexts.some((text) => text.startsWith("models."))).toBe(false);
+
+  await app.press("id:discard-draft-dialog >> role:button[放弃]");
+  await app.waitUntil(() => !app.shows("id:discard-draft-dialog"));
+  expect(app.shows("id:empty-add-channel-button")).toBe(true);
+});
+
+test("provider channels: compact 720x520 layout supports reduced motion draft flow", async () => {
+  const app = await open(APP_ENTRY, {
+    width: 720,
+    height: 520,
+    platform: "windows" as const,
+    reducedMotion: true,
+    storage: { ...emptyCatalogCache(), "settings.language": "en" },
+  });
+
+  await app.press("id:empty-add-channel-button");
+  await app.waitFor("id:add-channel-dialog");
+  await app.press("id:provider-preset-openai");
+  await app.waitUntil(() => !app.shows("id:add-channel-dialog"));
+  await app.waitFor("id:draft-channel-card");
+
+  await app.press("id:add-model-button");
+  await app.waitFor("id:add-model-dialog");
+  await app.type("id:add-model-key-input", "gpt-compact");
+  await app.press("id:confirm-add-model");
+  await app.waitUntil(() => !app.shows("id:add-model-dialog"));
+
+  await app.press("id:save-channel-button");
+  await app.waitUntil(() => !app.shows("id:cancel-channel-button"));
+  expect(app.shows("id:model-row-gpt-compact")).toBe(true);
+});
+
+test("provider channels: toggling or renaming with dirty Connection shows no conflict banner", async () => {
+  const openai = makeChannel({
+    id: "ch-openai",
+    presetId: "openai",
+    displayName: "OpenAI Main",
+    baseUrl: "https://api.openai.com/v1",
+  });
+  const app = await open(APP_ENTRY, {
+    ...viewport,
+    storage: makeSeedStorage({
+      channels: [openai],
+      credentials: { [openai.id]: "sk-oai" },
+    }),
+  });
+
+  await app.clear("id:connection-url-input");
+  await app.type("id:connection-url-input", "https://proxy.example.com/v1");
+  expect(app.texts()).toContain("Unsaved");
+
+  await app.press("id:channel-enabled-switch");
+  await app.press("id:rename-channel-button");
+  await app.waitFor("id:rename-channel-input");
+  await app.clear("id:rename-channel-input");
+  await app.type("id:rename-channel-input", "OpenAI Updated");
+  await app.press("id:confirm-rename-channel");
+  await app.waitUntil(() => !app.shows("id:rename-channel-input"));
+
+  expect(app.texts()).toContain("OpenAI Updated");
+  expect(app.texts().some((t) => t.includes("Channel updated elsewhere"))).toBe(false);
+  expect(app.value("id:connection-url-input")).toBe("https://proxy.example.com/v1");
+});
+
+test("provider channels: seeds capabilities and limits from the models.dev catalog", async () => {
+  const channel = makeChannel({
+    id: "ch-catalog",
+    presetId: "openai",
+    displayName: "Catalog Sync",
+    adapterId: "openai-compatible",
+    baseUrl: "https://api.openai.com/v1",
+  });
+
+  const app = await open(APP_ENTRY, {
+    ...viewport,
+    storage: {
+      "settings.language": "en",
+      [PROVIDERS_STORAGE_KEY]: JSON.stringify([channel]),
+      [credentialStorageKey(channel.id)]: "sk-catalog",
+    },
+    network: {
+      "GET https://api.openai.com/v1/models": {
+        status: 200,
+        body: { data: [{ id: "gpt-4.1-mini" }] },
+      },
+      [MODELS_DEV_REQUEST]: {
+        status: 200,
+        body: {
+          "openai/gpt-4.1-mini": {
+            modalities: { input: ["text", "image", "pdf"] },
+            limit: { context: 128_000, output: 16_384 },
+          },
+        },
+      },
+    },
+  });
+
+  await app.press("id:get-models-button");
+  await app.waitFor("id:model-row-gpt-4.1-mini");
+
+  expect(app.shows("id:model-row-gpt-4.1-mini >> text:128K ctx")).toBe(true);
+  expect(app.shows("id:model-row-gpt-4.1-mini >> text:16384 out")).toBe(true);
+  expect(app.shows("id:model-row-gpt-4.1-mini >> label:Image")).toBe(true);
+  expect(app.shows("id:model-row-gpt-4.1-mini >> label:PDF")).toBe(true);
+  expect(app.requests().filter((request) => request.url.includes("models.dev"))).toHaveLength(1);
+});
+
+test("provider channels: sync succeeds when the models.dev catalog is unreachable", async () => {
+  const channel = makeChannel({
+    id: "ch-offline-catalog",
+    presetId: "deepseek",
+    displayName: "Catalog Offline",
+    adapterId: "openai-compatible",
+    baseUrl: "https://api.deepseek.com",
+  });
+
+  const app = await open(APP_ENTRY, {
+    ...viewport,
+    storage: {
+      "settings.language": "en",
+      [PROVIDERS_STORAGE_KEY]: JSON.stringify([channel]),
+      [credentialStorageKey(channel.id)]: "sk-deepseek",
+    },
+    network: {
+      "GET https://api.deepseek.com/models": {
+        status: 200,
+        body: { data: [{ id: "alpha-model-v1" }] },
+      },
+    },
+  });
+
+  await app.press("id:get-models-button");
+  await app.waitFor("id:model-row-alpha-model-v1");
+
+  expect(app.shows("id:model-row-alpha-model-v1 >> label:Text")).toBe(true);
+  expect(app.requests().filter((request) => request.url.includes("models.dev"))).toHaveLength(1);
+  expect(app.storage()[MODELS_STORAGE_KEY]).toContain("alpha-model-v1");
+});
+
+test("provider channels: a manual model inherits cached models.dev facts", async () => {
+  const channel = makeChannel({
+    id: "ch-manual-facts",
+    presetId: "anthropic",
+    displayName: "Anthropic",
+    adapterId: "anthropic",
+    baseUrl: "https://api.anthropic.com",
+  });
+
+  const app = await open(APP_ENTRY, {
+    ...viewport,
+    storage: makeSeedStorage({
+      channels: [channel],
+      credentials: { [channel.id]: "sk-ant" },
+      extra: catalogCache({
+        "anthropic/claude-sonnet-4-5": {
+          text: true,
+          image: true,
+          pdf: true,
+          video: false,
+          contextLimit: 200_000,
+          maxTokens: 64_000,
+        },
+      }),
+    }),
+  });
+
+  await app.press("id:add-model-button");
+  await app.waitFor("id:add-model-dialog");
+  await app.type("id:add-model-key-input", "claude-sonnet-4-5");
+  await app.press("id:confirm-add-model");
+  await app.waitUntil(() => !app.shows("id:add-model-dialog"));
+
+  expect(app.shows("id:model-row-claude-sonnet-4-5 >> text:200K ctx")).toBe(true);
+  expect(app.shows("id:model-row-claude-sonnet-4-5 >> text:64K out")).toBe(true);
+  expect(app.shows("id:model-row-claude-sonnet-4-5 >> label:PDF")).toBe(true);
+  // The catalog provides discovery facts only, never a user override.
+  expect(app.requests()).toHaveLength(0);
+});
+
+test("ai workspace: unknown provider remains visible without requests", async () => {
+  const ghost = makeChannel({
+    id: "ch-ghost",
+    presetId: "example:missing",
+    displayName: "Legacy Proxy",
+    adapterId: "openai-compatible",
+  });
+  const app = await open(APP_ENTRY, {
+    ...viewport,
+    storage: makeSeedStorage({
+      channels: [ghost],
+      models: [makeModel({ providerId: "ch-ghost", modelKey: "legacy-model" })],
+      credentials: { [ghost.id]: "sk-ghost" },
+    }),
+  });
+
+  await app.waitFor("id:channel-item-ch-ghost");
+  expect(app.texts()).toContain("Legacy Proxy");
+  await app.waitFor("id:unsupported-configuration-alert");
+  expect(app.texts()).toContain(
+    "This channel uses a provider or API protocol that is not available in this build.",
+  );
+  expect(app.requests()).toHaveLength(0);
+
+  const stored = JSON.parse(app.storage()["models.v2.providers"]!) as ProviderChannel[];
+  expect(stored).toEqual([ghost]);
+
+  await app.press("id:delete-channel-button");
+  await app.waitFor("id:delete-channel-dialog");
+  await app.press("role:button[Delete]");
+  await app.waitUntil(() => !app.shows("id:delete-channel-dialog"));
+
+  const remaining = JSON.parse(app.storage()["models.v2.providers"]!) as ProviderChannel[];
+  expect(remaining).toEqual([]);
+  expect(app.requests()).toHaveLength(0);
+});
+
+test("ai workspace: unknown default protocol is corrected with a registered choice", async () => {
+  const legacy = makeChannel({
+    id: "ch-legacy",
+    presetId: "anthropic",
+    displayName: "Legacy Claude",
+    adapterId: "example:missing",
+    baseUrl: "https://api.anthropic.com",
+  });
+  const app = await open(APP_ENTRY, {
+    ...viewport,
+    storage: makeSeedStorage({
+      channels: [legacy],
+      credentials: { [legacy.id]: "sk-ant-legacy" },
+    }),
+  });
+
+  await app.waitFor("id:unsupported-configuration-alert");
+  expect(app.shows("id:connection-adapter-select")).toBe(true);
+  expect(app.shows("id:connection-fixed-api-type")).toBe(false);
+  expect(app.enabled("id:test-connection-button")).toBe(false);
+  expect(app.enabled("id:get-models-button")).toBe(false);
+
+  await app.press("id:connection-adapter-select");
+  await app.waitFor("role:option[Anthropic Messages]");
+  await app.press("role:option[Anthropic Messages]");
+  await app.waitUntil(() => !app.shows("id:unsupported-configuration-alert"));
+
+  expect(app.shows("id:connection-adapter-select")).toBe(false);
+  expect(app.shows("id:connection-fixed-api-type")).toBe(true);
+  expect(app.enabled("id:test-connection-button")).toBe(true);
+  expect(app.enabled("id:get-models-button")).toBe(true);
+  expect(app.requests()).toHaveLength(0);
+});
+
+test("ai workspace: unknown model override keeps records and blocks only that save", async () => {
+  const channel = makeChannel();
+  const broken = makeModel({
+    id: "m-broken",
+    providerId: channel.id,
+    modelKey: "gpt-4o",
+    apiTypeOverride: "example:missing",
+    enabled: true,
+  });
+  const app = await open(APP_ENTRY, {
+    ...viewport,
+    storage: makeSeedStorage({
+      channels: [channel],
+      models: [broken],
+      credentials: { [channel.id]: "sk-openai" },
+    }),
+  });
+
+  await app.waitFor("id:unsupported-configuration-alert");
+  expect(app.texts()).toContain(
+    "This channel uses a provider or API protocol that is not available in this build.",
+  );
+  // The channel catalog and connection test still work for a known provider.
+  expect(app.enabled("id:get-models-button")).toBe(true);
+  expect(app.enabled("id:test-connection-button")).toBe(true);
+
+  const modelsBefore = app.storage()["models.v2.items"];
+  await app.press("id:configure-model-gpt-4o");
+  await app.waitFor("id:edit-model-dialog");
+  await app.press("id:edit-model-api-select");
+  await app.waitFor("role:option[example:missing]");
+  await app.press("role:option[example:missing]");
+  await app.press("id:confirm-edit-model");
+  await app.waitUntil(() =>
+    app.texts().includes("Selected API protocol is not supported by this provider."),
+  );
+
+  expect(app.storage()["models.v2.items"]).toBe(modelsBefore);
+  expect(app.requests()).toHaveLength(0);
+});
+
+test("ai workspace: unknown discovery source never blocks operations", async () => {
+  const channel = makeChannel();
+  const model = makeModel({
+    id: "m-legacy-source",
+    providerId: channel.id,
+    modelKey: "gpt-4o",
+    sourceAdapterId: "example:missing-source",
+    enabled: true,
+  });
+  const app = await open(APP_ENTRY, {
+    ...viewport,
+    storage: makeSeedStorage({
+      channels: [channel],
+      models: [model],
+      credentials: { [channel.id]: "sk-openai" },
+    }),
+  });
+
+  await app.waitFor("id:model-row-gpt-4o");
+  expect(app.shows("id:unsupported-configuration-alert")).toBe(false);
+  expect(app.enabled("id:get-models-button")).toBe(true);
+  expect(app.texts()).toContain("Default (OpenAI Responses)");
+});

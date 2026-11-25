@@ -3,4 +3,4 @@
 set -euo pipefail
 
 pnpm exec oxfmt .
-cargo fmt --all
+cargo fmt --manifest-path ext/langnext-native/Cargo.toml --all

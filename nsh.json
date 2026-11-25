@@ -5,10 +5,16 @@
   "singleInstance": true,
   "version": "0.1.0",
   "build": 1,
-  "rust": ".",
   "theme": "theme.json",
+  "dependencies": {
+    "langnext-native": {
+      "path": "ext/langnext-native"
+    }
+  },
   "tailwind": {
-    "radius": { "sidebar": 12 },
+    "radius": {
+      "sidebar": 12
+    },
     "shadow": {
       "card": "0 2px 8px rgb(15 23 42 / 0.06), 0 1px 2px rgb(15 23 42 / 0.04)",
       "card-dark": "0 4px 12px rgb(0 0 0 / 0.34), 0 1px 3px rgb(0 0 0 / 0.24)",
@@ -17,8 +23,12 @@
   },
   "appearance": "system",
   "capabilities": {
-    "network": { "hosts": ["*"] },
-    "webview": { "hosts": ["*"] },
+    "network": {
+      "hosts": ["*"]
+    },
+    "webview": {
+      "hosts": ["*"]
+    },
     "statusBar": true,
     "clipboard": true,
     "picker": true,

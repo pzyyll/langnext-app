@@ -1,0 +1,11 @@
+{
+  "version": 2,
+  "packages": [
+    {
+      "name": "langnext-native",
+      "version": "0.1.0",
+      "path": "ext/langnext-native",
+      "module": "langnext-native"
+    }
+  ]
+}

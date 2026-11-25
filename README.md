@@ -74,16 +74,16 @@ platform's log; a development host prints them to the terminal.
 ## Structure
 
 - `App.tsx`: Load settings and mount the application once.
-- `app/`: Application shell, navigation, and the system tray.
+- `src/app/`: Application shell, navigation, and the system tray.
 - `assets/logos/`: App icon assets: the `icon.png` tile NSH packages and the
   `icon.svg` glyph the system tray draws.
-- `components/`: Styled controls built on NSH base components.
-- `features/settings/`: Appearance state and settings screen.
-- `services/`: The models.dev catalog client and the app's scoped logger.
+- `src/components/`: Styled controls built on NSH base components.
+- `src/features/settings/`: Appearance state and settings screen.
+- `src/services/`: The models.dev catalog client and the app's scoped logger.
 - `theme.json`: Semantic light and dark tokens from the design system.
-- `src/lib.rs`: Native export registration (`langnext/native`) for Windows cursor monitor anchor lookup and Raw Input double-copy detection.
-- `src/database/`: Shared SQLite access and ordered schema migrations for `langnext.sqlite3` in the app data directory. Native features own their queries.
-- `platform/`: Cross-display popup placement helpers and thin wrapper over `langnext/native`.
+- `ext/langnext-native/`: The app's Rust nshm. `src/lib.rs` registers native exports (`langnext-native`) for Windows cursor monitor anchor lookup and Raw Input double-copy detection.
+- `ext/langnext-native/src/database/`: Shared SQLite access and ordered schema migrations for `langnext.sqlite3` in the app data directory. Native features own their queries.
+- `src/platform/`: Cross-display popup placement helpers and thin wrapper over `langnext-native`.
 
 ## Quick Translate
 
