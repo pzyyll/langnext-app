@@ -57,6 +57,7 @@ function QuickTranslateHarness(config: {
   doubleCopyMode: "ok" | "throw";
   selectionHintMode: "ok" | "throw";
   initialClipboard: string;
+  openNearWorkAreaBottom: boolean;
   platformOs?: string;
   ocrCapture: HarnessCaptureMode;
   /** Chords already stored at launch. Conflict mode still registers these. */
@@ -118,6 +119,17 @@ function QuickTranslateHarness(config: {
       <AppShell
         platformOs={config.platformOs}
         quickTranslateOptions={{
+          ...(config.openNearWorkAreaBottom && {
+            readCursorAnchor: () => {
+              const work = displays()[0]?.visibleBounds;
+              return work
+                ? releaseOnFirstDisplay(
+                    work.origin.x + work.size.width / 2,
+                    work.origin.y + work.size.height - 1,
+                  )
+                : null;
+            },
+          }),
           readClipboardText: async () => {
             clipboardReadCount.set(clipboardReadCount() + 1);
             return nextClipboardText;
@@ -431,6 +443,7 @@ void Promise.all([
   wordbookSettingsStore.load(),
   loadSelectionHint(),
   Storage.getItem(HARNESS_SELECTION_HINT_MODE_KEY),
+  Storage.getItem("__test.qt.openNearWorkAreaBottom"),
 ]).then(
   ([
     ,
@@ -453,6 +466,7 @@ void Promise.all([
     ,
     ,
     selectionHintModeRaw,
+    openNearWorkAreaBottom,
   ]) => {
     const shortcutMode =
       modeRaw === "false" || modeRaw === "reject" || modeRaw === "conflict" ? modeRaw : "ok";
@@ -475,6 +489,7 @@ void Promise.all([
         doubleCopyMode={doubleCopyMode}
         selectionHintMode={selectionHintModeRaw === "throw" ? "throw" : "ok"}
         initialClipboard={initialClipboard}
+        openNearWorkAreaBottom={openNearWorkAreaBottom === "true"}
         platformOs={platformOs}
         ocrCapture={ocrCapture}
         savedChords={savedChords}

@@ -118,7 +118,7 @@ export interface QuickTranslateController {
   attachWindow: (win: WindowRef | null) => void;
   attachSourceInput: (input: InputRef | null) => void;
   verifyInitialBounds: (state: WindowState | null) => void;
-  fitContentHeight: (height: number, fitId: number) => void;
+  fitContentHeight: (win: WindowRef, height: number, fitId: number) => void;
   handleBoundsChange: (bounds: Bounds) => void;
   traceHeightFit: (event: string, details?: Record<string, unknown>) => void;
   setOnCloseCleanup: (callback: (() => void) | null) => void;
@@ -706,17 +706,16 @@ export function createQuickTranslateController(
     return current.kind === "cursor" ? current.bounds.size : current.size;
   };
 
-  const fitContentHeight = (height: number, fitId: number) => {
-    if (!openSignal()) {
-      traceHeightFit("fit-skipped", { fitId, reason: "closed" });
+  const fitContentHeight = (win: WindowRef, height: number, fitId: number) => {
+    if (!openSignal() || win !== windowRef) {
+      traceHeightFit("fit-skipped", { fitId, reason: "inactive-window" });
       return;
     }
-    const win = windowRef;
-    const state = win?.state();
-    if (!win || !state?.visible || state.mode !== "normal") {
+    const state = win.state();
+    if (!state?.visible || state.mode !== "normal") {
       traceHeightFit("fit-skipped", {
         fitId,
-        reason: !win ? "no-window" : "window-not-ready",
+        reason: "window-not-ready",
         state: heightFitWindowState(state),
       });
       return;

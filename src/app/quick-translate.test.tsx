@@ -22,7 +22,11 @@ import {
 import { GOOGLE_CLOUD_TTS_URL } from "../features/tts/google-cloud";
 import { DEFAULT_GOOGLE_VOICE_PREFERENCES } from "../features/tts/google-preferences";
 import { TTS_STORAGE_KEY, ttsCredentialStorageKey } from "../features/tts/settings";
-import { createQuickTranslateController, POPUP_MIN_SIZE } from "./quick-translate-controller";
+import {
+  createQuickTranslateController,
+  POPUP_DEFAULT_SIZE,
+  POPUP_MIN_SIZE,
+} from "./quick-translate-controller";
 import { SELECTION_HINT_STORAGE_KEY } from "../features/settings/selection-hint";
 import { SELECTION_HINT_DURATION_MS } from "./selection-hint";
 
@@ -1527,6 +1531,63 @@ test("quick window: reopening restores the draft and completed translation witho
   expect(app.value("id:quick-translate-source")).toBe(draft);
   expect(app.texts()).toContain(translation);
   expect(app.requests()).toHaveLength(2);
+});
+
+test("quick window fits a short copied translation after closing a taller result", async () => {
+  const shortResult = "Short replacement";
+  const tallResult = Array.from({ length: 90 }, (_, i) => `Translated line ${i + 1}`).join("\n");
+  const app = await open(HARNESS_ENTRY, {
+    ...viewport,
+    storage: {
+      ...makeSeedStorage({
+        channels: [makeChannel({ adapterId: "openai-compatible", enabled: true })],
+        models: [makeModel({ enabled: true })],
+        credentials: { "ch-1": "sk-test" },
+      }),
+      [PRESETS_STORAGE_KEY]: JSON.stringify({ version: 1, items: [quickPreset] }),
+      [QUICK_TRANSLATE_PREFERENCES_KEY]: popupPreferences({ doubleCopyEnabled: true }),
+      "settings.language": "en",
+      "__test.qt.doubleCopyClipboard": "First copied phrase",
+      "__test.qt.openNearWorkAreaBottom": "true",
+    },
+    network: {
+      "POST https://api.openai.com/v1/chat/completions": (request) => ({
+        status: 200,
+        body: {
+          choices: [
+            {
+              message: {
+                content: request.body?.includes("Second copied phrase") ? shortResult : tallResult,
+              },
+            },
+          ],
+        },
+      }),
+    },
+  });
+  const window = app.window("quick-translate");
+  const height = () => window.state()?.contentBounds.size.height ?? 0;
+  const copy = "id:harness-trigger-double-copy-valid";
+
+  await app.press(copy);
+  await app.waitFor("id:quick-translate-result-text");
+  const [, workTop, workHeight] = app
+    .texts()
+    .find((line) => line.startsWith("quick-work-area:"))!
+    .split(":")
+    .map(Number);
+  // The first result reaches the work-area limit and pushes the window up.
+  await app.waitUntil(() => Math.abs(height() - workHeight!) < 1);
+  await app.press("id:quick-translate-close");
+  await app.waitUntil(() => window.state() === null);
+
+  await app.press("id:harness-set-clipboard-second");
+  await app.press(copy);
+  await app.waitFor(`text:${shortResult}`);
+  await app.waitUntil(() => height() > 0 && height() < POPUP_DEFAULT_SIZE.height);
+  // The new result fits at the opening position; the old fit must not push it up.
+  const openingY = workTop! + workHeight! - POPUP_DEFAULT_SIZE.height;
+  expect(Math.abs(window.state()!.bounds.origin.y - openingY)).toBeLessThan(1);
 });
 
 const HARNESS_OCR_CAPTURE_KEY = "__test.qt.ocrCapture";

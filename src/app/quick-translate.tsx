@@ -180,6 +180,8 @@ function QuickTranslateWindowBody(props: {
 }) {
   const session = props.session;
   const win = currentWindow();
+  // NSH 0.7 can retain a closed window's effects after its replacement opens.
+  const isCurrentWindow = computed(() => props.controller.attachedWindow() === win);
   const headerHeight = signal(0);
   const contentHeight = signal(0);
   const footerHeight = signal(0);
@@ -190,7 +192,7 @@ function QuickTranslateWindowBody(props: {
   let handledOcrFocusSeq = props.controller.ocrFocusSeq();
   // On Windows the first layout can arrive before the native window state.
   const readyToFit = computed(() => {
-    const state = props.controller.attachedWindow()?.state();
+    const state = win.state();
     return state?.visible === true && state.mode === "normal";
   });
 
@@ -213,7 +215,7 @@ function QuickTranslateWindowBody(props: {
   });
 
   effect(() => {
-    if (logLevel() !== "info") return;
+    if (!isCurrentWindow() || logLevel() !== "info") return;
     props.controller.traceHeightFit("content-state", {
       markdown: markdownEnabledPreference(),
       cards: session.cards().map(({ collapsed, result, backTranslation }) => ({
@@ -226,6 +228,7 @@ function QuickTranslateWindowBody(props: {
   });
 
   effect(() => {
+    if (!isCurrentWindow()) return;
     const header = headerHeight();
     const content = contentHeight();
     const footer = footerHeight();
@@ -247,7 +250,7 @@ function QuickTranslateWindowBody(props: {
     let pending = true;
     const frame = requestAnimationFrame(() => {
       pending = false;
-      props.controller.fitContentHeight(height, id);
+      props.controller.fitContentHeight(win, height, id);
     });
     cleanup(() => {
       cancelAnimationFrame(frame);
@@ -390,6 +393,7 @@ function QuickTranslateWindowBody(props: {
         <View
           class="shrink-0"
           onLayout={({ bounds }) => {
+            if (!isCurrentWindow()) return;
             props.controller.traceHeightFit("content-layout", { size: bounds.size });
             contentHeight.set(bounds.size.height);
           }}
