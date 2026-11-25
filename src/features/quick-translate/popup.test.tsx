@@ -223,7 +223,7 @@ test("quick popup: collapses a non-empty source into a one-line preview and retu
   expect(app.shows("id:quick-translate-collapse-source")).toBe(false);
 });
 
-test("quick popup: shows the source character count at the input's trailing edge", async () => {
+test("quick popup: shows the source character count in the input's bottom toolbar", async () => {
   const app = await open(POPUP_HARNESS, {
     ...viewport,
     storage: seedWithPresets([makePreset()]),
@@ -245,19 +245,11 @@ test("quick popup: shows the source character count at the input's trailing edge
   await app.type("id:quick-translate-source", "!");
   expect(app.shows("text:12")).toBe(true);
 
-  const count = app.layout("id:quick-translate-source-count");
-  const section = app.layout("id:quick-translate-source-section");
-  if (count === null || section === null) {
-    throw new Error("expected the source count and its section to be laid out");
-  }
-  const trailingGap = section.x + section.width - (count.x + count.width);
-  expect(Math.abs(trailingGap - 16)).toBeLessThanOrEqual(1);
-
   await app.clear("id:quick-translate-source");
   expect(app.shows("id:quick-translate-source-count")).toBe(false);
 });
 
-test("quick popup: places the source edit toggle before the character count", async () => {
+test("quick popup: places the source edit toggle right of the character count", async () => {
   const app = await open(POPUP_HARNESS, {
     ...viewport,
     storage: seedWithPresets([makePreset()]),
@@ -266,7 +258,7 @@ test("quick popup: places the source edit toggle before the character count", as
   await app.waitFor("id:quick-translate-source");
   await app.type("id:quick-translate-source", "Hello world");
 
-  // The toggle joins the input's bottom toolbar, left of the count, not the top actions.
+  // The toggle joins the input's bottom toolbar, right of the count, not the top actions.
   expect(app.shows("id:quick-translate-source-toolbar >> id:quick-translate-collapse-source")).toBe(
     true,
   );
@@ -276,14 +268,17 @@ test("quick popup: places the source edit toggle before the character count", as
 
   const toggle = app.layout("id:quick-translate-collapse-source");
   const count = app.layout("id:quick-translate-source-count");
-  if (toggle === null || count === null) {
-    throw new Error("expected the source toggle and its count to be laid out");
+  const section = app.layout("id:quick-translate-source-section");
+  if (toggle === null || count === null || section === null) {
+    throw new Error("expected the source toggle, its count, and the section to be laid out");
   }
-  expect(toggle.x + toggle.width).toBeLessThanOrEqual(count.x);
-  expect(count.x - (toggle.x + toggle.width)).toBeLessThanOrEqual(8);
+  expect(count.x + count.width).toBeLessThanOrEqual(toggle.x);
+  expect(toggle.x - (count.x + count.width)).toBeLessThanOrEqual(8);
   expect(Math.abs(toggle.y + toggle.height / 2 - (count.y + count.height / 2))).toBeLessThanOrEqual(
     1,
   );
+  const trailingGap = section.x + section.width - (toggle.x + toggle.width);
+  expect(Math.abs(trailingGap - 16)).toBeLessThanOrEqual(1);
 
   // The same toggle collapses the editor and expands the preview.
   await app.press("id:quick-translate-collapse-source");

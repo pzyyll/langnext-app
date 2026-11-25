@@ -1417,6 +1417,15 @@ export function QuickTranslatePopup(props: QuickTranslatePopupProps) {
         </If>
         <If when={hasSourceText()}>
           <View class="ml-auto shrink-0 flex-row items-center gap-0.5">
+            <Text
+              testID="quick-translate-source-count"
+              accessibilityLabel={t("quickTranslate.sourceCharacters", {
+                count: sourceCharacterCount(),
+              })}
+              class="shrink-0 text-xs tabular-nums text-muted-foreground"
+            >
+              {sourceCharacterCount()}
+            </Text>
             <Button
               testID="quick-translate-collapse-source"
               size="icon-xs"
@@ -1445,15 +1454,6 @@ export function QuickTranslatePopup(props: QuickTranslatePopupProps) {
                 class="size-3.5"
               />
             </Button>
-            <Text
-              testID="quick-translate-source-count"
-              accessibilityLabel={t("quickTranslate.sourceCharacters", {
-                count: sourceCharacterCount(),
-              })}
-              class="shrink-0 text-xs tabular-nums text-muted-foreground"
-            >
-              {sourceCharacterCount()}
-            </Text>
           </View>
         </If>
       </View>
