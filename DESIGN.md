@@ -29,3 +29,16 @@ A selection read that delivers no text explains itself in the source toolbar. An
 | Window content fit after the status row | Unchanged: the existing content fit, which never widens the popup            | Same                   |
 
 The feedback adds no overlay, travel, or live region; it does not move the keyboard focus.
+
+## Quick Translate Selection Hint
+
+After the user drags over text, an optional small **Translate Selection** button appears beside the release point. It is an opt-in in **Settings → Application → Shortcuts**, off by default. The button never takes the focus, so the selection stays with the application that owns it, and it reads nothing until it is clicked. It hides after three seconds, on the next press outside it, on activation, when Quick Translate or its screenshot workflow takes over, or when the option is turned off. The **Translate Selection** shortcut remains the keyboard path.
+
+### Motion Inventory
+
+| Change                                | Motion                                                               | Reduced motion         |
+| ------------------------------------- | -------------------------------------------------------------------- | ---------------------- |
+| Hint appears or follows a new release | No opening transition, travel, or fade: it is placed before it opens | Same                   |
+| Hint disappears on expiry or a press  | Removed at once; nothing animates and the pointer never chases it    | Same                   |
+| Translate Selection press             | Shared `pressScale` feedback                                         | No transition or scale |
+| Drag button setting switch            | Shared switch motion                                                 | No transition          |

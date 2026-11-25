@@ -10,6 +10,7 @@ import { loadQuickTranslatePreferences } from "../../features/quick-translate/pr
 import { ttsSettingsStore } from "../../features/tts/settings";
 import { loadAppearance } from "../../features/settings/appearance";
 import { loadLanguage } from "../../features/settings/language";
+import { loadSelectionHint } from "../../features/settings/selection-hint";
 import {
   DEFAULT_QUICK_TRANSLATE_SHORTCUT,
   QUICK_TRANSLATE_SHORTCUT_STORAGE_KEY,
@@ -33,6 +34,7 @@ export const HARNESS_PLATFORM_OS_KEY = "__test.qt.platformOs";
 export const HARNESS_DOUBLE_COPY_MODE_KEY = "__test.qt.doubleCopyMode";
 export const HARNESS_DOUBLE_COPY_CLIPBOARD_KEY = "__test.qt.doubleCopyClipboard";
 export const HARNESS_OCR_CAPTURE_KEY = "__test.qt.ocrCapture";
+export const HARNESS_SELECTION_HINT_MODE_KEY = "__test.qt.selectionHintMode";
 
 /** 16×16 PNG: large enough for Baidu's minimum side, still a valid AI crop. */
 const HARNESS_PNG_BASE64 = "iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAAAAAA6mKC9AAAAAElFTkSuQmCC";
@@ -52,6 +54,7 @@ function isActionMenuItem(entry: MenuItem | null | undefined | false): entry is 
 function QuickTranslateHarness(config: {
   shortcutMode: "ok" | "false" | "reject" | "conflict";
   doubleCopyMode: "ok" | "throw";
+  selectionHintMode: "ok" | "throw";
   initialClipboard: string;
   platformOs?: string;
   ocrCapture: HarnessCaptureMode;
@@ -164,6 +167,9 @@ function QuickTranslateHarness(config: {
           selectionGesture={{
             onSelectionGesture(listener) {
               selectionGestureRegisterCount.set(selectionGestureRegisterCount() + 1);
+              if (config.selectionHintMode === "throw") {
+                throw new Error("mouse hook unavailable");
+              }
               selectionGestureListener = listener;
               return () => {
                 selectionGestureStopCount.set(selectionGestureStopCount() + 1);
@@ -421,6 +427,8 @@ void Promise.all([
   Storage.getItem(SCREENSHOT_TRANSLATE_SHORTCUT_STORAGE_KEY),
   Storage.getItem(SELECTION_TRANSLATE_SHORTCUT_STORAGE_KEY),
   ttsSettingsStore.load(),
+  loadSelectionHint(),
+  Storage.getItem(HARNESS_SELECTION_HINT_MODE_KEY),
 ]).then(
   ([
     ,
@@ -439,6 +447,9 @@ void Promise.all([
     quickSaved,
     screenshotSaved,
     selectionSaved,
+    ,
+    ,
+    selectionHintModeRaw,
   ]) => {
     const shortcutMode =
       modeRaw === "false" || modeRaw === "reject" || modeRaw === "conflict" ? modeRaw : "ok";
@@ -459,6 +470,7 @@ void Promise.all([
       <QuickTranslateHarness
         shortcutMode={shortcutMode}
         doubleCopyMode={doubleCopyMode}
+        selectionHintMode={selectionHintModeRaw === "throw" ? "throw" : "ok"}
         initialClipboard={initialClipboard}
         platformOs={platformOs}
         ocrCapture={ocrCapture}

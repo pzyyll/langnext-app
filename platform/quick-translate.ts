@@ -33,6 +33,11 @@ export function canMonitorPointerPress(os: string): boolean {
   return os === "windows";
 }
 
+/** The low-level mouse hook that detects a possible text drag is Windows-only. */
+export function canDetectSelectionDrag(os: string): boolean {
+  return os === "windows";
+}
+
 /** Offset in points from the cursor hotspot to the popup's top-left corner. */
 const CURSOR_OFFSET_X_PT = -10;
 const CURSOR_OFFSET_Y_PT = -10;

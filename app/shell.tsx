@@ -14,7 +14,7 @@ import { AppMenu } from "../components/app-menu";
 import { PageSurface } from "../components/layout/page-surface";
 import type { NavigationLeaveGuard } from "../components/layout/navigation-leave-guard";
 import { Sidebar, type SidebarPage } from "../components/sidebar";
-import { ToastViewport } from "../components/ui/toast";
+import { toast, ToastViewport } from "../components/ui/toast";
 import { ModelsPage } from "../features/models/page";
 import { PresetsPage } from "../features/presets/page";
 import { SettingsPage } from "../features/settings/page";
@@ -22,11 +22,19 @@ import { formatShortcut, type TranslationShortcutBinding } from "../features/set
 import { silentLaunch } from "../features/settings/silent-launch";
 import { transparency } from "../features/settings/transparency";
 import {
+  canDetectSelectionDrag,
   resolveSelectionHintPlacement,
   type DoubleCopyBinding,
   type PointerPressPoint,
   type SelectionGestureBinding,
+  type SelectionGestureEvent,
 } from "../platform/quick-translate";
+import { nativeSelectionGestureBinding } from "../platform/quick-translate-native";
+import {
+  registerSelectionHintRuntime,
+  selectionHintActive,
+  selectionHintError,
+} from "../features/settings/selection-hint";
 import { canCaptureScreen } from "../platform/screen-capture";
 import {
   createQuickTranslateController,
@@ -114,28 +122,52 @@ export function AppShell(props: AppShellProps = {}) {
   };
 
   // The hint shows only where a display resolves; the press that began the drag never dismisses it.
-  let stopSelectionGesture: (() => void) | null = null;
-  const selectionGesture = props.selectionGesture;
-  if (selectionGesture && !stopSelectionGesture) {
-    stopSelectionGesture = selectionGesture.onSelectionGesture((event) => {
-      if (event.kind === "press") {
-        selectionHintPress.set(event.press);
-        return;
-      }
-      const placement = resolveSelectionHintPlacement(
-        event.release,
-        displays(),
-        SELECTION_HINT_SIZE,
-      );
-      if (placement === null) return;
-      selectionHintPress.set(null);
-      selectionHint.set({ release: event.release, target: event.target, ...placement });
-    });
-  }
+  const handleSelectionGesture = (event: SelectionGestureEvent) => {
+    if (event.kind === "press") {
+      selectionHintPress.set(event.press);
+      return;
+    }
+    const placement = resolveSelectionHintPlacement(event.release, displays(), SELECTION_HINT_SIZE);
+    if (placement === null) return;
+    selectionHintPress.set(null);
+    selectionHint.set({ release: event.release, target: event.target, ...placement });
+  };
+
+  /** Starts the one listener the opt-in allows; a refusal leaves the feature off. */
+  const startSelectionGesture = (): (() => void) => {
+    if (props.selectionGesture) {
+      return props.selectionGesture.onSelectionGesture(handleSelectionGesture);
+    }
+    if (!canDetectSelectionDrag(currentOs)) {
+      throw new Error("Selection drag monitoring is not available on this platform.");
+    }
+    return nativeSelectionGestureBinding.onSelectionGesture(handleSelectionGesture);
+  };
+
+  const stopSelectionHint = registerSelectionHintRuntime({
+    os: currentOs,
+    start: startSelectionGesture,
+  });
+  const stopSelectionHintQuit = Application.on("quit", stopSelectionHint);
   cleanup(() => {
-    stopSelectionGesture?.();
-    stopSelectionGesture = null;
+    stopSelectionHintQuit();
+    stopSelectionHint();
     selectionHint.set(null);
+  });
+
+  // Disabling the opt-in hides a hint the stopped listener left behind.
+  effect(() => {
+    if (!selectionHintActive()) selectionHint.set(null);
+  });
+
+  // A listener that cannot start says so once, after the first frame can show the toast.
+  let reportedSelectionHintError: string | null = null;
+  effect(() => {
+    const message = selectionHintError();
+    if (message === null || message === reportedSelectionHintError) return;
+    reportedSelectionHintError = message;
+    const timer = setTimeout(() => toast.error(message), 0);
+    cleanup(() => clearTimeout(timer));
   });
 
   // Quick Translate or its screenshot workflow takes the screen from the hint.

@@ -23,6 +23,7 @@ import { GOOGLE_CLOUD_TTS_URL } from "../features/tts/google-cloud";
 import { DEFAULT_GOOGLE_VOICE_PREFERENCES } from "../features/tts/google-preferences";
 import { TTS_STORAGE_KEY, ttsCredentialStorageKey } from "../features/tts/settings";
 import { createQuickTranslateController, POPUP_MIN_SIZE } from "./quick-translate-controller";
+import { SELECTION_HINT_STORAGE_KEY } from "../features/settings/selection-hint";
 import { SELECTION_HINT_DURATION_MS } from "./selection-hint";
 
 const HARNESS_ENTRY = "./__tests__/quick-translate-harness.tsx";
@@ -1973,6 +1974,7 @@ test("selection hint activation: a drag release shows one button and only a clic
       [QUICK_TRANSLATE_PREFERENCES_KEY]: popupPreferences({
         cards: [{ id: "card-1", presetId: "preset-1", templateId: null, collapsed: false }],
       }),
+      [SELECTION_HINT_STORAGE_KEY]: "true",
       "settings.language": "en",
     },
     network: {
@@ -2012,7 +2014,7 @@ test("selection hint activation: a stale, expired, outside-pressed, or edge hint
   const app = await open(HARNESS_ENTRY, {
     ...viewport,
     clock: {},
-    storage: { "settings.language": "en" },
+    storage: { "settings.language": "en", [SELECTION_HINT_STORAGE_KEY]: "true" },
   });
 
   // A target that is no longer current opens nothing and reads nothing.
@@ -2063,6 +2065,125 @@ test("selection hint activation: a stale, expired, outside-pressed, or edge hint
     workY + workHeight - 8 + 1,
   );
   expect(app.texts().join(" ")).toContain("selReads=0|");
+});
+
+test("selection hint setting: starts one listener only for the saved preference and stops it on disable", async () => {
+  const switchId = "id:settings-selection-hint-switch";
+  const app = await open(HARNESS_ENTRY, {
+    ...viewport,
+    clock: {},
+    storage: { "settings.language": "en" },
+  });
+
+  // Nothing saved: the listener never starts.
+  await app.waitUntil(() => app.texts().some((text) => text.includes("sgReg=0|")));
+  expect(app.window("selection-hint").state()).toBeNull();
+  expect(app.storage()[SELECTION_HINT_STORAGE_KEY]).toBeUndefined();
+
+  await app.press("id:nav-settings");
+  await app.press("id:settings-nav-shortcuts");
+  await app.waitFor(switchId);
+  expect(app.texts()).toContain("Show Translate Button After Dragging Text");
+  expect(app.shows("id:settings-selection-hint-error")).toBe(false);
+
+  await app.press(switchId);
+  await app.waitUntil(() => app.texts().some((text) => text.includes("sgReg=1|")));
+  await app.waitUntil(() => app.storage()[SELECTION_HINT_STORAGE_KEY] === "true");
+
+  // The enabled listener reports a candidate; the hint shows without reading anything.
+  await app.press("id:harness-selection-hint-candidate-edge");
+  await app.waitUntil(() => app.window("selection-hint").state()?.visible === true);
+  expect(app.texts().join(" ")).toContain("selReads=0|");
+
+  // Disabling stops the one listener and dismisses the hint it left behind.
+  await app.press(switchId);
+  await app.waitUntil(() => app.texts().some((text) => text.includes("sgStop=1|")));
+  await app.waitUntil(() => app.window("selection-hint").state()?.visible !== true);
+  await app.waitUntil(() => app.storage()[SELECTION_HINT_STORAGE_KEY] === "false");
+  expect(app.texts().join(" ")).toContain("sgReg=1|");
+
+  // The saved preference starts exactly one listener on the next launch.
+  const reopened = await open(HARNESS_ENTRY, {
+    ...viewport,
+    clock: {},
+    storage: { ...app.storage(), [SELECTION_HINT_STORAGE_KEY]: "true" },
+  });
+  await reopened.waitUntil(() => reopened.texts().some((text) => text.includes("sgReg=1|")));
+  await reopened.press("id:harness-selection-hint-candidate");
+  await reopened.waitUntil(() => reopened.window("selection-hint").state()?.visible === true);
+  await reopened.press("id:selection-hint-translate");
+  await reopened.waitUntil(() => reopened.texts().some((text) => text.includes("selReads=1|")));
+  expect(reopened.texts().join(" ")).toContain("selUia=1|");
+  await reopened.press("id:harness-finish-selection");
+  await reopened.waitUntil(() => reopened.window("quick-translate").state()?.visible === true);
+});
+
+test("selection hint setting: a refused start or a failed write keeps the feature off and the shortcuts", async () => {
+  const refused = await open(HARNESS_ENTRY, {
+    ...viewport,
+    storage: {
+      "settings.language": "en",
+      [SELECTION_HINT_STORAGE_KEY]: "true",
+      "__test.qt.selectionHintMode": "throw",
+    },
+  });
+
+  // The failure is reported to the user, and the shortcuts keep working.
+  await refused.waitUntil(() => refused.texts().includes(t("settings.selectionHint.enableError")));
+  expect(refused.texts().join(" ")).toContain("sgReg=1|");
+  expect(refused.texts().join(" ")).toContain("sgStop=0|");
+  // A refused listener never takes the shortcuts with it.
+  expect(refused.texts().join(" ")).toContain("shortcuts=alt+shift+d,alt+s,alt+d|");
+  expect(refused.window("selection-hint").state()).toBeNull();
+  await refused.press("id:nav-settings");
+  await refused.press("id:settings-nav-shortcuts");
+  await refused.waitFor("id:settings-selection-hint-error");
+
+  // A failed write keeps the previous value and runtime state.
+  let failWrites = true;
+  const saved: Record<string, string> = { "settings.language": "en" };
+  const failing = await open(HARNESS_ENTRY, {
+    ...viewport,
+    modules: {
+      nsh: {
+        "Storage.getItem": async (key: string) => saved[key] ?? null,
+        "Storage.setItem": async (key: string, value: string) => {
+          if (key === SELECTION_HINT_STORAGE_KEY && failWrites) {
+            throw new Error("Storage unavailable");
+          }
+          saved[key] = value;
+        },
+      },
+    },
+  });
+  await failing.press("id:nav-settings");
+  await failing.press("id:settings-nav-shortcuts");
+  await failing.press("id:settings-selection-hint-switch");
+  await failing.waitFor("id:settings-selection-hint-error");
+  expect(saved[SELECTION_HINT_STORAGE_KEY]).toBeUndefined();
+  await failing.waitUntil(() => failing.texts().some((text) => text.includes("sgStop=1|")));
+
+  failWrites = false;
+  await failing.press("id:settings-selection-hint-switch");
+  await failing.waitUntil(() => saved[SELECTION_HINT_STORAGE_KEY] === "true");
+  await failing.waitUntil(() => failing.shows("id:settings-selection-hint-error") === false);
+  expect(failing.texts().join(" ")).toContain("sgReg=2|");
+});
+
+test("selection hint setting: outside Windows the switch is hidden and no listener starts", async () => {
+  const app = await open(HARNESS_ENTRY, {
+    ...viewport,
+    platform: "macos",
+    clock: {},
+    storage: { "settings.language": "en", [SELECTION_HINT_STORAGE_KEY]: "true" },
+  });
+
+  await app.press("id:nav-settings");
+  await app.press("id:settings-nav-shortcuts");
+  await app.waitFor("id:settings-shortcuts-windows-only");
+  expect(app.shows("id:settings-selection-hint-switch")).toBe(false);
+  expect(app.texts().join(" ")).toContain("sgReg=0|");
+  expect(app.window("selection-hint").state()).toBeNull();
 });
 
 test("selection controller: recognition keeps the first delivery", async () => {

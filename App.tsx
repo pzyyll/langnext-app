@@ -15,6 +15,7 @@ import { loadAppearance } from "./features/settings/appearance";
 import { loadLanguage } from "./features/settings/language";
 import { loadLogLevel } from "./features/settings/log-level";
 import { loadSelectionCopy } from "./features/settings/selection-copy";
+import { loadSelectionHint } from "./features/settings/selection-hint";
 import { loadSilentLaunch } from "./features/settings/silent-launch";
 import { loadTransparency } from "./features/settings/transparency";
 import { createLogger, logFile } from "./services/log";
@@ -35,6 +36,7 @@ async function startApp() {
       loadAppearance(),
       loadLanguage(),
       loadSelectionCopy(),
+      loadSelectionHint(),
       loadSilentLaunch(),
       loadTransparency(),
       loadQuickTranslatePreferences(),
