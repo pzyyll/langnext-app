@@ -865,6 +865,7 @@ quickTranslate:
   backTranslationCopied: Back-translation copied
   sourceLabel: Source text
   sourcePlaceholder: Enter text to translate…
+  sourceCharacters: "Characters: %{count}"
   collapseSource: Collapse input
   editSource: Edit input
   error:

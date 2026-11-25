@@ -840,6 +840,7 @@ export function QuickTranslatePopup(props: QuickTranslatePopupProps) {
   const showingHistory = () => props.session.historySnapshot() !== null;
   const sourceFirstLine = () => sourceText().split(/\r?\n/, 1)[0] ?? "";
   const sourceHasMultipleLines = () => /\r?\n/.test(sourceText());
+  const sourceCharacterCount = () => Array.from(sourceText()).length;
   const sourceInputRef = signal<InputRef | null>(null);
   // Survives the editor unmounting into the one-line preview, so expand does not flash the largest step.
   const sourceFontStep = signal(LARGEST_FONT_STEP);
@@ -1312,7 +1313,7 @@ export function QuickTranslatePopup(props: QuickTranslatePopupProps) {
     return null;
   };
   const hasToolbarStatus = () => showOcrError() || showOcrBusy() || selectionMessage() !== null;
-  const hasSourceToolbar = () => hasSpeakableSource() || hasToolbarStatus();
+  const hasSourceToolbar = () => hasSourceText() || hasToolbarStatus();
 
   const renderSourceActions = (extraClass = "") => (
     <If when={hasSourceText()}>
@@ -1441,6 +1442,17 @@ export function QuickTranslatePopup(props: QuickTranslatePopupProps) {
               class="shrink-0"
             />
           </If>
+        </If>
+        <If when={hasSourceText()}>
+          <Text
+            testID="quick-translate-source-count"
+            accessibilityLabel={t("quickTranslate.sourceCharacters", {
+              count: sourceCharacterCount(),
+            })}
+            class="ml-auto shrink-0 text-xs tabular-nums text-muted-foreground"
+          >
+            {sourceCharacterCount()}
+          </Text>
         </If>
       </View>
     </If>

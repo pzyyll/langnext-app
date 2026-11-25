@@ -221,6 +221,40 @@ test("quick popup: collapses a non-empty source into a one-line preview and retu
   expect(app.shows("id:quick-translate-collapse-source")).toBe(false);
 });
 
+test("quick popup: shows the source character count at the input's trailing edge", async () => {
+  const app = await open(POPUP_HARNESS, {
+    ...viewport,
+    storage: seedWithPresets([makePreset()]),
+  });
+
+  await app.waitFor("id:quick-translate-source");
+  expect(app.shows("id:quick-translate-source-count")).toBe(false);
+
+  await app.type("id:quick-translate-source", "Hello world");
+  expect(app.shows("id:quick-translate-source-toolbar >> id:quick-translate-source-count")).toBe(
+    true,
+  );
+  expect(app.shows("text:11")).toBe(true);
+  expect(app.accessibility("id:quick-translate-source-count")?.label).toBe(
+    t("quickTranslate.sourceCharacters", { count: 11 }),
+  );
+
+  // The count follows the draft.
+  await app.type("id:quick-translate-source", "!");
+  expect(app.shows("text:12")).toBe(true);
+
+  const count = app.layout("id:quick-translate-source-count");
+  const section = app.layout("id:quick-translate-source-section");
+  if (count === null || section === null) {
+    throw new Error("expected the source count and its section to be laid out");
+  }
+  const trailingGap = section.x + section.width - (count.x + count.width);
+  expect(Math.abs(trailingGap - 16)).toBeLessThanOrEqual(1);
+
+  await app.clear("id:quick-translate-source");
+  expect(app.shows("id:quick-translate-source-count")).toBe(false);
+});
+
 test("quick popup: renders streamed text while translating and keeps partial text on failure", async () => {
   const app = await open(POPUP_HARNESS, {
     ...viewport,
