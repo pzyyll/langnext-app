@@ -330,6 +330,13 @@ settings:
       detectorUnconfigured: Configure this detector before enabling it.
       preferenceInvalid: Choose a supported language.
       preferencesIdentical: The native language and the target language must differ.
+  wordbook:
+    error:
+      storageReadFailed: Could not read the saved Wordbook settings.
+      storageMalformed: The saved Wordbook settings are unreadable.
+      storageWriteFailed: Could not save the Wordbook settings. Check storage and try again.
+      targetIncomplete: Choose a complete Anki destination before enabling it.
+      credentialUnreadable: The saved Anki key could not be read. Enter it again.
 ocr:
   capture:
     instruction: Drag to select · Tab switches display · Space and Enter confirm · Esc cancels

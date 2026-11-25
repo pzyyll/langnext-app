@@ -330,6 +330,13 @@ settings:
       detectorUnconfigured: 请先配置此检测器再启用。
       preferenceInvalid: 请选择受支持的语言。
       preferencesIdentical: 母语与目标语言必须不同。
+  wordbook:
+    error:
+      storageReadFailed: 无法读取已保存的生词本设置。
+      storageMalformed: 已保存的生词本设置无法解析。
+      storageWriteFailed: 无法保存生词本设置，请检查存储后重试。
+      targetIncomplete: 请先选择完整的 Anki 目标再启用。
+      credentialUnreadable: 无法读取已保存的 Anki 密钥，请重新填写。
 ocr:
   capture:
     instruction: 拖动选择区域 · Tab 切换显示器 · 空格与回车确认 · Esc 取消
