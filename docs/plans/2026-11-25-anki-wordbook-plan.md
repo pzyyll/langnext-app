@@ -1,12 +1,12 @@
 # Implementation Plan
 
-**Goal:** Configure Anki from the main sidebar and add the source text and translation from one Quick Translate result card to a chosen Anki deck.
+**Goal:** Configure Anki in **Settings → Integrations → Wordbook** and add the source text and translation from one Quick Translate result card to a chosen Anki deck.
 
 **Inputs:** The Wordbook feature request, the decision to ship Anki only, the [AnkiConnect API v1 reference][api], and the [Anki manual on duplicate checks][duplicates].
 
 **Assumptions:**
 
-- Keep the requested top-level sidebar entry: **Wordbook** / **生词本**. Its page configures Anki. It does not show a list of saved notes. Show only Anki, with one saved destination and one enable switch. Default to off.
+- Use **Settings → Integrations → Wordbook** (**设置 → 集成 → 生词本**) as the only configuration entry. Do not add an entry to the main sidebar or a list of saved notes. Show only Anki, with one saved destination and one enable switch. Default to off.
 - Use Anki Desktop with a current [AnkiConnect add-on][addon] that implements API v1. Use release `26.11.22.0` as the contract and first test baseline. Verify the actual Anki Desktop version with this release on Windows. Do not implement legacy v6 or write to AnkiWeb directly.
 - Accept words, phrases, and sentences without extracting terms from the source. Only new forward results in Quick Translate can be added. Exclude restored history, back-translation, Eudic, other destinations, offline queues, bulk adds, remote endpoints, and note editing or removal.
 
@@ -23,11 +23,12 @@
 | Modify | `services/http.ts`, `services/http.test.ts` | Let callers omit request and response bodies from logs without changing the default. |
 | Create and test | `features/wordbook/anki-client.ts`, `features/wordbook/anki-client.test.ts` | Discover and check the Anki target, serialize one note, and classify responses at the HTTP boundary. |
 | Create and test | `features/wordbook/settings.ts`, `features/wordbook/settings.test.ts` | Load and save the Anki binding, its optional key reference, and enable state. |
-| Create | `features/wordbook/page.tsx` | Show the connection check, target and field choices, Save, and the enable switch. |
-| Modify | `App.tsx`, `app/shell.tsx`, `components/sidebar.tsx` | Load Wordbook settings, add the sidebar route, and reuse the existing navigation guard and `PageSurface` column layout. |
+| Create | `features/settings/wordbook-section.tsx` | Show the Anki connection check, target and field choices, Save, and the enable switch. |
+| Modify and test | `features/settings/page.tsx`, `features/settings/settings.test.tsx` | Add Wordbook under Integrations and render its form in the existing detail pane. Test setup through the Settings route. |
+| Modify | `App.tsx`, `app/shell.tsx` | Load Wordbook settings and pass the existing shell leave guard to Settings. Keep the main navigation unchanged. |
 | Modify | `features/quick-translate/session.ts`, `features/quick-translate/popup.tsx`, `app/quick-translate.tsx` | Add an action for the selected result, with progress and feedback in the same card. Wire the shared store and Anki client at the window entry point. |
-| Create and modify | `assets/icons/mdi--book-open-variant.svg`, `assets/icons/mdi--bookmark-plus-outline.svg`, `components/ui/icon.tsx` | Add the Material Design Icons for the sidebar and the result action. Reuse the existing check glyph for success. |
-| Test | `app/quick-translate.test.tsx`, `app/__tests__/quick-translate-harness.tsx` | Exercise the sidebar, configuration, and result action through the real shell. Load the store at harness start; use NSH Storage and HTTP fixtures. |
+| Create and modify | `assets/icons/mdi--bookmark-plus-outline.svg`, `components/ui/icon.tsx` | Add the Material Design Icon for the result action. Reuse the existing check glyph for success. |
+| Test | `app/quick-translate.test.tsx`, `app/__tests__/quick-translate-harness.tsx` | Exercise the result action through the real shell. Load the store at harness start; use NSH Storage and HTTP fixtures. |
 | Modify | `locales/en.yml`, `locales/zh-CN.yml`, `DESIGN.md`, `README.md` | Add localized strings, record motion before TSX changes, and document setup and release limits. |
 
 ## Seams
@@ -35,7 +36,7 @@
 - `createHttpFetch({ logBodies: false, fetchImpl })`: callers can read the response, but payloads do not reach debug logs.
 - `createAnkiClient({ fetchImpl })`: `discover`, `getNoteType`, and `addTranslation` report typed outcomes at the external HTTP boundary.
 - `createWordbookSettingsStore(storage)`: `load`, `save`, `setEnabled`, and `activeBinding` expose only saved, valid configuration to the popup.
-- Main sidebar through `AppShell`: a user can open Wordbook, test the connection, select a target, and save and enable it.
+- Settings → Integrations → Wordbook through `SettingsPage`: a user can test the connection, select a target, and save and enable it.
 - Quick Translate through `AppShell`: an explicit press on a complete forward result adds the correct pair to the saved target and shows the write outcome.
 
 Confirm these seams before writing tests. For each cycle, add one behavior test, run the stated command, and observe the expected assertion fail. Implement only that behavior and run the same command again. An import or type error is not a valid red result. Use HTTP and Storage fixtures only in tests.
@@ -79,16 +80,16 @@ Confirm these seams before writing tests. For each cycle, add one behavior test,
 - [ ] **Next cycles:** Use separate `settings.wordbook.anki.credentials.<ref>` entries for optional keys. Keep a saved key on a blank edit, accept a nonblank replacement, and support explicit removal. Never load a saved key into the input. Write a replacement key before the binding; commit the binding before removing the old key. On failure keep the old binding and key, clean up the unused new key, and report a fixed error. Test both write failures. Disable does not erase the key or change notes in Anki.
 - [ ] **Red/green:** `mise exec -- nsh test features/wordbook/settings.test.ts --filter "wordbook settings:"`. Expect the new default, reload, or rollback assertion to fail first and then pass.
 
-### 5. Configure Anki from the main sidebar
+### 5. Configure Anki in Settings
 
-**Seam:** Wordbook through `AppShell`.
+**Seam:** Settings → Integrations → Wordbook through `SettingsPage`.
 
-- [ ] **Red:** In `app/quick-translate.test.tsx`, open `nav-wordbook`. Expect the new page, Anki only, an off switch, and no HTTP calls. In the next cycle, press Test Connection, select a deck and note type with fixture names, select the translation field, save, and enable. Reopen the page and expect the saved choices without a new HTTP call.
-- [ ] **Green:** Record the motion inventory in `DESIGN.md` before starting TSX changes. Add `wordbook` to `SidebarPage`, place it after Presets, and route it through `navigateTo` to honor existing leave guards. Load the store in `App.tsx` and the harness. Use `PageSurface` with `layout="column"` and the shared `Card`, `SectionHeading`, `Select`, `Input`, `Switch`, and `Button` in `features/wordbook/page.tsx`.
-- [ ] **Green:** Show the Anki Desktop and AnkiConnect prerequisite, a masked optional key, **Test Connection**, and the active profile after connection. Test Connection loads decks and type summaries; selecting a type loads its fields. Show its first field as the fixed **Source field** and allow one other field as **Translation field**. Select the only available translation field if there is just one. Do not guess from localized names. Save requires a complete choice from the latest test and field read. Clear dependent choices after a change of profile or note type. Invalidate discovery when the key draft changes. Ignore stale replies. Keep saved choices visible after reload, but require a new connection check before editing the target. A failed check does not disable a saved target. A failed save keeps the previous binding. Use the existing leave guard for unsaved edits and discard only on confirmation.
-- [ ] **Next cycles:** Cover missing or invalid configuration, saved masked key and explicit key removal, a failed connection check, a late field result after a different selection, disabling, and navigation away from dirty edits. Use localized labels and error text from `t()` in both locale files; display profile, deck, and field names as Anki data. Give icon buttons a localized accessible name. Use the existing page entrance, Select popup, switch, and button feedback. Replace status text in place; do not introduce new layout animation.
-- [ ] **Red/green:** `mise exec -- nsh test app/quick-translate.test.tsx --filter "wordbook page:"`. Expect the route, configuration, or persistence assertion to fail first and then pass.
-- [ ] **Native checkpoint:** Before wiring the card action, run `mise run dev` on Windows and use Test Connection against the baseline AnkiConnect release. Confirm that NSH can reach the local endpoint and read real deck and field names. This check makes no writes to Anki.
+- [ ] **Red:** In `features/settings/settings.test.tsx`, open the production `App.tsx`, press `nav-settings`, and find `settings-nav-wordbook` under `settings-group-integrations`. Press it and expect the Wordbook heading in the detail pane, Anki only, an off switch, and no HTTP calls. Verify that the main sidebar has no `nav-wordbook`. In the next cycle, press Test Connection, select a deck and note type with fixture names, select the translation field, save, and enable. Reopen the section and expect the saved choices without a new HTTP call.
+- [ ] **Green:** Record the motion inventory in `DESIGN.md` before starting TSX changes. Add `wordbook` to `SettingsSection` and append it to the `integrations` group in `features/settings/page.tsx`. Add `settings.sections.wordbook` to both locales. Reuse the Settings rail, heading, and scrollable detail pane. Render `WordbookSection` from `features/settings/wordbook-section.tsx` using the shared `Card`, `SectionHeading`, `Select`, `Input`, `Switch`, and `Button`. Load the store in `App.tsx`. Do not add a `SidebarPage` value, a main sidebar icon, or a provider picker.
+- [ ] **Green:** Show the Anki Desktop and AnkiConnect prerequisite, a masked optional key, **Test Connection**, and the active profile after connection. Test Connection loads decks and type summaries; selecting a type loads its fields. Show its first field as the fixed **Source field** and allow one other field as **Translation field**. Select the only available translation field if there is just one. Do not guess from localized names. Save requires a complete choice from the latest test and field read. Clear dependent choices after a change of profile or note type. Invalidate discovery when the key draft changes. Ignore stale replies. Keep saved choices visible after reload, but require a new connection check before editing the target. A failed check does not disable a saved target. A failed save keeps the previous binding.
+- [ ] **Next cycles:** Cover missing or invalid configuration, saved masked key and explicit key removal, a failed connection check, a late field result after a different selection, disabling, and navigation away from dirty edits. Use the same discard confirmation when the user selects another Settings section or leaves Settings. Apply the Wordbook guard to section changes in `SettingsPage`, and pass the existing shell guard registration to `SettingsPage` from `app/shell.tsx`. Discard only on confirmation. Use `t()` for labels and errors in both locales; display profile, deck, and field names as Anki data. Reuse the existing Select popup, switch, and button feedback. Replace status text in place; do not introduce new layout animation.
+- [ ] **Red/green:** `mise exec -- nsh test features/settings/settings.test.tsx --filter "wordbook page:"`. Expect the section, configuration, or persistence assertion to fail first and then pass.
+- [ ] **Native checkpoint:** Before wiring the card action, run `mise run dev` on Windows and use Test Connection in **Settings → Integrations → Wordbook** against the baseline AnkiConnect release. Confirm that NSH can reach the local endpoint and read real deck and field names. This check makes no writes to Anki.
 
 ### 6. Add the selected Quick Translate result
 
@@ -119,10 +120,10 @@ Confirm these seams before writing tests. For each cycle, add one behavior test,
 
 ## Rollout, Risks, and Final Validation
 
-- [ ] Update `README.md` with the install code `2055492159`, the default local endpoint, the need to keep Anki open, and the one-target setup steps. Do not claim support for versions or desktop targets that were not verified. No migration or automatic enablement is needed.
-- [ ] Run `mise run verify`. Expect formatting, lint, types, tests, and build to pass. Run `mise exec -- nsh test app/quick-translate.test.tsx --target windows --filter "wordbook page:"` and `mise exec -- nsh test app/quick-translate.test.tsx --target windows --filter "quick anki:"` separately: `mise run test-desktop` does not include `app/*.test.tsx`.
+- [ ] Update `README.md` with the install code `2055492159`, the default local endpoint, the need to keep Anki open, and the **Settings → Integrations → Wordbook** setup steps. Do not claim support for versions or desktop targets that were not verified. No migration or automatic enablement is needed.
+- [ ] Run `mise run verify`. Expect formatting, lint, types, tests, and build to pass. On Windows, run `mise exec -- nsh test features/settings/settings.test.tsx --target windows --filter "wordbook page:"` and `mise exec -- nsh test app/quick-translate.test.tsx --target windows --filter "quick anki:"`. Run the latter explicitly because `mise run test-desktop` does not include `app/*.test.tsx`.
 - [ ] Run `mise run dev` on Windows with a real Anki instance and an authorized temporary profile and deck. Record the Anki Desktop and AnkiConnect versions. Check that Test Connection does not add a note. Add a result with non-ASCII text, literal `<` and `&`, and a line break; inspect the generated card in Anki. Add the same source with a different translation and verify no second note or overwrite. Switch profiles or remove the test deck and check that the app refuses to write. Verify both no-key and configured-key access and the recovery when Anki is closed. If real access is unavailable, report live compatibility as unverified; fixtures do not prove it.
-- [ ] Check the sidebar and result card at minimum size, in light and dark, in English and Simplified Chinese, with reduced motion, and by keyboard and Narrator. Check the NSH finishing checklist and each motion entry. Verify visible focus, non-overlapping controls, masked input, and announced progress and failure. Use the existing window fit and dismissal rules.
+- [ ] Check the Wordbook section in the Settings rail and detail pane, and the Quick Translate result card, at minimum size. Check both in light and dark, in English and Simplified Chinese, with reduced motion, and by keyboard and Narrator. Check the NSH finishing checklist and each motion entry. Verify visible focus, non-overlapping controls, masked input, and announced progress and failure. Use the existing window fit and dismissal rules.
 
 **Open questions:** None that block the plan. Live release compatibility is a release check, not an assumption about older AnkiConnect builds.
 
