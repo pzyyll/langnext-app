@@ -701,7 +701,11 @@ function PresetCardRow(props: PresetCardRowProps) {
                     onPress={() => props.onAddToAnki(props.card().id)}
                   >
                     <Icon
-                      name={props.card().anki.status === "added" ? "mdi:check" : "mdi:plus"}
+                      name={
+                        props.card().anki.status === "added"
+                          ? "mdi:check"
+                          : "mdi:share-variant-outline"
+                      }
                       tone={props.card().anki.status === "added" ? "success" : "muted-foreground"}
                       class="size-3.5"
                     />

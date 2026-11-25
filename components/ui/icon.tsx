@@ -48,6 +48,7 @@ import mdiPinOutlineIcon from "../../assets/icons/mdi--pin-outline.svg";
 import mdiPinIcon from "../../assets/icons/mdi--pin.svg";
 import mdiPlusIcon from "../../assets/icons/mdi--plus.svg";
 import mdiRefreshIcon from "../../assets/icons/mdi--refresh.svg";
+import mdiShareVariantOutlineIcon from "../../assets/icons/mdi--share-variant-outline.svg";
 import mdiStopCircleOutlineIcon from "../../assets/icons/mdi--stop-circle-outline.svg";
 import mdiStopIcon from "../../assets/icons/mdi--stop.svg";
 import mdiSwapHorizontalIcon from "../../assets/icons/mdi--swap-horizontal.svg";
@@ -117,6 +118,7 @@ const ICONS = {
   "mdi:pin-outline": mdiPinOutlineIcon,
   "mdi:plus": mdiPlusIcon,
   "mdi:refresh": mdiRefreshIcon,
+  "mdi:share-variant-outline": mdiShareVariantOutlineIcon,
   "mdi:stop": mdiStopIcon,
   "mdi:stop-circle-outline": mdiStopCircleOutlineIcon,
   "mdi:swap-horizontal": mdiSwapHorizontalIcon,
