@@ -9,6 +9,7 @@ import {
   Scroll,
   signal,
   Text,
+  untracked,
   View,
   type Accessor,
   type Align,
@@ -37,6 +38,7 @@ import { Textarea } from "../../components/ui/textarea";
 import { TranslationOutput } from "../../components/ui/translation-output";
 import googleCloudIcon from "../../../assets/icons/google-cloud.svg";
 import { ProviderMark } from "../../modules/ai/ui/provider-mark";
+import { createLogger } from "../../services/log";
 import { languageResolutionErrorMessage } from "../language-detection/messages";
 import { AUTO_LANGUAGE, type LanguageId, type SourceLanguageId } from "../../framework/languages";
 import { presetChannelMark } from "../presets/model-choices";
@@ -48,6 +50,10 @@ import { ttsChannels } from "../tts/store";
 import { AlignedTranslation, type SentenceSegment } from "./aligned-translation";
 import { buildAlignedMarkdownDocument, prepareMarkdownAlignment } from "./alignment-document";
 import { QuickTranslateHistoryResults } from "./history-results";
+import {
+  createSentencePopoverTrace,
+  type SentencePopoverDismissal,
+} from "./sentence-popover-trace";
 import type { CardResultState, CardViewItem, QuickTranslateSession } from "./session";
 import {
   QuickTranslateSourceEditor,
@@ -55,6 +61,8 @@ import {
   type SourceInputHandle,
 } from "./source-editor";
 import { resolvePresetTemplate } from "./translate";
+
+const sentencePopoverLog = createLogger("quick-translate/sentence-popover");
 
 /** What the OCR action reports while it runs, and after it stops. */
 export interface QuickTranslateOcrStatus {
@@ -1009,6 +1017,13 @@ export function QuickTranslatePopup(props: QuickTranslatePopupProps) {
 
   const activeMatch = signal<ActiveSentenceMatch | null>(null);
   const sentencePopover = signal<ActiveSentencePopover | null>(null);
+  const popoverTrace = createSentencePopoverTrace((failure) =>
+    untracked(() => sentencePopoverLog.error("Sentence popover update failed", failure)),
+  );
+  const readPopoverForOverlay = () => {
+    popoverTrace.record("overlay-render");
+    return sentencePopover();
+  };
   const keyboardAnnouncement = signal("");
   const focusedPreview = signal<{ cardId: string; resultId: number } | null>(null);
   const alignmentCache = new Map<string, CardAlignmentEntry>();
@@ -1038,9 +1053,10 @@ export function QuickTranslatePopup(props: QuickTranslatePopupProps) {
     }
   };
 
-  const closeSentencePopover = () => {
+  const closeSentencePopover = (reason: SentencePopoverDismissal) => {
     popoverMeasureToken += 1;
     if (sentencePopover() !== null) {
+      popoverTrace.record(`dismiss:${reason}`);
       sentencePopover.set(null);
     }
   };
@@ -1058,7 +1074,7 @@ export function QuickTranslatePopup(props: QuickTranslatePopupProps) {
       pagePosition,
       timestamp: Date.now(),
     };
-    closeSentencePopover();
+    closeSentencePopover("outside-press");
   };
 
   const clearActiveMatch = () => {
@@ -1072,6 +1088,7 @@ export function QuickTranslatePopup(props: QuickTranslatePopupProps) {
   };
 
   cleanup(() => {
+    popoverTrace.record("popup-cleanup");
     popupAlive = false;
     cancelPendingClear();
     popoverMeasureToken += 1;
@@ -1079,7 +1096,10 @@ export function QuickTranslatePopup(props: QuickTranslatePopupProps) {
   });
 
   effect(() => {
-    props.session.notifyOverlayOpenChange("sentence-popover", sentencePopover() !== null);
+    const open = sentencePopover() !== null;
+    popoverTrace.record(open ? "notify-open" : "notify-closed");
+    props.session.notifyOverlayOpenChange("sentence-popover", open);
+    popoverTrace.record("notify-return");
   });
 
   const effectiveHighlightMatch = () => sentencePopover() ?? activeMatch();
@@ -1263,6 +1283,7 @@ export function QuickTranslatePopup(props: QuickTranslatePopupProps) {
     if (next.origin === "pointer" && keyboardAnnouncement() !== "") {
       keyboardAnnouncement.set("");
     }
+    if (next.origin === "pointer") popoverTrace.record("hover-match");
     activeMatch.set(next);
   };
 
@@ -1289,6 +1310,7 @@ export function QuickTranslatePopup(props: QuickTranslatePopupProps) {
   let lastSemanticState = semanticEnabled();
   let lastSourceCollapsed = isSourceCollapsed();
   effect(() => {
+    popoverTrace.record("alignment-validation");
     const cards = props.session.cards();
     retainAlignmentEntries(cards);
 
@@ -1310,7 +1332,7 @@ export function QuickTranslatePopup(props: QuickTranslatePopupProps) {
     if (alignmentChanged || !alignmentEnabled()) {
       focusedPreview.set(null);
       clearActiveMatch();
-      closeSentencePopover();
+      closeSentencePopover("alignment-changed");
     }
 
     const focused = focusedPreview();
@@ -1346,7 +1368,7 @@ export function QuickTranslatePopup(props: QuickTranslatePopupProps) {
         popoverCard.result.resultId !== currentPopover.resultId ||
         popoverCard.result.sourceText !== currentSource
       ) {
-        closeSentencePopover();
+        closeSentencePopover(scrolled ? "scroll" : !visible ? "window-hidden" : "invalidated");
       }
     }
 
@@ -1376,6 +1398,7 @@ export function QuickTranslatePopup(props: QuickTranslatePopupProps) {
   });
 
   const activeSourceHighlight = (): SourceHighlightRange | null => {
+    popoverTrace.record("source-highlight");
     const current = effectiveHighlightMatch();
     if (!current || !alignmentEnabled()) return null;
     if (isSourceCollapsed() || showingHistory() || isComposing() || !isPreviewWindowVisible()) {
@@ -1461,7 +1484,7 @@ export function QuickTranslatePopup(props: QuickTranslatePopupProps) {
           sourceText: matchedSource,
         });
       } else {
-        closeSentencePopover();
+        closeSentencePopover("unmatched");
       }
     }
   };
@@ -1486,7 +1509,8 @@ export function QuickTranslatePopup(props: QuickTranslatePopupProps) {
     if (!latestCard || !isCardEligibleForAlignment(latestCard)) return;
     if (latestCard.result.resultId !== expectedResultId) return;
     const latestEntry = resolveCardAlignment(latestCard, mode);
-    const sourceRange = latestEntry?.sourceRanges[segmentId];
+    if (!latestEntry) return;
+    const sourceRange = latestEntry.sourceRanges[segmentId];
     if (!sourceRange) return;
     const matchedSource = latestCard.result.sourceText
       .slice(sourceRange.start, sourceRange.end)
@@ -1502,7 +1526,7 @@ export function QuickTranslatePopup(props: QuickTranslatePopupProps) {
     const current = sentencePopover();
     if (current && isSameMatchKey(current, key)) {
       lastOutsideDismiss = null;
-      closeSentencePopover();
+      closeSentencePopover("toggle");
       return;
     }
     if (
@@ -1527,13 +1551,27 @@ export function QuickTranslatePopup(props: QuickTranslatePopupProps) {
       size: { width: 1, height: LINE_ANCHOR_HALF_HEIGHT * 2 },
     };
     const token = ++popoverMeasureToken;
-    sentencePopover.set({
-      ...key,
-      origin: "pointer",
-      sourceRange,
-      sourceText: matchedSource,
-      anchor: initialAnchor,
-    });
+    // The setter flushes its reactive dependants before returning.
+    popoverTrace.run(
+      untracked(() => ({
+        markdown: mode === "markdown",
+        sourceCollapsed: isSourceCollapsed(),
+        replacingPopover: current !== null,
+        resultId: expectedResultId,
+        segmentId,
+        segmentCount: latestEntry.segments.length,
+        resultLength: latestCard.result.text.length,
+        scrollRevision: props.scrollRevision?.() ?? 0,
+      })),
+      () =>
+        sentencePopover.set({
+          ...key,
+          origin: "pointer",
+          sourceRange,
+          sourceText: matchedSource,
+          anchor: initialAnchor,
+        }),
+    );
     void previewNodes
       .get(cardId)
       ?.measure()
@@ -1587,7 +1625,7 @@ export function QuickTranslatePopup(props: QuickTranslatePopupProps) {
     const currentPopover = sentencePopover();
     if (currentPopover && isSameMatchKey(currentPopover, key)) {
       lastOutsideDismiss = null;
-      closeSentencePopover();
+      closeSentencePopover("toggle");
       return;
     }
 
@@ -1647,6 +1685,7 @@ export function QuickTranslatePopup(props: QuickTranslatePopupProps) {
       document: entry.document,
       segments: entry.segments,
       activeSegmentId: () => {
+        popoverTrace.record("target-highlight");
         const current = effectiveHighlightMatch();
         if (
           !current ||
@@ -1724,7 +1763,7 @@ export function QuickTranslatePopup(props: QuickTranslatePopupProps) {
           currentPopover.resultId === resultId &&
           currentPopover.renderMode === mode
         ) {
-          closeSentencePopover();
+          closeSentencePopover("preview-blur");
         }
         const current = activeMatch();
         if (
@@ -2437,7 +2476,7 @@ export function QuickTranslatePopup(props: QuickTranslatePopupProps) {
                       onSelectionChange={(selection) => {
                         if (selection && !selection.empty) {
                           if (activeMatch() !== null) clearActiveMatch();
-                          closeSentencePopover();
+                          closeSentencePopover("source-selection");
                         }
                       }}
                       ref={(node) => {
@@ -2648,9 +2687,9 @@ export function QuickTranslatePopup(props: QuickTranslatePopupProps) {
         </View>
       </If>
       <AnchoredPopover
-        open={sentencePopover() !== null}
-        anchor={sentencePopover()?.anchor ?? null}
-        maxWidth={sentencePopover()?.maxWidth}
+        open={readPopoverForOverlay() !== null}
+        anchor={readPopoverForOverlay()?.anchor ?? null}
+        maxWidth={readPopoverForOverlay()?.maxWidth}
         placement="bottom"
         align="start"
         offset={6}
@@ -2658,7 +2697,7 @@ export function QuickTranslatePopup(props: QuickTranslatePopupProps) {
         testID="quick-translate-sentence-popover"
         accessibilityLabel={t("quickTranslate.sentenceSourcePopoverLabel")}
         onPressOutside={(event) => handlePopoverPressOutside(event.pagePosition)}
-        onCancel={() => closeSentencePopover()}
+        onCancel={() => closeSentencePopover("cancel")}
       >
         <Scroll class="max-h-44">
           <View selectable>
@@ -2666,7 +2705,7 @@ export function QuickTranslatePopup(props: QuickTranslatePopupProps) {
               testID="quick-translate-sentence-popover-text"
               class="text-sm leading-relaxed text-popover-foreground"
             >
-              {sentencePopover()?.sourceText ?? ""}
+              {readPopoverForOverlay()?.sourceText ?? ""}
             </Text>
           </View>
         </Scroll>
