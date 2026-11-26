@@ -2126,13 +2126,22 @@ test("quick popup: separates header detection status from OCR status priority in
   expect(app.shows("id:quick-translate-source-toolbar >> id:quick-translate-ocr-busy")).toBe(false);
   expect(app.shows("id:quick-translate-source-detection")).toBe(false);
 
-  // 1. Empty input with OCR error shows the alert in the bottom-left toolbar.
+  // 1. Empty input during OCR recognizing shows the skeleton placeholder and busy status while keeping the source disabled.
+  await app.press("id:harness-ocr-recognizing");
+  await app.waitFor("id:quick-translate-source-toolbar >> id:quick-translate-ocr-busy");
+  expect(app.shows("id:quick-translate-ocr-placeholder")).toBe(true);
+  expect(app.enabled("id:quick-translate-source")).toBe(false);
+  expect(app.texts()).toContain(t("quickTranslate.ocrRecognizing"));
+
+  // 2. Empty input with OCR error hides the placeholder, shows the alert in the bottom-left toolbar, and re-enables input.
   await app.press("id:harness-ocr-error");
   await app.waitFor("id:quick-translate-source-toolbar >> id:quick-translate-ocr-status");
+  expect(app.shows("id:quick-translate-ocr-placeholder")).toBe(false);
+  expect(app.enabled("id:quick-translate-source")).toBe(true);
   expect(app.texts()).toContain(t("ocr.failure.malformedAnswer"));
   expect(app.shows("id:quick-translate-source-toolbar >> id:quick-translate-ocr-busy")).toBe(false);
 
-  // 2. Clear OCR status, enter source text, and start language detection in the header capsule.
+  // 3. Clear OCR status, enter source text, and start language detection in the header capsule.
   await app.press("id:harness-ocr-idle");
   expect(app.shows("id:quick-translate-source-toolbar >> id:quick-translate-ocr-status")).toBe(
     false,
@@ -2145,10 +2154,11 @@ test("quick popup: separates header detection status from OCR status priority in
   );
   expect(app.shows("id:quick-translate-source-detection")).toBe(false);
 
-  // 3. Entering OCR recognizing leaves header Detecting intact, shows busy below source, and
-  //    makes the source wait for the answer.
+  // 4. Entering OCR recognizing with existing text leaves header Detecting intact, shows busy below source,
+  //    keeps the draft visible without showing the empty skeleton, and makes the source wait for the answer.
   await app.press("id:harness-ocr-recognizing");
   await app.waitFor("id:quick-translate-source-toolbar >> id:quick-translate-ocr-busy");
+  expect(app.shows("id:quick-translate-ocr-placeholder")).toBe(false);
   expect(app.enabled("id:quick-translate-source")).toBe(false);
   // The field keeps its text but takes no edits until recognition ends.
   await app.type("id:quick-translate-source", "x").catch((error: unknown) => {
@@ -2166,14 +2176,14 @@ test("quick popup: separates header detection status from OCR status priority in
     false,
   );
 
-  // 4. Entering OCR error replaces busy inside the source toolbar and frees the source.
+  // 5. Entering OCR error replaces busy inside the source toolbar and frees the source.
   await app.press("id:harness-ocr-error");
   await app.waitFor("id:quick-translate-source-toolbar >> id:quick-translate-ocr-status");
   expect(app.enabled("id:quick-translate-source")).toBe(true);
   expect(app.texts()).toContain(t("ocr.failure.malformedAnswer"));
   expect(app.shows("id:quick-translate-source-toolbar >> id:quick-translate-ocr-busy")).toBe(false);
 
-  // 5. Collapsing the source input keeps the OCR alert and speech placeholder visible.
+  // 6. Collapsing the source input keeps the OCR alert and speech placeholder visible.
   await app.press("id:quick-translate-collapse-source");
   await app.waitFor("id:quick-translate-source-preview");
   expect(app.shows("id:quick-translate-source-toolbar >> id:quick-translate-ocr-status")).toBe(
@@ -2184,7 +2194,7 @@ test("quick popup: separates header detection status from OCR status priority in
   );
   expect(app.texts()).toContain(t("ocr.failure.malformedAnswer"));
 
-  // 6. Returning OCR to idle clears the alert, and resolution updates only the header capsule.
+  // 7. Returning OCR to idle clears the alert, and resolution updates only the header capsule.
   await app.press("id:harness-ocr-idle");
   expect(app.shows("id:quick-translate-source-toolbar >> id:quick-translate-ocr-status")).toBe(
     false,

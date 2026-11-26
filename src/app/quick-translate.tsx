@@ -191,6 +191,7 @@ function QuickTranslateWindowBody(props: {
   let fitId = 0;
   const markdownActionLabel = () =>
     t(markdownEnabledPreference() ? "quickTranslate.showPlainText" : "quickTranslate.showMarkdown");
+  const ocrRecognizing = () => props.controller.ocrState().phase === "recognizing";
   const ocrAction = signal<ViewRef | null>(null);
   let handledOcrFocusSeq = props.controller.ocrFocusSeq();
   // On Windows the first layout can arrive before the native window state.
@@ -339,15 +340,20 @@ function QuickTranslateWindowBody(props: {
           <If when={canCaptureScreen(platform.os)}>
             <Button
               testID="quick-translate-ocr"
-              variant="ghost"
+              variant="brand-ghost"
               size="icon-sm"
+              selected={ocrRecognizing()}
               tooltip={t("quickTranslate.ocr")}
               accessibilityLabel={t("quickTranslate.ocr")}
               disabled={props.controller.dismissalSuspended()}
               onPress={() => void props.controller.startOcr()}
               ref={(node) => ocrAction.set(node)}
             >
-              <Icon name="mdi:ocr" tone="muted-foreground" class="size-3.5" />
+              <Icon
+                name="mdi:ocr"
+                tone={ocrRecognizing() ? "brand" : "muted-foreground"}
+                class="size-3.5"
+              />
             </Button>
           </If>
           <QuickTranslateHistoryMenu

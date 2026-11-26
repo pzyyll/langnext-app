@@ -27,4 +27,19 @@ export const motion = {
     duration: 200,
     easing: "easeOut",
   } satisfies MotionSpec,
+  skeletonPulse: {
+    duration: 1300,
+    easing: "easeInOut" as const,
+    minOpacity: 0.45,
+    maxOpacity: 1,
+    reducedOpacity: 0.7,
+  },
+  skeletonStaggerMs: 180,
+  statusPulse: {
+    duration: 1300,
+    easing: "easeInOut" as const,
+    minOpacity: 0.45,
+    maxOpacity: 1,
+    reducedOpacity: 1,
+  },
 };

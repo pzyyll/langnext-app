@@ -27,6 +27,7 @@ import { Icon, type IconName } from "../../components/ui/icon";
 import { Kbd } from "../../components/ui/kbd";
 import { Menu, MenuItem } from "../../components/ui/menu";
 import { Select, type SelectItem } from "../../components/ui/select";
+import { Skeleton } from "../../components/ui/skeleton";
 import { Textarea } from "../../components/ui/textarea";
 import { TranslationOutput } from "../../components/ui/translation-output";
 import googleCloudIcon from "../../../assets/icons/google-cloud.svg";
@@ -1907,6 +1908,25 @@ export function QuickTranslatePopup(props: QuickTranslatePopupProps) {
   // One bottom-left status slot serves OCR errors and active recognition by priority.
   const showOcrError = () => ocrMessage() !== null;
   const showOcrBusy = () => !showOcrError() && ocrRecognizing();
+  const showOcrEmptyPlaceholder = () => showOcrBusy() && !hasSourceText() && !isSourceCollapsed();
+  const ocrStatusOpacity = createAnimatedValue(motion.statusPulse.reducedOpacity);
+  effect(() => {
+    if (!showOcrBusy() || reduceMotion()) {
+      ocrStatusOpacity.set(motion.statusPulse.reducedOpacity);
+      return;
+    }
+    void ocrStatusOpacity.keyframes(
+      [motion.statusPulse.minOpacity, motion.statusPulse.maxOpacity, motion.statusPulse.minOpacity],
+      {
+        duration: motion.statusPulse.duration,
+        easing: motion.statusPulse.easing,
+        iterations: "infinite",
+      },
+    );
+    cleanup(() => {
+      void ocrStatusOpacity.stop();
+    });
+  });
   const selectionFeedback = () => (props.selectionFeedback ? props.selectionFeedback() : null);
   const selectionMessage = () => {
     const feedback = selectionFeedback();
@@ -1983,12 +2003,20 @@ export function QuickTranslatePopup(props: QuickTranslatePopupProps) {
           </Text>
         </If>
         <If when={showOcrBusy()}>
-          <Text
+          <View
             testID="quick-translate-ocr-busy"
-            class="min-w-0 flex-1 truncate text-xs text-muted-foreground"
+            accessibilityLiveRegion="polite"
+            accessibilityState={{ busy: true }}
+            class="min-w-0 flex-1 flex-row items-center gap-1.5"
           >
-            {t("quickTranslate.ocrRecognizing")}
-          </Text>
+            {/* Runtime style drives native UI-thread pulse on the recognition mark. */}
+            <View style={{ opacity: ocrStatusOpacity }} class="shrink-0">
+              <Icon name="mdi:text-recognition" tone="brand" class="size-3.5" />
+            </View>
+            <Text class="min-w-0 flex-1 truncate text-xs text-muted-foreground">
+              {t("quickTranslate.ocrRecognizing")}
+            </Text>
+          </View>
         </If>
         <If when={!showOcrError() && !showOcrBusy() && selectionMessage() !== null}>
           <Text
@@ -2069,72 +2097,84 @@ export function QuickTranslatePopup(props: QuickTranslatePopupProps) {
           when={isSourceCollapsed()}
           else={
             <View class="flex-row items-start justify-between gap-2">
-              <If when={editorAlive()} else={<View class="h-10 min-w-0 flex-1" />}>
-                <If
-                  when={platform.os === "windows"}
-                  else={
-                    <Textarea
+              <View class="relative min-w-0 flex-1">
+                <If when={editorAlive()} else={<View class="h-10 w-full" />}>
+                  <If
+                    when={platform.os === "windows"}
+                    else={
+                      <Textarea
+                        testID="quick-translate-source"
+                        variant="frameless"
+                        class="w-full"
+                        autoFocus
+                        disabled={ocrRecognizing()}
+                        submitBehavior="submit"
+                        fontScale="stepped"
+                        initialFontStep={sourceFontStep()}
+                        onFontStep={(step) => {
+                          if (sourceFontStep() !== step) sourceFontStep.set(step);
+                        }}
+                        value={sourceText()}
+                        placeholder={ocrRecognizing() ? "" : t("quickTranslate.sourcePlaceholder")}
+                        accessibilityLabel={t("quickTranslate.sourceLabel")}
+                        inputClass="min-h-10"
+                        onChange={(nextText) => props.session.handleSourceChange(nextText)}
+                        onSubmit={() => {
+                          if (isComposing()) return;
+                          props.session.handleSourceSubmit();
+                        }}
+                        onCompositionChange={({ composing }) => isComposing.set(composing)}
+                        ref={(node) => {
+                          sourceInputRef.set(node);
+                          props.onAttachSourceInput?.(node);
+                        }}
+                      />
+                    }
+                  >
+                    <QuickTranslateSourceEditor
                       testID="quick-translate-source"
-                      variant="frameless"
-                      class="min-w-0 flex-1"
+                      frameless
+                      class="w-full"
+                      inputClass="min-h-10"
                       autoFocus
-                      disabled={ocrRecognizing()}
-                      submitBehavior="submit"
-                      fontScale="stepped"
+                      editable={!ocrRecognizing()}
                       initialFontStep={sourceFontStep()}
-                      onFontStep={(step) => {
+                      onFontStepChange={(step) => {
                         if (sourceFontStep() !== step) sourceFontStep.set(step);
                       }}
                       value={sourceText()}
-                      placeholder={t("quickTranslate.sourcePlaceholder")}
+                      highlightRange={activeSourceHighlight()}
+                      placeholder={ocrRecognizing() ? "" : t("quickTranslate.sourcePlaceholder")}
                       accessibilityLabel={t("quickTranslate.sourceLabel")}
-                      inputClass="min-h-10"
-                      onChange={(nextText) => props.session.handleSourceChange(nextText)}
-                      onSubmit={() => {
+                      onChangeText={(nextText) => props.session.handleSourceChange(nextText)}
+                      onSubmitEditing={() => {
                         if (isComposing()) return;
                         props.session.handleSourceSubmit();
                       }}
-                      onCompositionChange={({ composing }) => isComposing.set(composing)}
+                      onCompositionChange={(composing) => isComposing.set(composing)}
+                      onSelectionChange={(selection) => {
+                        if (selection && !selection.empty && activeMatch() !== null) {
+                          clearActiveMatch();
+                        }
+                      }}
                       ref={(node) => {
                         sourceInputRef.set(node);
                         props.onAttachSourceInput?.(node);
                       }}
                     />
-                  }
-                >
-                  <QuickTranslateSourceEditor
-                    testID="quick-translate-source"
-                    frameless
-                    class="min-w-0 flex-1"
-                    inputClass="min-h-10"
-                    autoFocus
-                    editable={!ocrRecognizing()}
-                    initialFontStep={sourceFontStep()}
-                    onFontStepChange={(step) => {
-                      if (sourceFontStep() !== step) sourceFontStep.set(step);
-                    }}
-                    value={sourceText()}
-                    highlightRange={activeSourceHighlight()}
-                    placeholder={t("quickTranslate.sourcePlaceholder")}
-                    accessibilityLabel={t("quickTranslate.sourceLabel")}
-                    onChangeText={(nextText) => props.session.handleSourceChange(nextText)}
-                    onSubmitEditing={() => {
-                      if (isComposing()) return;
-                      props.session.handleSourceSubmit();
-                    }}
-                    onCompositionChange={(composing) => isComposing.set(composing)}
-                    onSelectionChange={(selection) => {
-                      if (selection && !selection.empty && activeMatch() !== null) {
-                        clearActiveMatch();
-                      }
-                    }}
-                    ref={(node) => {
-                      sourceInputRef.set(node);
-                      props.onAttachSourceInput?.(node);
-                    }}
-                  />
+                  </If>
                 </If>
-              </If>
+                <If when={showOcrEmptyPlaceholder()}>
+                  <View
+                    testID="quick-translate-ocr-placeholder"
+                    accessibilityElementsHidden={true}
+                    class="pointer-events-none absolute inset-0 justify-center gap-2.5 bg-background"
+                  >
+                    <Skeleton class="h-3.5 w-5/6" />
+                    <Skeleton class="h-3.5 w-3/5" delay={motion.skeletonStaggerMs} />
+                  </View>
+                </If>
+              </View>
               {renderSourceActions("pt-0.5")}
             </View>
           }

@@ -109,3 +109,16 @@ The Sentence alignment switch is in Settings → Application → Quick Translate
 | Model transfer status          | Progress percentage, **Turns on after download** hint, download/load/save alerts      | `Progress` indicator follows actual transfer percentage; hints and alerts replace in place with no pulse or travel      | Same                         |
 | Download confirmation dialog   | Open, button hover/press, **Cancel**, **Download and enable**, Escape, backdrop press | Shared `dialogAnimation` (`fade`), `pressScale` on buttons, focus moves inside dialog and returns on dismiss            | Instant open/close, no scale |
 | Quick Translate result         | Turn alignment on or off                                                              | Preview appears or clears immediately without replaying translation                                                     | Same                         |
+
+## Quick Translate OCR Recognition
+
+While OCR recognizes a captured region, an empty source field displays two staggered skeleton lines over the disabled editor so the input area never reads as a blank void, paired with a pulsing recognition mark in the bottom-left source status row and an active brand state on the header OCR button. When an existing draft is already present, the dimmed draft stays visible without skeleton bars.
+
+### Motion Inventory
+
+| Surface               | Change                                               | Motion                                                                                        | Reduced Motion               |
+| --------------------- | ---------------------------------------------------- | --------------------------------------------------------------------------------------------- | ---------------------------- |
+| Empty source skeleton | Appears while recognizing with an empty source field | Two staggered `Skeleton` bars pulse opacity (`0.45` ↔ `1`, `1300ms` `easeInOut`, `180ms` lag) | Static bars at `0.7` opacity |
+| Source OCR status row | Recognition mark (`mdi:text-recognition`) active     | Opacity pulses (`0.45` ↔ `1`, `1300ms` `easeInOut`); text stays steady                        | Static mark at `1` opacity   |
+| Header OCR button     | Enters and leaves `"recognizing"` phase              | Shared `brand-ghost` selected fill and brand icon tone swap                                   | Immediate color swap         |
+| Recognition completes | Text arrives, errors, or returns to idle             | Skeleton and status row unmount immediately in place; recognized text replaces cleanly        | Same                         |
