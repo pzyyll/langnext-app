@@ -1,4 +1,5 @@
 import type { HistoryResult, HistorySnapshot } from "langnext-native";
+import { effect, signal } from "nsh";
 import type { WindowRef, WindowState } from "nsh/desktop";
 import { t } from "nsh/i18n";
 import { expect, open, test, type StubRequest, type StubResponse } from "nsh/test";
@@ -1651,6 +1652,26 @@ test("quick height fit: caps retries and clears pending fit on close", () => {
   currentState = makeState(988.67, 748, 420, 346);
   controller.handleBoundsChange(currentState.bounds);
   expect(setBoundsCalls).toHaveLength(4);
+});
+
+test("quick overlays: reporting a popover change does not subscribe to the overlay registry", () => {
+  const controller = createQuickTranslateController();
+  const popoverOpen = signal(false);
+  const reports: boolean[] = [];
+  effect(() => {
+    const open = popoverOpen();
+    reports.push(open);
+    controller.setMenuOpen("sentence-popover", open);
+  });
+
+  popoverOpen.set(true);
+  expect(controller.hasOpenOverlay()).toBe(true);
+  controller.setMenuOpen("history", true);
+  popoverOpen.set(false);
+  expect(controller.hasOpenOverlay()).toBe(true);
+  controller.setMenuOpen("history", false);
+  expect(controller.hasOpenOverlay()).toBe(false);
+  expect(reports).toEqual([false, true, false]);
 });
 
 test("quick press: an outside pointer press closes the unpinned popup, while inside presses, other displays and pinned popups keep it", async () => {
@@ -4569,10 +4590,10 @@ test("capability desktop: Quick TTS holds the request until the window closes fr
   expect(app.requests()).toHaveLength(1);
 }, 90_000);
 
-test("alignment window: collapsed double-copy delivery aligns sentences and Escape closes popover before window", async () => {
+test("alignment window: collapsed Markdown preview opens a sentence popover that handles Escape before the window", async () => {
   if (!(await headlessHasAlignmentModel())) return;
   const source = "She opened the door. He stepped inside.";
-  const target = "她打开了门。他走了进去。";
+  const target = "她打开了门。**他走了进去。**";
   const app = await open(HARNESS_ENTRY, {
     ...viewport,
     storage: {
@@ -4585,6 +4606,7 @@ test("alignment window: collapsed double-copy delivery aligns sentences and Esca
       "settings.language": "en",
       [QUICK_TRANSLATE_PREFERENCES_KEY]: popupPreferences({
         doubleCopyEnabled: true,
+        markdownEnabled: true,
         cards: [{ id: "card-1", presetId: quickPreset.id }],
       }),
       [SENTENCE_ALIGNMENT_STORAGE_KEY]: "true",
@@ -4613,12 +4635,10 @@ test("alignment window: collapsed double-copy delivery aligns sentences and Esca
   await app.waitFor("id:quick-translate-card-card-1 >> id:quick-translate-result-preview");
   expect(app.shows("id:quick-translate-source")).toBe(false);
 
-  const seg1 =
-    "id:quick-translate-card-card-1 >> id:quick-translate-result-text >> text:他走了进去。";
-  const span1 = "id:quick-translate-card-card-1 >> id:result-seg-1";
+  const seg1 = "id:quick-translate-card-card-1 >> id:result-seg-1";
   const popover = "id:quick-translate-sentence-popover";
   await app.hover(seg1);
-  expect(app.spanStyle(span1).backgroundColor).toBeTruthy();
+  expect(app.viewStyle(seg1)?.backgroundColor).toBeTruthy();
 
   await app.press(seg1);
   await app.waitFor(popover);

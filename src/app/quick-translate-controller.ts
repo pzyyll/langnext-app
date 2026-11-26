@@ -908,7 +908,8 @@ export function createQuickTranslateController(
       sourceInputRef?.setSelection(end, end);
     },
     setMenuOpen: (menuId: string, openMenu: boolean) => {
-      const current = openMenusSignal();
+      // A caller reporting its overlay state must not subscribe to the registry.
+      const current = untracked(openMenusSignal);
       if (openMenu) {
         if (current[menuId]) return;
         openMenusSignal.set({ ...current, [menuId]: true });
