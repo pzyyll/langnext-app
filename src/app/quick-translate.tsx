@@ -188,6 +188,7 @@ function QuickTranslateWindowBody(props: {
   const contentHeight = signal(0);
   const footerHeight = signal(0);
   const scrollRevision = signal(0);
+  let lastScrollOffset = { x: 0, y: 0 };
   let fitId = 0;
   const markdownActionLabel = () =>
     t(markdownEnabledPreference() ? "quickTranslate.showPlainText" : "quickTranslate.showMarkdown");
@@ -399,7 +400,11 @@ function QuickTranslateWindowBody(props: {
       </View>
       <Scroll
         class="min-h-0 flex-1"
-        onScroll={() => scrollRevision.update((revision) => revision + 1)}
+        onScroll={({ offset }) => {
+          if (offset.x === lastScrollOffset.x && offset.y === lastScrollOffset.y) return;
+          lastScrollOffset = offset;
+          scrollRevision.update((revision) => revision + 1);
+        }}
       >
         {/* Measure the natural content height, not the scroll viewport. */}
         <View

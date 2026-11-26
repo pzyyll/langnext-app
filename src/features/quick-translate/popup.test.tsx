@@ -4586,10 +4586,13 @@ test("sentence highlight live: plain text highlights matched source sentence on 
 
   await app.press("id:quick-translate-collapse-source");
   await app.waitUntil(() => !app.shows("id:quick-translate-source"));
-  await app.hover("id:quick-translate-card-card-1 >> id:quick-translate-result-text");
+  await app.hover("id:quick-translate-source-preview");
+  await app.hover(
+    "id:quick-translate-card-card-1 >> id:quick-translate-result-text >> text:第二句草稿有效。",
+  );
   expect(
-    app.spanStyle("id:quick-translate-card-card-1 >> text:第二句草稿有效。").backgroundColor,
-  ).toBeUndefined();
+    app.spanStyle("id:quick-translate-card-card-1 >> id:result-seg-1").backgroundColor,
+  ).toEqual(resultBg);
 
   await app.press("id:quick-translate-source-preview");
   await app.waitFor("id:quick-translate-source");
@@ -4600,6 +4603,7 @@ test("sentence highlight live: plain text highlights matched source sentence on 
     app.spanStyle("id:quick-translate-source >> text:Second draft works.").backgroundColor,
   ).toBeUndefined();
 
+  await app.hover("id:quick-translate-source");
   await app.hover(
     "id:quick-translate-card-card-1 >> id:quick-translate-result-text >> text:第二句草稿有效。",
   );
@@ -5156,4 +5160,217 @@ test("sentence highlight keyboard: localizes zh-CN preview label and live senten
   }
   expect(zhApp.accessibility(preview)?.value).toBe("第 1 / 2 句：First NSH sentence.");
   expect(zhApp.accessibility(announcement)?.label).toBe("第 1 / 2 句：First NSH sentence.");
+});
+
+test("sentence source popover: shows aligned source on click while collapsed or expanded, toggles, switches, and dismisses cleanly", async () => {
+  const presets = [
+    makePreset({ id: "preset-1", name: "Preset One" }),
+    makePreset({ id: "preset-2", name: "Preset Two" }),
+    makePreset({ id: "preset-3", name: "Preset Three" }),
+    makePreset({ id: "preset-4", name: "Preset Four" }),
+  ];
+  const app = await open(POPUP_HARNESS, {
+    width: 520,
+    height: 420,
+    platform: "windows",
+    storage: seedWithPresets(presets, {
+      [QUICK_TRANSLATE_PREFERENCES_KEY]: JSON.stringify({
+        version: 1,
+        doubleCopyEnabled: false,
+        autoTranslate: false,
+        ...DEFAULT_POPUP_LANGUAGES,
+        cards: presets.map((preset, index) => ({
+          id: `card-${index + 1}`,
+          presetId: preset.id,
+          templateId: null,
+          collapsed: false,
+        })),
+      }),
+    }),
+    network: {
+      "POST https://api.openai.com/v1/chat/completions": {
+        status: 200,
+        body: { choices: [{ message: { content: "今天用 NSH。第二句草稿有效。" } }] },
+      },
+    },
+  });
+
+  await app.waitFor("id:quick-translate-source");
+  await app.type("id:quick-translate-source", "Use NSH today. Second draft works.");
+  await app.keyboard.press("enter");
+  await app.waitFor("id:quick-translate-card-card-1 >> id:quick-translate-result-preview");
+  await app.waitFor("id:quick-translate-card-card-4 >> id:quick-translate-copy");
+
+  const seg0 =
+    "id:quick-translate-card-card-1 >> id:quick-translate-result-text >> text:今天用 NSH。";
+  const seg1 =
+    "id:quick-translate-card-card-1 >> id:quick-translate-result-text >> text:第二句草稿有效。";
+  const span0 = "id:quick-translate-card-card-1 >> id:result-seg-0";
+  const span1 = "id:quick-translate-card-card-1 >> id:result-seg-1";
+  const popover = "id:quick-translate-sentence-popover";
+  const popoverShowsText = (expected: string) => app.shows(`${popover} >> text:${expected}`);
+
+  // Collapse source: alignment and click popover both work while collapsed.
+  await app.press("id:quick-translate-collapse-source");
+  await app.waitUntil(() => !app.shows("id:quick-translate-source"));
+
+  await app.hover(seg1);
+  const seg1Bg = app.spanStyle(span1).backgroundColor;
+  expect(seg1Bg).toBeTruthy();
+
+  await app.press(seg1);
+  expect(app.shows(popover)).toBe(true);
+  expect(app.accessibility(popover)?.label).toBe(t("quickTranslate.sentenceSourcePopoverLabel"));
+  expect(popoverShowsText("Second draft works.")).toBe(true);
+  const popoverBounds = app.layout(popover);
+  expect(popoverBounds).not.toBeNull();
+  expect(popoverBounds!.y).toBeGreaterThan(0);
+  expect(popoverBounds!.height).toBeGreaterThan(0);
+  expect(popoverBounds!.height).toBeLessThan(80);
+
+  // Moving pointer away keeps the clicked sentence highlighted while the popover is open.
+  await app.hover("id:quick-translate-source-preview");
+  expect(app.spanStyle(span1).backgroundColor).toEqual(seg1Bg);
+  expect(app.shows(popover)).toBe(true);
+
+  // Clicking another sentence switches both highlight and popover content in place.
+  await app.press(seg0);
+  await app.waitUntil(() => popoverShowsText("Use NSH today."));
+  expect(app.spanStyle(span0).backgroundColor).toEqual(seg1Bg);
+  expect(app.spanStyle(span1).backgroundColor).toBeUndefined();
+
+  // Clicking the active sentence again toggles the popover closed.
+  await app.press(seg0);
+  expect(app.shows(popover)).toBe(false);
+
+  // Expanding source: clicking opens popover and keeps aligned source range highlighted.
+  await app.press("id:quick-translate-source-preview");
+  await app.waitFor("id:quick-translate-source");
+  await app.press(seg1);
+  expect(app.shows(popover)).toBe(true);
+  expect(popoverShowsText("Second draft works.")).toBe(true);
+  expect(
+    app.spanStyle("id:quick-translate-source >> text:Second draft works.").backgroundColor,
+  ).toEqual(seg1Bg);
+
+  // Escape dismisses the popover.
+  await app.keyboard.press("escape");
+  expect(app.shows(popover)).toBe(false);
+
+  // Pressing outside dismisses the popover.
+  await app.press(seg0);
+  expect(app.shows(popover)).toBe(true);
+  await app.press("id:harness-toggle-auto");
+  expect(app.shows(popover)).toBe(false);
+  await app.press("id:harness-toggle-auto");
+
+  // Toggling source collapse/expand while open dismisses the popover.
+  await app.press(seg1);
+  expect(app.shows(popover)).toBe(true);
+  await app.press("id:quick-translate-collapse-source");
+  expect(app.shows(popover)).toBe(false);
+  await app.press("id:quick-translate-source-preview");
+  await app.waitFor("id:quick-translate-source");
+
+  // Scroll, hide window, markdown toggle, retry, and source edit each dismiss the popover.
+  await app.press(seg1);
+  expect(app.shows(popover)).toBe(true);
+  await app.scroll("id:harness-popup-scroll", 20);
+  expect(app.shows(popover)).toBe(false);
+
+  await app.press(seg0);
+  expect(app.shows(popover)).toBe(true);
+  await app.press("id:harness-toggle-window-visible");
+  expect(app.shows(popover)).toBe(false);
+  await app.press("id:harness-toggle-window-visible");
+
+  await app.press(seg1);
+  expect(app.shows(popover)).toBe(true);
+  await app.press("id:harness-toggle-markdown");
+  expect(app.shows(popover)).toBe(false);
+  await app.press("id:harness-toggle-markdown");
+
+  await app.press(seg1);
+  expect(app.shows(popover)).toBe(true);
+  await app.press("id:quick-translate-card-card-1 >> id:quick-translate-retry");
+  expect(app.shows(popover)).toBe(false);
+  await app.waitFor("id:quick-translate-card-card-1 >> id:quick-translate-result-preview");
+
+  await app.press(seg1);
+  expect(app.shows(popover)).toBe(true);
+  await app.type("id:quick-translate-source", "!");
+  expect(app.shows(popover)).toBe(false);
+});
+
+test("sentence source popover: opens on non-link Markdown fragments, preserves links, and supports keyboard Enter/Arrows/Escape", async () => {
+  const markdownReply =
+    "First **bold** [link 42](https://example.com) sentence. Second sentence follows.";
+  const app = await open(POPUP_HARNESS, {
+    ...viewport,
+    storage: seedWithPresets([makePreset()], {
+      [QUICK_TRANSLATE_PREFERENCES_KEY]: JSON.stringify({
+        version: 1,
+        doubleCopyEnabled: false,
+        autoTranslate: false,
+        markdownEnabled: true,
+        sourceLanguage: "en",
+        targetLanguage: "zh",
+        cards: [{ id: "card-1", presetId: "preset-1", templateId: null, collapsed: false }],
+      }),
+    }),
+    network: {
+      "POST https://api.openai.com/v1/chat/completions": {
+        status: 200,
+        body: { choices: [{ message: { content: markdownReply } }] },
+      },
+    },
+  });
+
+  await app.waitFor("id:quick-translate-source");
+  await app.type(
+    "id:quick-translate-source",
+    "First sentence has bold link 42. Second sentence follows.",
+  );
+  await app.keyboard.press("enter");
+  await app.waitFor("id:quick-translate-card-card-1 >> id:result-seg-1");
+
+  const popover = "id:quick-translate-sentence-popover";
+  const popoverShowsText = (expected: string) => app.shows(`${popover} >> text:${expected}`);
+
+  // Clicking a non-link formatted fragment opens the popover with the aligned source sentence.
+  await app.press("id:quick-translate-card-card-1 >> id:result-seg-0-frag-1");
+  await app.waitFor(popover);
+  expect(popoverShowsText("First sentence has bold link 42.")).toBe(true);
+
+  // Close popover, then verify clicking a link fragment does not open the popover.
+  await app.keyboard.press("escape");
+  await app.waitUntil(() => !app.shows(popover));
+  await app.press("id:quick-translate-card-card-1 >> id:result-seg-0-frag-3");
+  expect(app.shows(popover)).toBe(false);
+
+  // Keyboard flow: Tab to preview, ArrowRight + Enter opens popover, ArrowRight updates in place, Escape closes.
+  const preview = "id:quick-translate-card-card-1 >> id:quick-translate-result-preview";
+  await app.type("id:quick-translate-source", "");
+  let reachedPreview = false;
+  for (let i = 0; i < 16; i += 1) {
+    await app.keyboard.press("tab");
+    await app.keyboard.press("arrowright");
+    if (app.accessibility(preview)?.value) {
+      reachedPreview = true;
+      break;
+    }
+  }
+  expect(reachedPreview).toBe(true);
+
+  await app.keyboard.press("enter");
+  await app.waitFor(popover);
+  expect(popoverShowsText("First sentence has bold link 42.")).toBe(true);
+
+  await app.keyboard.press("arrowright");
+  await app.waitUntil(() => popoverShowsText("Second sentence follows."));
+  expect(app.accessibility(preview)?.value).toBe("Sentence 2 of 2: Second sentence follows.");
+
+  await app.keyboard.press("escape");
+  await app.waitUntil(() => !app.shows(popover));
+  expect(app.accessibility(preview)?.value).toBe("Sentence 2 of 2: Second sentence follows.");
 });

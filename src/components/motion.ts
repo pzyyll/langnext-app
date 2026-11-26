@@ -12,6 +12,11 @@ export const motion = {
   avatarImage: "transition-opacity duration-150 ease-out motion-reduce:duration-0",
   popup: "transition duration-150 ease-out motion-reduce:duration-0",
   popupHidden: "opacity-0 -translate-y-1 motion-reduce:translate-y-0",
+  popupEnter: {
+    keyframes: { opacity: [0, 1], translateY: [-4, 0] },
+    duration: 150,
+    easing: "easeOut",
+  } satisfies MotionSpec,
   aboutDialog: "fade" as const,
   dialogAnimation: "fade" as const,
   toastTransition: "transition duration-200 ease-out motion-reduce:duration-0",

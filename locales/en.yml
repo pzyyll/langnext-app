@@ -934,10 +934,12 @@ quickTranslate:
   collapseSource: Collapse input
   editSource: Edit input
   resultPreviewLabel: Translated result
-  resultPreviewHint: Press the left and right arrow keys to highlight matching source sentences.
+  resultPreviewHint: Press the left and right arrow keys to highlight matching source sentences, or press Enter to view the original sentence.
   previousSentence: Previous aligned sentence
   nextSentence: Next aligned sentence
   sentencePreviewValue: "Sentence %{current} of %{total}: %{text}"
+  sentenceSourcePopoverLabel: Original text
+  showSourceSentence: Show original sentence
   error:
     blankInput: Enter text to translate.
     presetDisabled: Selected preset is disabled. Enable it in Presets or choose another preset.

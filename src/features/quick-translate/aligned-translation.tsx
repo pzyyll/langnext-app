@@ -1,4 +1,4 @@
-import { Text, View } from "nsh";
+import { Text, View, type PressEvent } from "nsh";
 import {
   TextView,
   type TextViewCustomNode,
@@ -27,6 +27,7 @@ export interface AlignedTranslationProps {
   activeSegmentId?: string | null;
   onHoverEnterSegment?: (segmentId: string) => void;
   onHoverLeaveSegment?: (segmentId: string) => void;
+  onPressSegment?: (segmentId: string, event: PressEvent) => void;
   onLinkPress?: (event: TextViewLinkPressEvent) => void;
 }
 
@@ -146,6 +147,7 @@ export function AlignedTranslation(props: AlignedTranslationProps) {
         testID={data?.testID}
         copyText={text}
         role={linkUrl ? "link" : undefined}
+        focusable={linkUrl ? undefined : false}
         accessibilityHint={linkUrl ? (linkTitle ?? linkUrl) : undefined}
         class={buildSegmentFragmentClass(data?.marks, isCode, isActive())}
         onPress={
@@ -153,7 +155,11 @@ export function AlignedTranslation(props: AlignedTranslationProps) {
             ? (event) => {
                 props.onLinkPress?.({ url: linkUrl, modifiers: event.modifiers });
               }
-            : undefined
+            : segmentId
+              ? (event) => {
+                  props.onPressSegment?.(segmentId, event);
+                }
+              : undefined
         }
         onMouseEnter={() => {
           if (segmentId) props.onHoverEnterSegment?.(segmentId);
@@ -180,7 +186,9 @@ export function AlignedTranslation(props: AlignedTranslationProps) {
               return (
                 <Text
                   testID={seg.testID}
+                  focusable={false}
                   class={isActive() ? "bg-brand-soft hover:opacity-100" : "hover:opacity-100"}
+                  onPress={(event) => props.onPressSegment?.(seg.id, event)}
                   onMouseEnter={() => props.onHoverEnterSegment?.(seg.id)}
                   onMouseLeave={() => props.onHoverLeaveSegment?.(seg.id)}
                 >

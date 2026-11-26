@@ -6,14 +6,18 @@ import {
   keymap as appKeymap,
   platform,
   reduceMotion,
+  Scroll,
   signal,
   Text,
   View,
   type Accessor,
   type Align,
   type AnimatedValue,
+  type Bounds,
   type PanEvent,
   type Placement,
+  type Point,
+  type PressEvent,
   type Signal,
   type ViewRef,
 } from "nsh";
@@ -26,6 +30,7 @@ import { LARGEST_FONT_STEP } from "../../components/ui/font-step";
 import { Icon, type IconName } from "../../components/ui/icon";
 import { Kbd } from "../../components/ui/kbd";
 import { Menu, MenuItem } from "../../components/ui/menu";
+import { AnchoredPopover } from "../../components/ui/popover";
 import { Select, type SelectItem } from "../../components/ui/select";
 import { Skeleton } from "../../components/ui/skeleton";
 import { Textarea } from "../../components/ui/textarea";
@@ -324,6 +329,9 @@ interface CardSentenceAlignment {
   keyboardValue: Accessor<string | undefined>;
   onHoverEnterSegment: (segmentId: string) => void;
   onHoverLeaveSegment: (segmentId: string) => void;
+  onPressSegment: (segmentId: string, event: PressEvent) => void;
+  onShowSourcePopover: (origin?: "keyboard" | "accessibility") => void;
+  onPreviewRef: (node: ViewRef) => void;
   onKeyboardStep: (delta: -1 | 1, origin?: "keyboard" | "accessibility") => void;
   onKeyboardFocus: () => void;
   onKeyboardBlur: () => void;
@@ -331,6 +339,11 @@ interface CardSentenceAlignment {
 
 const MAX_ALIGNMENT_CACHE_ENTRIES = 64;
 const MAX_SEMANTIC_PAIR_ENTRIES = 64;
+/** Half of the 20pt line anchor band centered on click y so the popover clears the clicked line. */
+const LINE_ANCHOR_HALF_HEIGHT = 10;
+/** Radius and window to treat press-down outside dismiss + press-up on the same sentence as a toggle-close. */
+const OUTSIDE_DISMISS_TOGGLE_RADIUS = 12;
+const OUTSIDE_DISMISS_TOGGLE_MS = 500;
 
 function trimCache<T>(cache: Map<string, T>, limit: number): void {
   while (cache.size > limit) {
@@ -581,6 +594,7 @@ function PresetCardRow(props: PresetCardRowProps) {
               >
                 <View
                   testID="quick-translate-result-preview"
+                  ref={(node) => props.sentenceAlignment()?.onPreviewRef(node)}
                   role="region"
                   focusable={true}
                   accessibilityLabel={t("quickTranslate.resultPreviewLabel")}
@@ -593,12 +607,15 @@ function PresetCardRow(props: PresetCardRowProps) {
                   accessibilityActions={[
                     { name: "previous", label: t("quickTranslate.previousSentence") },
                     { name: "next", label: t("quickTranslate.nextSentence") },
+                    { name: "showSource", label: t("quickTranslate.showSourceSentence") },
                   ]}
                   onAccessibilityAction={(event) => {
                     if (event.actionName === "previous") {
                       props.sentenceAlignment()?.onKeyboardStep(-1, "accessibility");
                     } else if (event.actionName === "next") {
                       props.sentenceAlignment()?.onKeyboardStep(1, "accessibility");
+                    } else if (event.actionName === "showSource") {
+                      props.sentenceAlignment()?.onShowSourcePopover("accessibility");
                     }
                   }}
                   onFocus={() => props.sentenceAlignment()?.onKeyboardFocus()}
@@ -616,6 +633,9 @@ function PresetCardRow(props: PresetCardRowProps) {
                     }
                     onHoverLeaveSegment={(segmentId) =>
                       props.sentenceAlignment()?.onHoverLeaveSegment(segmentId)
+                    }
+                    onPressSegment={(segmentId, event) =>
+                      props.sentenceAlignment()?.onPressSegment(segmentId, event)
                     }
                   />
                 </View>
@@ -979,17 +999,29 @@ export function QuickTranslatePopup(props: QuickTranslatePopupProps) {
     origin: AlignmentPreviewOrigin;
     sourceRange: SourceHighlightRange;
   }
+  interface ActiveSentencePopover extends ActiveMatchKey {
+    origin: AlignmentPreviewOrigin;
+    sourceRange: SourceHighlightRange;
+    sourceText: string;
+    anchor: Bounds | ViewRef;
+    maxWidth?: number;
+  }
 
   const activeMatch = signal<ActiveSentenceMatch | null>(null);
+  const sentencePopover = signal<ActiveSentencePopover | null>(null);
   const keyboardAnnouncement = signal("");
   const focusedPreview = signal<{ cardId: string; resultId: number } | null>(null);
   const alignmentCache = new Map<string, CardAlignmentEntry>();
   const semanticPairs = new Map<string, SemanticPairEntry>();
+  const previewNodes = new Map<string, ViewRef>();
   const semanticRevision = signal(0);
   let semanticWork = Promise.resolve();
   let pendingClearToken = 0;
   let pendingClearMatch: ActiveMatchKey | null = null;
   let pendingClearRaf: number | null = null;
+  let popoverMeasureToken = 0;
+  let lastOutsideDismiss: { key: ActiveMatchKey; pagePosition: Point; timestamp: number } | null =
+    null;
 
   const isSameMatchKey = (left: ActiveMatchKey, right: ActiveMatchKey) =>
     left.cardId === right.cardId &&
@@ -1006,6 +1038,29 @@ export function QuickTranslatePopup(props: QuickTranslatePopupProps) {
     }
   };
 
+  const closeSentencePopover = () => {
+    popoverMeasureToken += 1;
+    if (sentencePopover() !== null) {
+      sentencePopover.set(null);
+    }
+  };
+
+  const handlePopoverPressOutside = (pagePosition: Point) => {
+    const current = sentencePopover();
+    if (!current) return;
+    lastOutsideDismiss = {
+      key: {
+        cardId: current.cardId,
+        resultId: current.resultId,
+        renderMode: current.renderMode,
+        segmentId: current.segmentId,
+      },
+      pagePosition,
+      timestamp: Date.now(),
+    };
+    closeSentencePopover();
+  };
+
   const clearActiveMatch = () => {
     cancelPendingClear();
     if (activeMatch() !== null) {
@@ -1019,7 +1074,15 @@ export function QuickTranslatePopup(props: QuickTranslatePopupProps) {
   cleanup(() => {
     popupAlive = false;
     cancelPendingClear();
+    popoverMeasureToken += 1;
+    props.session.notifyOverlayOpenChange("sentence-popover", false);
   });
+
+  effect(() => {
+    props.session.notifyOverlayOpenChange("sentence-popover", sentencePopover() !== null);
+  });
+
+  const effectiveHighlightMatch = () => sentencePopover() ?? activeMatch();
 
   const currentRenderMode = (): AlignmentRenderMode =>
     props.markdownEnabled ? "markdown" : "plain";
@@ -1056,7 +1119,7 @@ export function QuickTranslatePopup(props: QuickTranslatePopupProps) {
     result: Extract<CardResultState, { status: "success" }>;
   } => {
     if (platform.os !== "windows" || !alignmentEnabled()) return false;
-    if (isSourceCollapsed() || showingHistory() || isComposing() || !isPreviewWindowVisible()) {
+    if (showingHistory() || isComposing() || !isPreviewWindowVisible()) {
       return false;
     }
     if (card.collapsed || card.result.status !== "success") return false;
@@ -1224,6 +1287,7 @@ export function QuickTranslatePopup(props: QuickTranslatePopupProps) {
 
   let lastScrollRevision = props.scrollRevision?.() ?? 0;
   let lastSemanticState = semanticEnabled();
+  let lastSourceCollapsed = isSourceCollapsed();
   effect(() => {
     const cards = props.session.cards();
     retainAlignmentEntries(cards);
@@ -1235,6 +1299,8 @@ export function QuickTranslatePopup(props: QuickTranslatePopupProps) {
     const currentMode = currentRenderMode();
     const currentSource = sourceText();
     const collapsed = isSourceCollapsed();
+    const sourceCollapsedChanged = collapsed !== lastSourceCollapsed;
+    lastSourceCollapsed = collapsed;
     const historyOpen = showingHistory();
     const composing = isComposing();
     const visible = isPreviewWindowVisible();
@@ -1244,13 +1310,13 @@ export function QuickTranslatePopup(props: QuickTranslatePopupProps) {
     if (alignmentChanged || !alignmentEnabled()) {
       focusedPreview.set(null);
       clearActiveMatch();
+      closeSentencePopover();
     }
 
     const focused = focusedPreview();
     if (focused) {
       const focusedCard = cards.find((item) => item.id === focused.cardId);
       if (
-        collapsed ||
         historyOpen ||
         composing ||
         !visible ||
@@ -1264,11 +1330,31 @@ export function QuickTranslatePopup(props: QuickTranslatePopupProps) {
       }
     }
 
+    const currentPopover = sentencePopover();
+    if (currentPopover) {
+      const popoverCard = cards.find((item) => item.id === currentPopover.cardId);
+      if (
+        sourceCollapsedChanged ||
+        scrolled ||
+        historyOpen ||
+        composing ||
+        !visible ||
+        currentPopover.renderMode !== currentMode ||
+        !popoverCard ||
+        popoverCard.collapsed ||
+        popoverCard.result.status !== "success" ||
+        popoverCard.result.resultId !== currentPopover.resultId ||
+        popoverCard.result.sourceText !== currentSource
+      ) {
+        closeSentencePopover();
+      }
+    }
+
     const current = activeMatch();
     if (!current) return;
     if (
+      sourceCollapsedChanged ||
       scrolled ||
-      collapsed ||
       historyOpen ||
       composing ||
       !visible ||
@@ -1290,7 +1376,7 @@ export function QuickTranslatePopup(props: QuickTranslatePopupProps) {
   });
 
   const activeSourceHighlight = (): SourceHighlightRange | null => {
-    const current = activeMatch();
+    const current = effectiveHighlightMatch();
     if (!current || !alignmentEnabled()) return null;
     if (isSourceCollapsed() || showingHistory() || isComposing() || !isPreviewWindowVisible()) {
       return null;
@@ -1322,7 +1408,7 @@ export function QuickTranslatePopup(props: QuickTranslatePopupProps) {
     const latestEntry = resolveCardAlignment(latestCard, mode);
     if (!latestEntry || latestEntry.segments.length === 0) return;
 
-    const current = activeMatch();
+    const current = effectiveHighlightMatch();
     const isCurrentCard =
       current !== null &&
       current.cardId === cardId &&
@@ -1360,6 +1446,179 @@ export function QuickTranslatePopup(props: QuickTranslatePopupProps) {
       origin,
       sourceRange,
     });
+    const openPopover = sentencePopover();
+    if (
+      openPopover &&
+      openPopover.cardId === cardId &&
+      openPopover.resultId === expectedResultId &&
+      openPopover.renderMode === mode
+    ) {
+      if (matchedSource.length > 0) {
+        sentencePopover.set({
+          ...openPopover,
+          segmentId: seg.id,
+          sourceRange,
+          sourceText: matchedSource,
+        });
+      } else {
+        closeSentencePopover();
+      }
+    }
+  };
+
+  const handlePressSegment = (
+    cardId: string,
+    expectedResultId: number,
+    mode: AlignmentRenderMode,
+    segmentId: string,
+    event: PressEvent,
+  ) => {
+    if (
+      event.clickCount > 1 ||
+      event.modifiers.shift ||
+      event.modifiers.control ||
+      event.modifiers.alt ||
+      event.modifiers.platform
+    ) {
+      return;
+    }
+    const latestCard = props.session.cards().find((item) => item.id === cardId);
+    if (!latestCard || !isCardEligibleForAlignment(latestCard)) return;
+    if (latestCard.result.resultId !== expectedResultId) return;
+    const latestEntry = resolveCardAlignment(latestCard, mode);
+    const sourceRange = latestEntry?.sourceRanges[segmentId];
+    if (!sourceRange) return;
+    const matchedSource = latestCard.result.sourceText
+      .slice(sourceRange.start, sourceRange.end)
+      .trim();
+    if (!matchedSource) return;
+
+    const key: ActiveMatchKey = {
+      cardId,
+      resultId: expectedResultId,
+      renderMode: mode,
+      segmentId,
+    };
+    const current = sentencePopover();
+    if (current && isSameMatchKey(current, key)) {
+      lastOutsideDismiss = null;
+      closeSentencePopover();
+      return;
+    }
+    if (
+      lastOutsideDismiss &&
+      isSameMatchKey(lastOutsideDismiss.key, key) &&
+      Date.now() - lastOutsideDismiss.timestamp < OUTSIDE_DISMISS_TOGGLE_MS &&
+      Math.hypot(
+        event.pagePosition.x - lastOutsideDismiss.pagePosition.x,
+        event.pagePosition.y - lastOutsideDismiss.pagePosition.y,
+      ) <= OUTSIDE_DISMISS_TOGGLE_RADIUS
+    ) {
+      lastOutsideDismiss = null;
+      return;
+    }
+    lastOutsideDismiss = null;
+    if (keyboardAnnouncement() !== "") {
+      keyboardAnnouncement.set("");
+    }
+    const lineY = event.pagePosition.y - LINE_ANCHOR_HALF_HEIGHT;
+    const initialAnchor: Bounds = {
+      origin: { x: event.pagePosition.x, y: lineY },
+      size: { width: 1, height: LINE_ANCHOR_HALF_HEIGHT * 2 },
+    };
+    const token = ++popoverMeasureToken;
+    sentencePopover.set({
+      ...key,
+      origin: "pointer",
+      sourceRange,
+      sourceText: matchedSource,
+      anchor: initialAnchor,
+    });
+    void previewNodes
+      .get(cardId)
+      ?.measure()
+      .then((measured) => {
+        if (!popupAlive || popoverMeasureToken !== token || !measured) return;
+        const latestPopover = sentencePopover();
+        if (!latestPopover || !isSameMatchKey(latestPopover, key)) return;
+        sentencePopover.set({
+          ...latestPopover,
+          anchor: {
+            origin: { x: measured.pagePosition.x, y: lineY },
+            size: { width: measured.bounds.size.width, height: LINE_ANCHOR_HALF_HEIGHT * 2 },
+          },
+          maxWidth: measured.bounds.size.width,
+        });
+      });
+  };
+
+  const toggleKeyboardPopover = (
+    cardId: string,
+    expectedResultId: number,
+    origin: "keyboard" | "accessibility" = "keyboard",
+  ) => {
+    const mode = currentRenderMode();
+    const latestCard = props.session.cards().find((item) => item.id === cardId);
+    if (!latestCard || !isCardEligibleForAlignment(latestCard)) return;
+    if (latestCard.result.resultId !== expectedResultId) return;
+    const latestEntry = resolveCardAlignment(latestCard, mode);
+    if (!latestEntry || latestEntry.segments.length === 0) return;
+
+    const currentHighlight = effectiveHighlightMatch();
+    const isCurrentCard =
+      currentHighlight !== null &&
+      currentHighlight.cardId === cardId &&
+      currentHighlight.resultId === expectedResultId &&
+      currentHighlight.renderMode === mode;
+
+    let targetSegmentId = isCurrentCard ? currentHighlight.segmentId : undefined;
+    if (!targetSegmentId) {
+      stepCardPreview(cardId, expectedResultId, 1, origin);
+      targetSegmentId = activeMatch()?.segmentId;
+    }
+    if (!targetSegmentId) return;
+
+    const key: ActiveMatchKey = {
+      cardId,
+      resultId: expectedResultId,
+      renderMode: mode,
+      segmentId: targetSegmentId,
+    };
+    const currentPopover = sentencePopover();
+    if (currentPopover && isSameMatchKey(currentPopover, key)) {
+      lastOutsideDismiss = null;
+      closeSentencePopover();
+      return;
+    }
+
+    const sourceRange = latestEntry.sourceRanges[targetSegmentId];
+    if (!sourceRange) return;
+    const matchedSource = latestCard.result.sourceText
+      .slice(sourceRange.start, sourceRange.end)
+      .trim();
+    if (!matchedSource) return;
+
+    const previewNode = previewNodes.get(cardId);
+    if (!previewNode) return;
+
+    lastOutsideDismiss = null;
+    const token = ++popoverMeasureToken;
+    sentencePopover.set({
+      ...key,
+      origin,
+      sourceRange,
+      sourceText: matchedSource,
+      anchor: previewNode,
+    });
+    void previewNode.measure().then((measured) => {
+      if (!popupAlive || popoverMeasureToken !== token || !measured) return;
+      const latestPopover = sentencePopover();
+      if (!latestPopover || !isSameMatchKey(latestPopover, key)) return;
+      sentencePopover.set({
+        ...latestPopover,
+        maxWidth: measured.bounds.size.width,
+      });
+    });
   };
 
   effect(() => {
@@ -1369,8 +1628,10 @@ export function QuickTranslatePopup(props: QuickTranslatePopupProps) {
       {
         left: () => stepCardPreview(focused.cardId, focused.resultId, -1, "keyboard"),
         right: () => stepCardPreview(focused.cardId, focused.resultId, 1, "keyboard"),
+        enter: () => toggleKeyboardPopover(focused.cardId, focused.resultId, "keyboard"),
+        space: () => toggleKeyboardPopover(focused.cardId, focused.resultId, "keyboard"),
       },
-      { when: "always" },
+      { when: "always", forFocus: true },
     );
     cleanup(unbind);
   });
@@ -1386,7 +1647,7 @@ export function QuickTranslatePopup(props: QuickTranslatePopupProps) {
       document: entry.document,
       segments: entry.segments,
       activeSegmentId: () => {
-        const current = activeMatch();
+        const current = effectiveHighlightMatch();
         if (
           !current ||
           current.cardId !== card.id ||
@@ -1398,7 +1659,7 @@ export function QuickTranslatePopup(props: QuickTranslatePopupProps) {
         return current.segmentId;
       },
       keyboardValue: () => {
-        const current = activeMatch();
+        const current = effectiveHighlightMatch();
         if (
           !current ||
           current.origin === "pointer" ||
@@ -1435,6 +1696,15 @@ export function QuickTranslatePopup(props: QuickTranslatePopupProps) {
           segmentId,
         });
       },
+      onPressSegment: (segmentId: string, event: PressEvent) => {
+        handlePressSegment(card.id, resultId, mode, segmentId, event);
+      },
+      onShowSourcePopover: (origin: "keyboard" | "accessibility" = "accessibility") => {
+        toggleKeyboardPopover(card.id, resultId, origin);
+      },
+      onPreviewRef: (node: ViewRef) => {
+        previewNodes.set(card.id, node);
+      },
       onKeyboardStep: (delta: -1 | 1, origin: "keyboard" | "accessibility" = "keyboard") => {
         stepCardPreview(card.id, resultId, delta, origin);
       },
@@ -1445,6 +1715,16 @@ export function QuickTranslatePopup(props: QuickTranslatePopupProps) {
         const focused = focusedPreview();
         if (focused && focused.cardId === card.id && focused.resultId === resultId) {
           focusedPreview.set(null);
+        }
+        const currentPopover = sentencePopover();
+        if (
+          currentPopover &&
+          currentPopover.origin !== "pointer" &&
+          currentPopover.cardId === card.id &&
+          currentPopover.resultId === resultId &&
+          currentPopover.renderMode === mode
+        ) {
+          closeSentencePopover();
         }
         const current = activeMatch();
         if (
@@ -2155,8 +2435,9 @@ export function QuickTranslatePopup(props: QuickTranslatePopupProps) {
                       }}
                       onCompositionChange={(composing) => isComposing.set(composing)}
                       onSelectionChange={(selection) => {
-                        if (selection && !selection.empty && activeMatch() !== null) {
-                          clearActiveMatch();
+                        if (selection && !selection.empty) {
+                          if (activeMatch() !== null) clearActiveMatch();
+                          closeSentencePopover();
                         }
                       }}
                       ref={(node) => {
@@ -2366,6 +2647,30 @@ export function QuickTranslatePopup(props: QuickTranslatePopupProps) {
           </Each>
         </View>
       </If>
+      <AnchoredPopover
+        open={sentencePopover() !== null}
+        anchor={sentencePopover()?.anchor ?? null}
+        maxWidth={sentencePopover()?.maxWidth}
+        placement="bottom"
+        align="start"
+        offset={6}
+        margin={12}
+        testID="quick-translate-sentence-popover"
+        accessibilityLabel={t("quickTranslate.sentenceSourcePopoverLabel")}
+        onPressOutside={(event) => handlePopoverPressOutside(event.pagePosition)}
+        onCancel={() => closeSentencePopover()}
+      >
+        <Scroll class="max-h-44">
+          <View selectable>
+            <Text
+              testID="quick-translate-sentence-popover-text"
+              class="text-sm leading-relaxed text-popover-foreground"
+            >
+              {sentencePopover()?.sourceText ?? ""}
+            </Text>
+          </View>
+        </Scroll>
+      </AnchoredPopover>
       <View
         testID="quick-translate-sentence-announcement"
         role="summary"

@@ -4502,3 +4502,68 @@ test("capability desktop: Quick TTS holds the request until the window closes fr
   expect(app.texts()).not.toContain(t("settings.tts.stop"));
   expect(app.requests()).toHaveLength(1);
 }, 90_000);
+
+test("alignment window: collapsed double-copy delivery aligns sentences and Escape closes popover before window", async () => {
+  if (!(await headlessHasAlignmentModel())) return;
+  const source = "She opened the door. He stepped inside.";
+  const target = "她打开了门。他走了进去。";
+  const app = await open(HARNESS_ENTRY, {
+    ...viewport,
+    storage: {
+      ...makeSeedStorage({
+        channels: [makeChannel({ adapterId: "openai-compatible", enabled: true })],
+        models: [makeModel({ enabled: true })],
+        credentials: { "ch-1": "sk-test" },
+      }),
+      [PRESETS_STORAGE_KEY]: JSON.stringify({ version: 1, items: [quickPreset] }),
+      "settings.language": "en",
+      [QUICK_TRANSLATE_PREFERENCES_KEY]: popupPreferences({
+        doubleCopyEnabled: true,
+        cards: [{ id: "card-1", presetId: quickPreset.id }],
+      }),
+      [SENTENCE_ALIGNMENT_STORAGE_KEY]: "true",
+      "__test.qt.doubleCopyClipboard": source,
+    },
+    network: {
+      "POST https://api.openai.com/v1/chat/completions": {
+        status: 200,
+        body: { choices: [{ message: { content: target } }] },
+      },
+    },
+    modules: {
+      "langnext-native": {
+        "SentenceAlignmentNative.modelReady": () => true,
+        "SentenceAlignmentNative.prepareSemanticModel": () => true,
+        "SentenceAlignmentNative.alignSemantic": () => [
+          { sourceStart: 0, sourceEnd: 20, targetBlockIndex: 0, targetStart: 0, targetEnd: 6 },
+          { sourceStart: 21, sourceEnd: 39, targetBlockIndex: 0, targetStart: 6, targetEnd: 12 },
+        ],
+      },
+    },
+  });
+
+  await app.press("id:harness-trigger-double-copy-valid");
+  await app.waitFor("id:quick-translate-source-preview");
+  await app.waitFor("id:quick-translate-card-card-1 >> id:quick-translate-result-preview");
+  expect(app.shows("id:quick-translate-source")).toBe(false);
+
+  const seg1 =
+    "id:quick-translate-card-card-1 >> id:quick-translate-result-text >> text:他走了进去。";
+  const span1 = "id:quick-translate-card-card-1 >> id:result-seg-1";
+  const popover = "id:quick-translate-sentence-popover";
+  await app.hover(seg1);
+  expect(app.spanStyle(span1).backgroundColor).toBeTruthy();
+
+  await app.press(seg1);
+  await app.waitFor(popover);
+  expect(app.shows(`${popover} >> text:He stepped inside.`)).toBe(true);
+
+  // First Escape closes only the source popover; Quick Translate window stays open.
+  await app.keyboard.press("escape");
+  await app.waitUntil(() => !app.shows(popover));
+  expect(app.window("quick-translate").state()?.visible).toBe(true);
+
+  // Second Escape closes the Quick Translate window.
+  await app.keyboard.press("escape");
+  await app.waitUntil(() => app.window("quick-translate").state() === null);
+});

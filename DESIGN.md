@@ -92,13 +92,16 @@ The window adds no overlay, travel, live region, drag, or layout animation.
 
 ## Quick Translate Sentence Highlight
 
-Hovering an eligible result sentence or stepping through result sentences with `Left`/`Right` while focused applies `bg-brand-soft` synchronously to that result sentence and adds an inline `bg-brand-soft` decoration on the aligned range in `QuickTranslateSourceEditor`.
+Sentence alignment stays active whether the source input is expanded or collapsed. Hovering an eligible result sentence or stepping through result sentences with `Left`/`Right` while focused applies `bg-brand-soft` synchronously to that result sentence and, when the source editor is expanded, adds an inline `bg-brand-soft` decoration on the aligned range in `QuickTranslateSourceEditor`.
 
-| Surface                        | Gesture / Trigger                                                       | Motion                                                                          | Reduced Motion        |
-| ------------------------------ | ----------------------------------------------------------------------- | ------------------------------------------------------------------------------- | --------------------- |
-| Result sentence & source range | Pointer hover, keyboard `Left`/`Right`, accessibility `Previous`/`Next` | Immediate `bg-brand-soft` toggle (0 ms); no scroll, focus move, or caret change | Same immediate toggle |
+Clicking an aligned result sentence (or pressing `Enter`/`Space` when `quick-translate-result-preview` is focused) opens an anchored `AnchoredPopover` displaying the aligned original source sentence text and holds `bg-brand-soft` on the active sentence while open. Clicking another aligned sentence or stepping with `Left`/`Right` updates the popover in place; clicking the active sentence again, clicking outside, pressing `Escape`, scrolling, toggling source collapse, editing source, toggling Markdown, retrying, or hiding the window closes it.
 
-The highlight adds no overlay, popover, live region, travel, fade, or layout animation.
+| Surface                        | Gesture / Trigger                                                                | Motion                                                                                            | Reduced Motion          |
+| ------------------------------ | -------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------- | ----------------------- |
+| Result sentence & source range | Pointer hover, click hold, keyboard `Left`/`Right`, accessibility `Prev`/`Next`  | Immediate `bg-brand-soft` toggle (0 ms); no scroll, focus move, or caret change                   | Same immediate toggle   |
+| Source sentence popover        | Sentence click, keyboard `Enter`/`Space`, accessibility `Show original`, dismiss | Shared `popupEnter` (`150ms` `easeOut`, opacity `0 → 1`, translateY `-4pt → 0`); updates in place | Instant open, no travel |
+
+The highlight itself adds no live region or layout animation.
 
 The Sentence alignment switch is in Settings → Application → Quick Translate. A separate Semantic model row below it displays **Multilingual E5 Small** and owns manual **Download**, **Cancel**, **Retry**, progress, and the **Downloaded** badge. Turning **Sentence alignment** on without an installed model opens a confirmation dialog (**Cancel** and **Download and enable**) before any transfer starts. There is no download control in the floating window.
 
