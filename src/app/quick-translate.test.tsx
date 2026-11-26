@@ -1416,6 +1416,234 @@ test("quick placement: window controller corrects shifted initial bounds once an
   expect(setBoundsCalls).toHaveLength(1);
 });
 
+test("quick height fit: retries once when a drag move overwrites the pending height fit", () => {
+  const display = {
+    id: "disp-1",
+    bounds: { origin: { x: 0, y: 0 }, size: { width: 2560, height: 1440 } },
+    visibleBounds: { origin: { x: 0, y: 0 }, size: { width: 2560, height: 1392 } },
+    primary: true,
+    name: "Primary",
+    scaleFactor: 1.5,
+    cutouts: [],
+  };
+  const setBoundsCalls: Array<{
+    origin?: { x?: number; y?: number };
+    size?: { width?: number; height?: number };
+  }> = [];
+  const makeState = (x: number, y: number, width: number, height: number): WindowState => ({
+    mode: "normal",
+    minimized: false,
+    visible: true,
+    focused: true,
+    bounds: { origin: { x, y }, size: { width, height } },
+    contentBounds: { origin: { x, y }, size: { width, height } },
+    placement: { bounds: { origin: { x, y }, size: { width, height } } },
+    display,
+    scaleFactor: 1.5,
+  });
+  let currentState = makeState(1007.33, 799.33, 420, 346);
+  const fakeWindow: Pick<WindowRef, "focus" | "setBounds" | "state"> = {
+    focus: () => {},
+    setBounds: (bounds) => {
+      setBoundsCalls.push(bounds);
+    },
+    state: () => currentState,
+  };
+
+  const controller = createQuickTranslateController({
+    readCursorAnchor: () => ({ displayId: "disp-1", offsetX: 1600, offsetY: 1200 }),
+    getDisplays: () => [display],
+  });
+  controller.open();
+  controller.attachWindow(fakeWindow as WindowRef);
+
+  controller.fitContentHeight(fakeWindow as WindowRef, 494, 2);
+  expect(setBoundsCalls).toEqual([{ size: { height: 494 } }]);
+
+  // Drag finishes with new origin and clobbered pre-fit height -> triggers retry.
+  currentState = makeState(988.67, 748, 420, 346);
+  controller.handleBoundsChange(currentState.bounds);
+  expect(setBoundsCalls).toEqual([{ size: { height: 494 } }, { size: { height: 494 } }]);
+
+  // Retry lands -> clears pending fit; subsequent user drag does not re-fit.
+  currentState = makeState(988.67, 748, 420, 494);
+  controller.handleBoundsChange(currentState.bounds);
+  currentState = makeState(1484.67, 828.67, 420, 494);
+  controller.handleBoundsChange(currentState.bounds);
+  expect(setBoundsCalls).toHaveLength(2);
+});
+
+test("quick height fit: retry clamps y into work area after dragging near bottom", () => {
+  const display = {
+    id: "disp-1",
+    bounds: { origin: { x: 0, y: 0 }, size: { width: 2560, height: 1440 } },
+    visibleBounds: { origin: { x: 0, y: 0 }, size: { width: 2560, height: 1392 } },
+    primary: true,
+    name: "Primary",
+    scaleFactor: 1.5,
+    cutouts: [],
+  };
+  const setBoundsCalls: Array<{
+    origin?: { x?: number; y?: number };
+    size?: { width?: number; height?: number };
+  }> = [];
+  const makeState = (x: number, y: number, width: number, height: number): WindowState => ({
+    mode: "normal",
+    minimized: false,
+    visible: true,
+    focused: true,
+    bounds: { origin: { x, y }, size: { width, height } },
+    contentBounds: { origin: { x, y }, size: { width, height } },
+    placement: { bounds: { origin: { x, y }, size: { width, height } } },
+    display,
+    scaleFactor: 1.5,
+  });
+  let currentState = makeState(1007.33, 799.33, 420, 346);
+  const fakeWindow: Pick<WindowRef, "focus" | "setBounds" | "state"> = {
+    focus: () => {},
+    setBounds: (bounds) => {
+      setBoundsCalls.push(bounds);
+    },
+    state: () => currentState,
+  };
+
+  const controller = createQuickTranslateController({
+    getDisplays: () => [display],
+  });
+  controller.open();
+  controller.attachWindow(fakeWindow as WindowRef);
+
+  controller.fitContentHeight(fakeWindow as WindowRef, 494, 2);
+  expect(setBoundsCalls).toEqual([{ size: { height: 494 } }]);
+
+  currentState = makeState(988.67, 1000, 420, 346);
+  controller.handleBoundsChange(currentState.bounds);
+  expect(setBoundsCalls).toEqual([
+    { size: { height: 494 } },
+    { size: { height: 494 }, origin: { y: 898 } },
+  ]);
+});
+
+test("quick height fit: manual user resize does not trigger retry", () => {
+  const display = {
+    id: "disp-1",
+    bounds: { origin: { x: 0, y: 0 }, size: { width: 2560, height: 1440 } },
+    visibleBounds: { origin: { x: 0, y: 0 }, size: { width: 2560, height: 1392 } },
+    primary: true,
+    name: "Primary",
+    scaleFactor: 1.5,
+    cutouts: [],
+  };
+  const setBoundsCalls: Array<{
+    origin?: { x?: number; y?: number };
+    size?: { width?: number; height?: number };
+  }> = [];
+  const makeState = (x: number, y: number, width: number, height: number): WindowState => ({
+    mode: "normal",
+    minimized: false,
+    visible: true,
+    focused: true,
+    bounds: { origin: { x, y }, size: { width, height } },
+    contentBounds: { origin: { x, y }, size: { width, height } },
+    placement: { bounds: { origin: { x, y }, size: { width, height } } },
+    display,
+    scaleFactor: 1.5,
+  });
+  let currentState = makeState(1007.33, 799.33, 420, 346);
+  const fakeWindow: Pick<WindowRef, "focus" | "setBounds" | "state"> = {
+    focus: () => {},
+    setBounds: (bounds) => {
+      setBoundsCalls.push(bounds);
+    },
+    state: () => currentState,
+  };
+
+  const controller = createQuickTranslateController({
+    getDisplays: () => [display],
+  });
+
+  // Case 1: user manually resized height.
+  controller.open();
+  controller.attachWindow(fakeWindow as WindowRef);
+  controller.fitContentHeight(fakeWindow as WindowRef, 494, 2);
+  currentState = makeState(1007.33, 799.33, 420, 380);
+  controller.handleBoundsChange(currentState.bounds);
+  expect(setBoundsCalls).toHaveLength(1);
+
+  // Case 2: user manually resized width.
+  controller.close();
+  currentState = makeState(1007.33, 799.33, 420, 346);
+  controller.open();
+  controller.attachWindow(fakeWindow as WindowRef);
+  controller.fitContentHeight(fakeWindow as WindowRef, 494, 3);
+  currentState = makeState(988.67, 748, 460, 346);
+  controller.handleBoundsChange(currentState.bounds);
+  expect(setBoundsCalls).toHaveLength(2);
+});
+
+test("quick height fit: caps retries and clears pending fit on close", () => {
+  const display = {
+    id: "disp-1",
+    bounds: { origin: { x: 0, y: 0 }, size: { width: 2560, height: 1440 } },
+    visibleBounds: { origin: { x: 0, y: 0 }, size: { width: 2560, height: 1392 } },
+    primary: true,
+    name: "Primary",
+    scaleFactor: 1.5,
+    cutouts: [],
+  };
+  const setBoundsCalls: Array<{
+    origin?: { x?: number; y?: number };
+    size?: { width?: number; height?: number };
+  }> = [];
+  const makeState = (x: number, y: number, width: number, height: number): WindowState => ({
+    mode: "normal",
+    minimized: false,
+    visible: true,
+    focused: true,
+    bounds: { origin: { x, y }, size: { width, height } },
+    contentBounds: { origin: { x, y }, size: { width, height } },
+    placement: { bounds: { origin: { x, y }, size: { width, height } } },
+    display,
+    scaleFactor: 1.5,
+  });
+  let currentState = makeState(1007.33, 799.33, 420, 346);
+  const fakeWindow: Pick<WindowRef, "focus" | "setBounds" | "state"> = {
+    focus: () => {},
+    setBounds: (bounds) => {
+      setBoundsCalls.push(bounds);
+    },
+    state: () => currentState,
+  };
+
+  const controller = createQuickTranslateController({
+    getDisplays: () => [display],
+  });
+
+  // Repeated move-only bounds changes stop retrying after MAX_HEIGHT_FIT_RETRIES (2).
+  controller.open();
+  controller.attachWindow(fakeWindow as WindowRef);
+  controller.fitContentHeight(fakeWindow as WindowRef, 494, 2);
+  currentState = makeState(988.67, 748, 420, 346);
+  controller.handleBoundsChange(currentState.bounds);
+  currentState = makeState(1020, 760, 420, 346);
+  controller.handleBoundsChange(currentState.bounds);
+  currentState = makeState(1050, 780, 420, 346);
+  controller.handleBoundsChange(currentState.bounds);
+  expect(setBoundsCalls).toHaveLength(3);
+
+  // Close clears pending fit so a late bounds change does not retry.
+  currentState = makeState(1007.33, 799.33, 420, 346);
+  controller.close();
+  controller.open();
+  controller.attachWindow(fakeWindow as WindowRef);
+  controller.fitContentHeight(fakeWindow as WindowRef, 494, 3);
+  expect(setBoundsCalls).toHaveLength(4);
+  controller.close();
+  currentState = makeState(988.67, 748, 420, 346);
+  controller.handleBoundsChange(currentState.bounds);
+  expect(setBoundsCalls).toHaveLength(4);
+});
+
 test("quick press: an outside pointer press closes the unpinned popup, while inside presses, other displays and pinned popups keep it", async () => {
   const display = {
     id: "disp-1",

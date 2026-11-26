@@ -37,6 +37,10 @@ export const POPUP_MIN_SIZE = { width: 340, height: 120 } as const;
 const HIDE_TIMEOUT_MS = 1_000;
 /** Interval between hidden checks; NSH reports the new value on its own schedule. */
 const HIDE_POLL_MS = 16;
+/** Caps follow-up retries when a native drag loop overwrites `setBounds`. */
+const MAX_HEIGHT_FIT_RETRIES = 2;
+/** Tolerance (pt) for recognizing that a settled drag kept the pre-fit width and height. */
+const DRAG_SIZE_MATCH_TOLERANCE_PT = 1;
 
 /** Theme colors the native selection overlay paints with. */
 export interface CaptureOverlayTheme {
@@ -180,6 +184,15 @@ export function createQuickTranslateController(
   let needsBoundsCheck = false;
   let userMovedSinceOpen = false;
   let expectingOwnSetBounds = false;
+  let pendingHeightFit: {
+    win: WindowRef;
+    contentHeight: number;
+    fitId: number;
+    beforeBounds: Bounds;
+    targetHeight: number;
+    tolerance: number;
+    retriesLeft: number;
+  } | null = null;
   let openGen = 0;
   let popupId = 0;
   let draftGen = 0;
@@ -264,6 +277,7 @@ export function createQuickTranslateController(
     needsBoundsCheck = false;
     userMovedSinceOpen = false;
     expectingOwnSetBounds = false;
+    pendingHeightFit = null;
     closeCleanup?.();
     stopPressMonitor?.();
     stopPressMonitor = null;
@@ -326,6 +340,7 @@ export function createQuickTranslateController(
     needsBoundsCheck = placement.kind === "cursor";
     userMovedSinceOpen = false;
     expectingOwnSetBounds = false;
+    pendingHeightFit = null;
     popupId += 1;
     traceHeightFit("opening", { trigger, placement });
     placementSignal.set(placement);
@@ -698,13 +713,19 @@ export function createQuickTranslateController(
     return current.kind === "cursor" ? current.bounds.size : current.size;
   };
 
-  const fitContentHeight = (win: WindowRef, height: number, fitId: number) => {
+  const applyContentHeightFit = (
+    win: WindowRef,
+    height: number,
+    fitId: number,
+    retriesLeft: number,
+  ) => {
     if (!openSignal() || win !== windowRef) {
       traceHeightFit("fit-skipped", { fitId, reason: "inactive-window" });
       return;
     }
     const state = win.state();
     if (!state?.visible || state.mode !== "normal") {
+      pendingHeightFit = null;
       traceHeightFit("fit-skipped", {
         fitId,
         reason: "window-not-ready",
@@ -721,17 +742,73 @@ export function createQuickTranslateController(
       state: heightFitWindowState(state),
       request: fit,
     });
-    if (fit) win.setBounds(fit);
+    if (!fit) {
+      pendingHeightFit = null;
+      return;
+    }
+    if (fit.size?.height !== undefined) {
+      const scale = state.scaleFactor > 0 ? state.scaleFactor : 1;
+      pendingHeightFit = {
+        win,
+        contentHeight: height,
+        fitId,
+        beforeBounds: state.bounds,
+        targetHeight: fit.size.height,
+        tolerance: 0.5 / scale,
+        retriesLeft,
+      };
+    } else {
+      pendingHeightFit = null;
+    }
+    win.setBounds(fit);
+  };
+
+  const fitContentHeight = (win: WindowRef, height: number, fitId: number) => {
+    applyContentHeightFit(win, height, fitId, MAX_HEIGHT_FIT_RETRIES);
+  };
+
+  const reconcilePendingHeightFit = (bounds: Bounds) => {
+    const pending = pendingHeightFit;
+    if (!pending) return;
+    if (!openSignal() || pending.win !== windowRef) {
+      pendingHeightFit = null;
+      return;
+    }
+    if (Math.abs(bounds.size.height - pending.targetHeight) < pending.tolerance) {
+      pendingHeightFit = null;
+      return;
+    }
+    const sizeTolerance = Math.max(pending.tolerance, DRAG_SIZE_MATCH_TOLERANCE_PT);
+    const heightUnchanged =
+      Math.abs(bounds.size.height - pending.beforeBounds.size.height) < sizeTolerance;
+    const widthUnchanged =
+      Math.abs(bounds.size.width - pending.beforeBounds.size.width) < sizeTolerance;
+    const originMoved =
+      Math.abs(bounds.origin.x - pending.beforeBounds.origin.x) >= pending.tolerance ||
+      Math.abs(bounds.origin.y - pending.beforeBounds.origin.y) >= pending.tolerance;
+    if (heightUnchanged && widthUnchanged && originMoved && pending.retriesLeft > 0) {
+      const nextRetries = pending.retriesLeft - 1;
+      traceHeightFit("fit-retry", {
+        fitId: pending.fitId,
+        retriesLeft: nextRetries,
+        height: pending.contentHeight,
+        bounds,
+      });
+      applyContentHeightFit(pending.win, pending.contentHeight, pending.fitId, nextRetries);
+      return;
+    }
+    pendingHeightFit = null;
   };
 
   const handleBoundsChange = (bounds: Bounds) => {
     traceHeightFit("bounds-changed", { bounds, expectingOwnSetBounds, needsBoundsCheck });
     if (expectingOwnSetBounds) {
       expectingOwnSetBounds = false;
-      return;
+    } else {
+      userMovedSinceOpen = true;
+      needsBoundsCheck = false;
     }
-    userMovedSinceOpen = true;
-    needsBoundsCheck = false;
+    reconcilePendingHeightFit(bounds);
   };
 
   return {
@@ -791,6 +868,7 @@ export function createQuickTranslateController(
     hasOpenOverlay,
     attachWindow: (win: WindowRef | null) => {
       traceHeightFit("window-ref", { attached: win !== null });
+      if (win !== windowRef) pendingHeightFit = null;
       windowRef = win;
       attachedWindowSignal.set(win);
     },
