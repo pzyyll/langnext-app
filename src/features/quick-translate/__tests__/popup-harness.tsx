@@ -11,6 +11,14 @@ import {
 } from "nsh";
 import { t } from "nsh/i18n";
 import { initializeAiModules } from "../../../app/ai-setup";
+
+/** The Google channel's saved config, or its defaults before the first save. */
+function googleTtsConfig(): ReturnType<typeof googleCloudTtsConfig.defaults> {
+  const binding = ttsChannels.binding("google-cloud");
+  return binding === null
+    ? googleCloudTtsConfig.defaults()
+    : (binding.config as ReturnType<typeof googleCloudTtsConfig.defaults>);
+}
 import { Button } from "../../../components/ui/button";
 import { Card } from "../../../components/ui/card";
 import {
@@ -18,13 +26,14 @@ import {
   type DetectLanguageOptions,
   type LanguageDetectionResult,
 } from "../../language-detection/detect";
-import { languageDetectionStore } from "../../language-detection/settings";
+import { languageDetectionPreferences } from "../../language-detection/preferences";
+import { detectChannels } from "../../language-detection/store";
 import { loadModelsState } from "../../models/store";
 import { createPresetsStore } from "../../presets/store";
 import { loadAppearance } from "../../settings/appearance";
 import { loadLanguage } from "../../settings/language";
-import { DEFAULT_GOOGLE_VOICE_PREFERENCES } from "../../tts/google-preferences";
-import { ttsSettingsStore } from "../../tts/settings";
+import { googleCloudTtsConfig } from "../../../contributions/tts";
+import { ttsChannels } from "../../tts/store";
 import {
   createQuickTranslatePreferencesStore,
   type QuickTranslatePreferencesStore,
@@ -277,7 +286,7 @@ function PopupHarnessApp(props: {
             size="xs"
             variant="outline"
             label="Activate Google TTS"
-            onPress={() => void ttsSettingsStore.setEnabled("google-cloud", true)}
+            onPress={() => void ttsChannels.setEnabled("google-cloud", true)}
           />
           <Button
             testID="harness-save-inactive-google"
@@ -285,9 +294,9 @@ function PopupHarnessApp(props: {
             variant="outline"
             label="Save inactive Google"
             onPress={() =>
-              void ttsSettingsStore.saveChannel({
-                channel: "google-cloud",
-                apiKey: "next-google-key",
+              void ttsChannels.save("google-cloud", googleTtsConfig(), {
+                mode: "replace",
+                value: { apiKey: "next-google-key" },
               })
             }
           />
@@ -297,10 +306,11 @@ function PopupHarnessApp(props: {
             variant="outline"
             label="Change Google preferences"
             onPress={() =>
-              void ttsSettingsStore.saveChannel({
-                channel: "google-cloud",
-                preferences: { ...DEFAULT_GOOGLE_VOICE_PREFERENCES, speakingRate: 1.5 },
-              })
+              void ttsChannels.save(
+                "google-cloud",
+                { preferences: { ...googleTtsConfig().preferences, speakingRate: 1.5 } },
+                { mode: "keep" },
+              )
             }
           />
         </If>
@@ -597,10 +607,11 @@ void Promise.all([
   loadAppearance(),
   loadLanguage(),
   loadModelsState(),
-  languageDetectionStore.load(),
-  ttsSettingsStore.load(),
+  detectChannels.load(),
+  languageDetectionPreferences.load(),
+  ttsChannels.load(),
   Storage.getItem(POPUP_HARNESS_MODE_KEY),
-]).then(async ([, , , , , modeRaw]) => {
+]).then(async ([, , , , , , modeRaw]) => {
   const mode: HarnessMode =
     modeRaw === "preset-load-error-then-recover" ||
     modeRaw === "clipboard-error" ||

@@ -1,74 +1,45 @@
-import type { LanguageId } from "../presets/languages";
-import { createAzureSpeechTtsClient } from "./azure-speech";
-import {
-  createGoogleCloudTtsClient,
-  TTS_SAMPLE_LANGUAGE_CODE,
-  TTS_SAMPLE_TEXT,
-  TTS_SAMPLE_VOICE_NAME,
-} from "./google-cloud";
-import { googleAudioOptions, type GoogleVoicePreferences } from "./google-preferences";
-import { googleSampleText } from "./google-samples";
-import type { GoogleVoice } from "./google-voices";
-import type { TtsCredentials, TtsSynthesis, TtsSynthesisRequest, TtsVoice } from "./synthesis";
+// ABOUTME: Runs one prepared speech request through the contribution that owns the channel.
+// ABOUTME: Dispatch uses contribution hooks only; no feature code branches on a channel id.
+import type { HostServices } from "../../framework/contributions";
+import { createLogger } from "../../services/log";
+import { ttsChannels } from "./store";
+import type { TtsChannelInput, TtsSynthesis } from "./synthesis";
 
-/** Neural voice for the fixed English settings sample. */
-export const AZURE_SAMPLE_VOICE_NAME = "en-US-JennyNeural";
+const log = createLogger("tts/synthesis");
 
-/** The saved credentials plus the fixed sample for that channel. */
-export function sampleSpeechRequest(credentials: TtsCredentials): TtsSynthesisRequest {
-  return {
-    credentials,
-    text: TTS_SAMPLE_TEXT,
-    voice: sampleVoice(credentials),
-  };
+const unsupportedModels: HostServices["models"] = {
+  resolveSaved: async () => ({ ok: false, reason: "TTS does not resolve saved models." }),
+  generateText: async () => {
+    throw new Error("TTS does not generate text through a model.");
+  },
+  generateTextFromImage: async () => {
+    throw new Error("TTS does not read images through a model.");
+  },
+};
+
+/** One prepared call: the contribution id plus the input it prepared. */
+export interface PreparedSpeech {
+  channel: string;
+  input: TtsChannelInput;
 }
 
-function sampleVoice(credentials: TtsCredentials): TtsVoice {
-  if (credentials.channel === "azure") {
-    return { languageCode: TTS_SAMPLE_LANGUAGE_CODE, voiceName: AZURE_SAMPLE_VOICE_NAME };
-  }
-  return { languageCode: TTS_SAMPLE_LANGUAGE_CODE, voiceName: TTS_SAMPLE_VOICE_NAME };
-}
-
-/** The fixed sample for one resolved Google voice and its effective audio options. */
-export function googleSampleSpeechRequest(input: {
-  credentials: Extract<TtsCredentials, { channel: "google-cloud" }>;
-  language: LanguageId;
-  voice: GoogleVoice;
-  preferences: GoogleVoicePreferences;
-}): TtsSynthesisRequest {
-  return {
-    credentials: input.credentials,
-    text: googleSampleText(input.language, input.voice.locale),
-    voice: { languageCode: input.voice.locale, voiceName: input.voice.name },
-    audio: googleAudioOptions(input.preferences, input.voice.family),
-  };
-}
-
-/** Sends one request to the channel named by its credentials. */
-export function synthesizeSpeech(
-  request: TtsSynthesisRequest,
+/**
+ * Executes one prepared speech request. The credential is read for this call only
+ * and the contribution receives the host fetch boundary.
+ */
+export async function synthesizeSpeech(
+  speech: PreparedSpeech,
   options?: { signal?: AbortSignal },
 ): Promise<TtsSynthesis> {
-  if (request.credentials.channel === "azure") {
-    return createAzureSpeechTtsClient().synthesize(
-      {
-        apiKey: request.credentials.apiKey,
-        region: request.credentials.region,
-        text: request.text,
-        voice: request.voice,
-      },
-      options,
-    );
+  const contribution = ttsChannels.contribution(speech.channel);
+  const binding = ttsChannels.binding(speech.channel);
+  if (contribution === null || binding === null) {
+    return { status: "failed", failure: "malformed" };
   }
-  return createGoogleCloudTtsClient().synthesize(
-    {
-      apiKey: request.credentials.apiKey,
-      text: request.text,
-      languageCode: request.voice.languageCode,
-      voiceName: request.voice.voiceName,
-      ...(request.audio !== undefined ? { audio: request.audio } : {}),
-    },
-    options,
-  );
+  const credential = await ttsChannels.readCredential(binding.credentialRef);
+  if (credential === null) return { status: "failed", failure: "auth" };
+  const input =
+    options?.signal !== undefined ? { ...speech.input, signal: options.signal } : speech.input;
+  const host: HostServices = { credential, models: unsupportedModels, log };
+  return (await contribution.execute(binding, input, host)) as TtsSynthesis;
 }

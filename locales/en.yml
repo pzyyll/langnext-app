@@ -55,6 +55,44 @@ settings:
     ocr: OCR
     tts: Text-to-Speech
     wordbook: Wordbook
+  capabilities:
+    addChannel: Add Channel
+    priorityHint: Enabled channels run in order from top to bottom. Later ones act as backups.
+    notConfigured: Not configured
+    configured: Configured
+    saved: Channel saved
+    configureBeforeEnable: Configure this channel before enabling it.
+    configureLabel: Configure %{name}
+    enableLabel: Enable %{name}
+    removeLabel: Remove %{name}
+    removeTitle: Remove Channel
+    removeDescription: 'Remove channel "%{name}" and clear its saved configuration?'
+    removeConfirm: Remove
+    moveUp: Move %{name} up
+    moveDown: Move %{name} down
+    reorder: Reorder %{name}
+    reorderHint: Drag, or press the up and down arrow keys.
+    itemLabel: "%{name} (%{status})"
+    emptyChannels: Available channels
+    emptyAdd: Add %{name}
+    skipped: "%{count} saved channels are not available in this build and were skipped."
+    skippedOne: One saved channel is not available in this build and was skipped.
+    plaintextCredential: This credential is stored as plain text on this device.
+    role:
+      primary: Primary
+      backup: Backup
+    error:
+      storageReadFailed: Could not read the saved settings.
+      storageMalformed: The saved settings are unreadable.
+      storageUnsupportedVersion: The saved settings use an unsupported version.
+      storageWriteFailed: Could not save the settings. Check storage and try again.
+      credentialWriteFailed: Could not save the credential. Check storage and try again.
+      credentialRequired: Enter the credential before saving.
+      credentialUnreadable: The saved credential could not be read. Enter it again.
+      channelUnconfigured: Configure this channel before enabling it.
+      channelNotConfigurable: This channel has no settings to configure.
+      unknownChannel: This channel is not available in this build.
+      invalidConfig: Some settings are not valid.
   quickTranslate:
     sentenceAlignment: Sentence alignment
     alignmentHelp: Enabling sentence alignment requires an offline download.
@@ -594,6 +632,16 @@ protocol:
     missingGeneratedText: Provider response contained no generated text.
     outputTruncated: Provider stopped before the text was complete.
     streamInterrupted: Provider stopped the stream before the text was complete.
+framework:
+  contribution:
+    duplicate: 'A %{axis} contribution with the ID "%{id}" is already registered.'
+    invalidId: 'A %{axis} contribution with the ID "%{id}" is invalid.'
+    unknown: 'No %{axis} contribution is registered with the ID "%{id}".'
+    invalidProvider: 'Provider "%{id}" has an invalid definition.'
+    unknownProtocol: 'Provider "%{id}" references an unregistered protocol "%{protocol}".'
+    missingPresentation: 'Provider "%{id}" has no provider presentation.'
+    unknownProvider: 'Presentation "%{id}" references an unregistered provider.'
+    invalidCapability: 'Capability channel "%{id}" declares an unknown capability "%{capability}".'
 ai:
   protocol:
     openaiChat: OpenAI Chat Completions

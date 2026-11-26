@@ -55,6 +55,44 @@ settings:
     ocr: OCR
     tts: 语音合成
     wordbook: 生词本
+  capabilities:
+    addChannel: 添加渠道
+    priorityHint: 已启用的渠道按从上到下的顺序使用，其余作为备用。
+    notConfigured: 未配置
+    configured: 已配置
+    saved: 渠道已保存
+    configureBeforeEnable: 请先配置此渠道再启用。
+    configureLabel: 配置 %{name}
+    enableLabel: 启用 %{name}
+    removeLabel: 移除 %{name}
+    removeTitle: 移除渠道
+    removeDescription: 移除渠道“%{name}”并清除已保存的配置？
+    removeConfirm: 移除
+    moveUp: 上移 %{name}
+    moveDown: 下移 %{name}
+    reorder: 调整 %{name} 的顺序
+    reorderHint: 拖动，或按上下方向键。
+    itemLabel: "%{name}（%{status}）"
+    emptyChannels: 可添加的渠道
+    emptyAdd: 添加 %{name}
+    skipped: "%{count} 个已保存的渠道在当前版本中不可用，已跳过。"
+    skippedOne: 有 1 个已保存的渠道在当前版本中不可用，已跳过。
+    plaintextCredential: 此凭证以明文形式保存在本机。
+    role:
+      primary: 首选
+      backup: 备用
+    error:
+      storageReadFailed: 无法读取已保存的设置。
+      storageMalformed: 已保存的设置无法解析。
+      storageUnsupportedVersion: 已保存的设置版本不受支持。
+      storageWriteFailed: 无法保存设置，请检查存储后重试。
+      credentialWriteFailed: 无法保存凭证，请检查存储后重试。
+      credentialRequired: 请先填写凭证再保存。
+      credentialUnreadable: 无法读取已保存的凭证，请重新输入。
+      channelUnconfigured: 请先配置此渠道再启用。
+      channelNotConfigurable: 此渠道没有可配置的设置。
+      unknownChannel: 此渠道在当前版本中不可用。
+      invalidConfig: 部分设置无效。
   quickTranslate:
     sentenceAlignment: 译文对照
     alignmentHelp: 开启译文对照模式需要下载离线资源
@@ -594,6 +632,16 @@ protocol:
     missingGeneratedText: 服务商响应中缺少生成文本。
     outputTruncated: 服务商在文本完整前停止了输出。
     streamInterrupted: 服务商在文本生成完成前中断了流式响应。
+framework:
+  contribution:
+    duplicate: "ID 为“%{id}”的 %{axis} 贡献已注册。"
+    invalidId: "ID 为“%{id}”的 %{axis} 贡献无效。"
+    unknown: "未注册 ID 为“%{id}”的 %{axis} 贡献。"
+    invalidProvider: "提供方“%{id}”的定义无效。"
+    unknownProtocol: "提供方“%{id}”引用了未注册的协议“%{protocol}”。"
+    missingPresentation: "提供方“%{id}”缺少提供方展示。"
+    unknownProvider: "提供方展示“%{id}”引用了未注册的提供方。"
+    invalidCapability: "能力渠道“%{id}”声明了未知能力“%{capability}”。"
 ai:
   protocol:
     openaiChat: OpenAI Chat Completions

@@ -4,10 +4,10 @@ import { t } from "nsh/i18n";
 import { loadSplitRailWidths } from "../../components/layout/split-rail";
 import { Button } from "../../components/ui/button";
 import { loadModelsState } from "../../features/models/store";
-import { ocrSettingsStore } from "../../features/ocr/settings";
+import { ocrChannels } from "../../features/ocr/store";
 import { presetsStore } from "../../features/presets/store";
 import { loadQuickTranslatePreferences } from "../../features/quick-translate/preferences";
-import { ttsSettingsStore } from "../../features/tts/settings";
+import { ttsChannels } from "../../features/tts/store";
 import { wordbookSettingsStore } from "../../features/wordbook/settings";
 import { loadAppearance } from "../../features/settings/appearance";
 import { loadLanguage } from "../../features/settings/language";
@@ -429,7 +429,7 @@ void Promise.all([
   loadTransparency(),
   loadQuickTranslatePreferences(),
   loadModelsState(),
-  ocrSettingsStore.load(),
+  ocrChannels.load(),
   presetsStore.load(),
   loadSplitRailWidths(),
   Storage.getItem(HARNESS_SHORTCUT_MODE_KEY),
@@ -440,7 +440,7 @@ void Promise.all([
   Storage.getItem(QUICK_TRANSLATE_SHORTCUT_STORAGE_KEY),
   Storage.getItem(SCREENSHOT_TRANSLATE_SHORTCUT_STORAGE_KEY),
   Storage.getItem(SELECTION_TRANSLATE_SHORTCUT_STORAGE_KEY),
-  ttsSettingsStore.load(),
+  ttsChannels.load(),
   wordbookSettingsStore.load(),
   loadSelectionHint(),
   Storage.getItem(HARNESS_SELECTION_HINT_MODE_KEY),

@@ -1,4 +1,4 @@
-import { LANGUAGE_IDS, type LanguageId } from "../../features/presets/languages";
+import { LANGUAGE_IDS, type LanguageId } from "../../framework/languages";
 
 /**
  * DeepL code maps for the stable text-translation languages shared with the app's

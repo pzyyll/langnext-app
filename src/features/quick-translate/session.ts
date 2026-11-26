@@ -10,15 +10,15 @@ import {
   type ResolveTranslationLanguagesResult,
 } from "../language-detection/resolve";
 import {
-  languageDetectionStore,
+  languageDetectionPreferences,
   type LanguageDetectionSnapshot,
-} from "../language-detection/settings";
+} from "../language-detection/preferences";
 import {
   AUTO_LANGUAGE,
   type LanguageId,
   type SourceLanguageId,
   type TargetLanguageId,
-} from "../presets/languages";
+} from "../../framework/languages";
 import {
   createSourceLanguageDetection,
   type DetectSourceLanguage,
@@ -312,7 +312,7 @@ export function createQuickTranslateSession(
   const captureActionLanguages = (): ActionLanguages => {
     const source = sourceLanguage();
     const target = targetLanguage();
-    const detection = languageDetectionStore.snapshot();
+    const detection = languageDetectionPreferences.snapshot();
     const text = options.sourceText();
     return {
       text,
@@ -1401,7 +1401,11 @@ export function createQuickTranslateSession(
     targetLanguage: () => targetLanguage(),
     sourceDetection: () => sourceDetection(),
     detectSourceLanguage: (signal?: AbortSignal) =>
-      languageDetection.detect(options.sourceText(), languageDetectionStore.snapshot(), signal),
+      languageDetection.detect(
+        options.sourceText(),
+        languageDetectionPreferences.snapshot(),
+        signal,
+      ),
     canSwapLanguages,
     cards: () => cards(),
     historySnapshot,

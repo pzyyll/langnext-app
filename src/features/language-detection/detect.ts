@@ -1,37 +1,40 @@
-import { ProviderProtocolError } from "../../modules/ai/contracts/errors";
+// ABOUTME: Language detection: one bounded sample through enabled channels in priority order.
+// ABOUTME: Channel readiness and execution live in the detect contributions; failures fall through.
 import type { TextGenerationRequest } from "../../modules/ai/contracts/protocol";
 import {
   aiClient,
   type AiClientCallOptions,
   type AiClientInput,
 } from "../../modules/ai/runtime/client";
-import { DEFAULT_HTTP_TIMEOUT_MS } from "../../modules/ai/runtime/http";
+import type { FetchLike } from "../../services/http";
+import { createLogger } from "../../services/log";
 import {
-  createGoogleCloudTranslateClient,
-  type GoogleCloudDetectInput,
-  type GoogleCloudDetectOptions,
-} from "../../modules/google-cloud-translation/client";
-import { createHttpFetch } from "../../services/http";
+  getContributionRegistry,
+  runChain,
+  type CapabilityChannelContribution,
+  type ChainStepOutcome,
+  type ChannelBinding,
+  type CredentialRecord,
+  type HostModels,
+  type HostServices,
+  type ModelConnectionRoute,
+  type ResolvedModelRoute,
+} from "../../framework/contributions";
+import type { LanguageId } from "../../framework/languages";
+import {
+  DetectionChannelError,
+  isDetectionChannelFailure,
+  type DetectionChannelFailure,
+  type DetectionRequest,
+} from "../../contributions/detect";
 import { resolveSavedModelRequest, type SavedModelRequestResolution } from "../models/store";
-import { isLanguageId, LANGUAGE_IDS, type LanguageId } from "../presets/languages";
-import { languageDetectionStore, type LanguageDetectorBinding } from "./settings";
+import { detectChannels } from "./store";
+import type { EnabledDetectionChannel } from "./preferences";
+
+const log = createLogger("language-detection/detect");
 
 /** Maximum sample length in Unicode code points, so one sample never costs unbounded tokens. */
 const MAX_SAMPLE_CODE_POINTS = 2048;
-
-/** Sentinel answer a model returns when it cannot name a supported language. */
-const UNDETERMINED_ANSWER = "und";
-
-/**
- * Fixed model instruction: one literal supported ID or `und`. The user message is data only,
- * so a prompt cannot be injected through the sampled text.
- */
-export const DETECTION_SYSTEM_MESSAGE = [
-  "Identify the dominant language of the user's text.",
-  `Answer with one literal language ID only, chosen from: ${LANGUAGE_IDS.join(", ")}, ${UNDETERMINED_ANSWER}.`,
-  `Answer ${UNDETERMINED_ANSWER} when you cannot determine one supported language.`,
-  "Do not add punctuation, explanation, JSON, or Markdown.",
-].join(" ");
 
 export type LanguageDetectionFailureCode =
   | "blank_input"
@@ -55,54 +58,17 @@ export interface DetectLanguageOptions {
     request: TextGenerationRequest,
     options?: AiClientCallOptions,
   ) => Promise<string>;
-  googleFetch?: GoogleDetectionFetch;
-  /** Reads a Google Cloud detector's stored key; defaults to the shared settings store. */
-  readGoogleCloudCredential?: (credentialRef: string) => Promise<string | null>;
-  /** Google Cloud v2 detect seam for isolated tests; the production client is built on demand. */
-  googleCloudDetect?: (
-    input: GoogleCloudDetectInput,
-    options?: GoogleCloudDetectOptions,
-  ) => Promise<string>;
+  /** Transport seam for hosted detectors; defaults to the app's logging HTTP wrapper. */
+  fetchImpl?: FetchLike;
+  /** Reads one channel's stored credential record; defaults to the vault of the detection collection. */
+  readCredential?: (credentialRef: string) => Promise<CredentialRecord | null>;
 }
 
-/**
- * Free Google Translate endpoint used by the `google` detector. It is undocumented and has no
- * support contract: no key, per-IP rate limits, and a plain-text refusal page under abuse.
- * The sample travels in a form body, so it never appears in a URL.
- */
-export const GOOGLE_DETECTION_URL =
-  "https://translate.googleapis.com/translate_a/t?client=gtx&sl=auto&tl=en";
+type DetectionContribution = CapabilityChannelContribution<unknown, DetectionRequest, LanguageId>;
 
-/** Legacy codes Google still answers with for two supported languages. */
-const GOOGLE_CODE_ALIASES: Record<string, LanguageId> = { iw: "he", in: "id" };
-
-/** Minimal response shape the Google request needs; a real `Response` satisfies it. */
-export interface GoogleDetectionResponseLike {
-  ok: boolean;
-  status: number;
-  json(): Promise<unknown>;
-}
-
-/** Fetch boundary replacement point for isolated tests. */
-export type GoogleDetectionFetch = (
-  url: string,
-  init: {
-    method: "POST";
-    headers: Record<string, string>;
-    body: string;
-    signal: AbortSignal;
-  },
-) => Promise<GoogleDetectionResponseLike>;
-
-let googleCloudClient: ReturnType<typeof createGoogleCloudTranslateClient> | null = null;
-
-/** Production Google Cloud transport, built once on first use. */
-function googleCloudDetectClient(): (
-  input: GoogleCloudDetectInput,
-  options?: GoogleCloudDetectOptions,
-) => Promise<string> {
-  googleCloudClient ??= createGoogleCloudTranslateClient();
-  return googleCloudClient.detect;
+interface DetectionAttempt {
+  detector: EnabledDetectionChannel;
+  contribution: DetectionContribution;
 }
 
 function failure(code: LanguageDetectionFailureCode): LanguageDetectionResult {
@@ -117,197 +83,153 @@ export function boundDetectionSample(text: string): string {
   return codePoints.slice(0, MAX_SAMPLE_CODE_POINTS).join("");
 }
 
-type Answer =
-  | { kind: "language"; language: LanguageId }
-  | { kind: "undetermined" }
-  | { kind: "invalid" };
-
-/**
- * Maps a Google language code onto a supported concrete ID. A regional code keeps its base
- * language (`zh-CN` -> `zh`, `pt-BR` -> `pt`), and an unsupported language returns `null`.
- */
-export function normalizeGoogleLanguageCode(raw: string): LanguageId | null {
-  const normalized = raw.trim().toLowerCase();
-  if (normalized.length === 0) return null;
-  const base = normalized.split(/[-_]/)[0] ?? "";
-  const candidate = GOOGLE_CODE_ALIASES[base] ?? base;
-  return isLanguageId(candidate) ? candidate : null;
+function toResolvedRoute(resolved: SavedModelRequestResolution): ResolvedModelRoute {
+  if (!resolved.ok) return { ok: false, reason: resolved.reason };
+  return {
+    ok: true,
+    modelId: resolved.modelId,
+    modelKey: resolved.modelKey,
+    connection: {
+      providerTypeId: resolved.connection.providerTypeId,
+      protocolId: resolved.connection.protocolId,
+      baseUrl: resolved.connection.baseUrl,
+      credential: resolved.connection.credential,
+    },
+  };
 }
 
-function looksLikeLanguageCode(value: string): boolean {
-  return /^[a-z]{2,3}(?:[-_][a-z0-9]{2,8})?$/i.test(value);
+function toClientInput(connection: ModelConnectionRoute): AiClientInput {
+  return {
+    providerTypeId: connection.providerTypeId as AiClientInput["providerTypeId"],
+    protocolId: connection.protocolId as AiClientInput["protocolId"],
+    baseUrl: connection.baseUrl,
+    credential: connection.credential,
+  };
 }
 
-/**
- * Reads the detected code from a `translate_a/t` payload. One input answers
- * `[[translatedText, code]]`; other shapes put the code beside the segments.
- */
-export function readGoogleLanguageCode(payload: unknown): string | null {
-  if (!Array.isArray(payload)) return null;
-  for (const entry of payload) {
-    if (Array.isArray(entry) && typeof entry[1] === "string" && looksLikeLanguageCode(entry[1])) {
-      return entry[1];
-    }
-  }
-  for (const entry of payload) {
-    if (typeof entry === "string" && looksLikeLanguageCode(entry)) return entry;
-  }
-  return null;
-}
-
-/** Sends one bounded sample to the free Google Translate endpoint and maps its answer. */
-async function detectWithGoogle(
-  sample: string,
+/** Builds the AI access one detection call shares; each saved model resolves once per call. */
+function detectionModels(
   options: DetectLanguageOptions,
-): Promise<LanguageDetectionResult> {
-  const runFetch: GoogleDetectionFetch =
-    options.googleFetch ?? createHttpFetch({ scope: "language-detection" });
-  const external = options.signal;
-  const controller = new AbortController();
-  const onExternalAbort = () => controller.abort();
-  external?.addEventListener("abort", onExternalAbort, { once: true });
-  const timer = setTimeout(() => controller.abort(), options.timeoutMs ?? DEFAULT_HTTP_TIMEOUT_MS);
+  resolved: Map<string, Promise<ResolvedModelRoute>>,
+): HostModels {
+  const resolveModel =
+    options.resolveSavedModelRequest ??
+    ((modelId: string) => resolveSavedModelRequest(modelId, "text"));
+  const generate = options.generateText ?? aiClient.generateText;
 
-  const requestBody = `q=${encodeURIComponent(sample)}`;
-
-  try {
-    let response: GoogleDetectionResponseLike;
-    try {
-      response = await runFetch(GOOGLE_DETECTION_URL, {
-        method: "POST",
-        headers: { "content-type": "application/x-www-form-urlencoded" },
-        body: requestBody,
-        signal: controller.signal,
-      });
-    } catch {
-      return external?.aborted ? failure("cancelled") : failure("failed");
-    }
-
-    if (external?.aborted) return failure("cancelled");
-    if (!response.ok || controller.signal.aborted) return failure("failed");
-
-    let payload: unknown;
-    try {
-      payload = await response.json();
-    } catch {
-      return external?.aborted ? failure("cancelled") : failure("failed");
-    }
-
-    if (external?.aborted) return failure("cancelled");
-
-    const code = readGoogleLanguageCode(payload);
-    if (code === null) return failure("unknown_language");
-    const language = normalizeGoogleLanguageCode(code);
-    return language === null ? failure("unsupported_language") : { ok: true, language };
-  } finally {
-    clearTimeout(timer);
-    external?.removeEventListener("abort", onExternalAbort);
-  }
+  return {
+    resolveSaved: (modelId) => {
+      let pending = resolved.get(modelId);
+      if (pending === undefined) {
+        pending = resolveModel(modelId).then(toResolvedRoute);
+        resolved.set(modelId, pending);
+      }
+      return pending;
+    },
+    generateText: (connection, request, callOptions) =>
+      generate(
+        toClientInput(connection),
+        {
+          modelId: request.modelId,
+          system: request.system,
+          user: request.user,
+          disableReasoning: request.disableReasoning,
+        },
+        callOptions,
+      ),
+    generateTextFromImage: async () => {
+      throw new Error("Language detection does not read images.");
+    },
+  };
 }
 
-/** Accepts exactly one supported ID or `und`; rejects prose, JSON, locale variants, and `auto`. */
-export function parseDetectionAnswer(raw: string): Answer {
-  const normalized = raw.trim().toLowerCase();
-  if (normalized === UNDETERMINED_ANSWER) return { kind: "undetermined" };
-  if (isLanguageId(normalized)) return { kind: "language", language: normalized };
-  return { kind: "invalid" };
-}
-
-/** Asks Google Cloud v2 to detect the sample, using the detector's stored API key. */
-async function detectWithGoogleCloud(
-  credentialRef: string,
-  sample: string,
+/** Reads one channel's credential record for this attempt; never logs a value. */
+async function detectionCredential(
+  contribution: DetectionContribution,
+  binding: ChannelBinding,
   options: DetectLanguageOptions,
-): Promise<LanguageDetectionResult> {
-  const readCredential =
-    options.readGoogleCloudCredential ?? languageDetectionStore.readGoogleCloudCredential;
-  const runDetect = options.googleCloudDetect ?? googleCloudDetectClient();
+): Promise<CredentialRecord | null> {
+  const fields = contribution.credential;
+  if (fields === null || fields.length === 0) return null;
+  const credentialRef = binding.credentialRef;
+  if (credentialRef === null) return null;
 
-  let apiKey: string | null;
+  if (options.readCredential !== undefined) {
+    try {
+      return await options.readCredential(credentialRef);
+    } catch {
+      return null;
+    }
+  }
   try {
-    apiKey = await readCredential(credentialRef);
+    return await detectChannels.readCredential(credentialRef);
   } catch {
-    return failure("failed");
+    return null;
   }
-  if (options.signal?.aborted) return failure("cancelled");
-  if (apiKey === null || apiKey.trim().length === 0) return failure("failed");
-
-  let code: string;
-  try {
-    code = await runDetect(
-      { apiKey, text: sample },
-      { signal: options.signal, timeoutMs: options.timeoutMs },
-    );
-  } catch (error) {
-    if (
-      options.signal?.aborted ||
-      (error instanceof ProviderProtocolError && error.kind === "cancelled")
-    ) {
-      return failure("cancelled");
-    }
-    return failure("failed");
-  }
-  if (options.signal?.aborted) return failure("cancelled");
-
-  const language = normalizeGoogleLanguageCode(code);
-  return language === null ? failure("unsupported_language") : { ok: true, language };
 }
 
-/** Asks one saved model for the sample's language; an unavailable model answers without a request. */
-async function detectWithAiModel(
-  modelId: string,
-  sample: string,
+function channelFailure(value: string): DetectionChannelFailure {
+  return isDetectionChannelFailure(value) ? value : "failed";
+}
+
+function unavailableOutcome(reason: string): ChainStepOutcome<LanguageId, DetectionChannelFailure> {
+  const code = channelFailure(reason);
+  return code === "no_eligible_model"
+    ? { kind: "unavailable", reason: code }
+    : { kind: "failed", failure: code };
+}
+
+/** Runs one enabled detector's readiness check and one attempt. */
+async function runDetector(
+  attempt: DetectionAttempt,
+  request: DetectionRequest,
   options: DetectLanguageOptions,
-): Promise<LanguageDetectionResult> {
-  const resolveModel = options.resolveSavedModelRequest ?? resolveSavedModelRequest;
-  const runGeneration = options.generateText ?? aiClient.generateText;
+  models: HostModels,
+): Promise<ChainStepOutcome<LanguageId, DetectionChannelFailure>> {
+  const { detector, contribution } = attempt;
+  const binding = detector.binding;
+  const credential = await detectionCredential(contribution, binding, options);
+  const host: HostServices = {
+    credential,
+    models,
+    fetchImpl: options.fetchImpl,
+    log,
+  };
 
-  let raw: string;
+  let readiness: Awaited<ReturnType<DetectionContribution["readiness"]>>;
   try {
-    const resolved = await resolveModel(modelId);
-    if (options.signal?.aborted) return failure("cancelled");
-    if (!resolved.ok) return failure("no_eligible_model");
-
-    raw = await runGeneration(
-      resolved.connection,
-      {
-        modelId: resolved.modelKey,
-        system: DETECTION_SYSTEM_MESSAGE,
-        user: sample,
-        // One literal ID needs no reasoning; providers that cannot turn it off ignore the hint.
-        disableReasoning: true,
-      },
-      { signal: options.signal, timeoutMs: options.timeoutMs },
-    );
-  } catch (error) {
-    if (
-      options.signal?.aborted ||
-      (error instanceof ProviderProtocolError && error.kind === "cancelled")
-    ) {
-      return failure("cancelled");
-    }
-    return failure("failed");
+    readiness = await contribution.readiness(binding, host);
+  } catch {
+    return { kind: "failed", failure: "failed" };
   }
-  if (options.signal?.aborted) return failure("cancelled");
+  if (options.signal?.aborted) return { kind: "cancelled" };
+  if (!readiness.ready) return unavailableOutcome(readiness.reason);
 
-  const answer = parseDetectionAnswer(raw);
-  if (answer.kind === "language") return { ok: true, language: answer.language };
-  if (answer.kind === "undetermined") return failure("unknown_language");
-  return failure("failed");
+  try {
+    const language = await contribution.execute(binding, request, host);
+    return { kind: "done", value: language };
+  } catch (error) {
+    if (options.signal?.aborted) return { kind: "cancelled" };
+    if (error instanceof DetectionChannelError) {
+      return { kind: "failed", failure: error.code };
+    }
+    return { kind: "failed", failure: "failed" };
+  }
 }
 
 /**
  * Detects the dominant language with the enabled detectors in priority order.
  *
- * Each detector runs one bounded sample: AI resolves its saved model and accepts one supported
- * ID, the free Google endpoint asks Google Translate once, and Google Cloud posts the same sample
- * to Cloud Translation v2 with the detector's stored key. A failure, an ineligible model, an
- * unreadable key, or `und` falls through to the next enabled detector. Cancellation stops the
- * chain, and no detector runs when none is enabled.
+ * Each detector runs one bounded sample through its contribution's readiness and execute hooks:
+ * AI resolves its saved model and accepts one supported ID, the free Google endpoint asks Google
+ * Translate once, and Google Cloud posts the same sample to Cloud Translation v2 with the
+ * detector's stored key. A failure, an ineligible model, an unreadable key, or `und` falls
+ * through to the next enabled detector. Cancellation stops the chain, and no detector runs when
+ * none is enabled.
  */
 export async function detectLanguage(
   text: string,
-  detectors: readonly LanguageDetectorBinding[],
+  detectors: readonly EnabledDetectionChannel[],
   options: DetectLanguageOptions = {},
 ): Promise<LanguageDetectionResult> {
   if (options.signal?.aborted) return failure("cancelled");
@@ -316,26 +238,39 @@ export async function detectLanguage(
   if (sample.length === 0) return failure("blank_input");
   if (detectors.length === 0) return failure("unconfigured");
 
-  let lastFailure: LanguageDetectionFailureCode | null = null;
-  let firstUnavailable: LanguageDetectionFailureCode | null = null;
-
+  const registry = getContributionRegistry();
+  const attempts: DetectionAttempt[] = [];
   for (const detector of detectors) {
-    if (options.signal?.aborted) return failure("cancelled");
-
-    const result =
-      detector.kind === "ai"
-        ? await detectWithAiModel(detector.modelId, sample, options)
-        : detector.kind === "google"
-          ? await detectWithGoogle(sample, options)
-          : await detectWithGoogleCloud(detector.credentialRef, sample, options);
-
-    if (result.ok || result.code === "cancelled") return result;
-    if (result.code === "no_eligible_model") {
-      firstUnavailable ??= result.code;
+    const contribution = registry.findCapability(
+      "detect",
+      detector.id,
+    ) as DetectionContribution | null;
+    if (contribution === null) {
+      log.warn("A stored language detector has no registered contribution", detector.id);
       continue;
     }
-    lastFailure = result.code;
+    attempts.push({ detector, contribution });
   }
+  if (attempts.length === 0) return failure("failed");
 
-  return failure(lastFailure ?? firstUnavailable ?? "failed");
+  const models = detectionModels(options, new Map());
+  const request: DetectionRequest = {
+    sample,
+    signal: options.signal,
+    timeoutMs: options.timeoutMs,
+  };
+
+  const outcome = await runChain(
+    attempts,
+    (attempt) => runDetector(attempt, request, options, models),
+    { continueOn: (code) => code !== "cancelled" },
+    options.signal,
+  );
+
+  if (outcome.kind === "done") return { ok: true, language: outcome.value };
+  if (outcome.kind === "cancelled") return failure("cancelled");
+  if (outcome.kind === "unavailable") {
+    return failure(outcome.reason === null ? "failed" : channelFailure(outcome.reason));
+  }
+  return failure(channelFailure(outcome.failure));
 }

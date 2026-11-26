@@ -3,8 +3,11 @@ import {
   type DetectLanguageOptions,
   type LanguageDetectionResult,
 } from "../language-detection/detect";
-import type { LanguageDetectionSnapshot } from "../language-detection/settings";
-import type { LanguageId } from "../presets/languages";
+import type {
+  EnabledDetectionChannel,
+  LanguageDetectionSnapshot,
+} from "../language-detection/preferences";
+import type { LanguageId } from "../../framework/languages";
 
 export type SourceDetectionState =
   | { status: "idle" }
@@ -47,13 +50,12 @@ export interface SourceLanguageDetection {
   dispose(): void;
 }
 
-function detectorSignature(detectors: LanguageDetectionSnapshot["detectors"]): string {
+function detectorSignature(detectors: readonly EnabledDetectionChannel[]): string {
   return detectors
-    .map((detector) => {
-      if (detector.kind === "ai") return `ai:${detector.modelId}`;
-      if (detector.kind === "google") return "google";
-      return `google-cloud:${detector.credentialRef}`;
-    })
+    .map(
+      (detector) =>
+        `${detector.id}:${JSON.stringify(detector.binding.config)}:${detector.binding.credentialRef ?? ""}`,
+    )
     .join("\u0000");
 }
 

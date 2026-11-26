@@ -1,13 +1,26 @@
-import { expect, test } from "nsh/test";
+import { beforeEach, expect, test } from "nsh/test";
+import type { LanguageId } from "../../framework/languages";
 import {
-  createLanguageDetectionSettingsStore,
-  googleCloudDetectionCredentialStorageKey,
-  LANGUAGE_DETECTION_STORAGE_KEY,
-  LANGUAGE_GOOGLE_CLOUD_CREDENTIAL_KEY_PREFIX,
+  createContributionRegistry,
+  credentialStorageKey,
+  setContributionRegistry,
+} from "../../framework/contributions";
+import { registerDetectContributions } from "../../contributions/detect";
+import {
+  createLanguageDetectionPreferencesStore,
+  LANGUAGE_DETECTION_PREFERENCES_STORAGE_KEY,
   type LanguageDetectionPreferences,
-  type LanguageDetectionSettingsStorage,
-  type LanguageDetectorKind,
-} from "./settings";
+} from "./preferences";
+import {
+  createDetectChannels,
+  DETECT_COLLECTION_STORAGE_KEY,
+  DETECT_CREDENTIAL_NAMESPACE,
+} from "./store";
+
+const PREFERENCES: LanguageDetectionPreferences = {
+  nativeLanguage: "zh",
+  preferredTranslationLanguage: "en",
+};
 
 function createMemoryStorage(initial: Record<string, string> = {}) {
   const backing: Record<string, string> = { ...initial };
@@ -16,20 +29,18 @@ function createMemoryStorage(initial: Record<string, string> = {}) {
   let failSetError: Error | null = null;
   let failRemoveError: Error | null = null;
   let setCalls = 0;
-  let setHook: (() => Promise<void>) | null = null;
 
-  const storage: LanguageDetectionSettingsStorage = {
-    getItem: async (key) => {
+  const storage = {
+    getItem: async (key: string) => {
       if (failGetError) throw failGetError;
       return backing[key] ?? null;
     },
-    setItem: async (key, value) => {
+    setItem: async (key: string, value: string) => {
       setCalls += 1;
-      if (setHook) await setHook();
       if (failSetError) throw failSetError;
       backing[key] = value;
     },
-    removeItem: async (key) => {
+    removeItem: async (key: string) => {
       if (failRemoveError) throw failRemoveError;
       removed.push(key);
       delete backing[key];
@@ -40,639 +51,466 @@ function createMemoryStorage(initial: Record<string, string> = {}) {
     backing,
     removed,
     storage,
-    setGetError: (err: Error | null) => {
-      failGetError = err;
+    setGetError: (error: Error | null) => {
+      failGetError = error;
     },
-    setSetError: (err: Error | null) => {
-      failSetError = err;
+    setSetError: (error: Error | null) => {
+      failSetError = error;
     },
-    setRemoveError: (err: Error | null) => {
-      failRemoveError = err;
+    setRemoveError: (error: Error | null) => {
+      failRemoveError = error;
     },
-    setWriteHook: (hook: (() => Promise<void>) | null) => {
-      setHook = hook;
-    },
-    getSetCalls: () => setCalls,
+    setCalls: () => setCalls,
   };
 }
 
-function detectionRecord(
+function createStores(initial: Record<string, string> = {}) {
+  const mem = createMemoryStorage(initial);
+  const channels = createDetectChannels(mem.storage);
+  const preferences = createLanguageDetectionPreferencesStore(mem.storage, { channels });
+  return { mem, channels, preferences };
+}
+
+function storedCollection(
   options: {
-    order?: readonly LanguageDetectorKind[];
-    enabled?: Partial<Record<LanguageDetectorKind, boolean>>;
-    modelId?: string | null;
-    credentialRef?: string | null;
-    nativeLanguage?: string | null;
-    preferredTranslationLanguage?: string | null;
+    order?: readonly string[];
+    channels?: Record<string, unknown>;
   } = {},
 ): string {
-  const ai =
-    options.modelId === undefined || options.modelId === null ? null : { modelId: options.modelId };
-  const googleCloud =
-    options.credentialRef === undefined || options.credentialRef === null
-      ? null
-      : { credentialRef: options.credentialRef };
   return JSON.stringify({
-    version: 4,
-    order: options.order ?? ["ai", "google", "google-cloud"],
-    enabled: {
-      ai: options.enabled?.ai ?? ai !== null,
-      google: options.enabled?.google ?? false,
-      "google-cloud": options.enabled?.["google-cloud"] ?? googleCloud !== null,
-    },
-    ai,
-    googleCloud,
-    nativeLanguage: options.nativeLanguage ?? null,
-    preferredTranslationLanguage: options.preferredTranslationLanguage ?? null,
+    version: 1,
+    order: options.order ?? [],
+    channels: options.channels ?? {},
   });
 }
 
-const PREFERENCES: LanguageDetectionPreferences = {
-  nativeLanguage: "zh",
-  preferredTranslationLanguage: "en",
-};
+beforeEach(() => {
+  const registry = createContributionRegistry();
+  registerDetectContributions(registry);
+  setContributionRegistry(registry);
+});
 
-test("detection settings: starts with no added detectors and every kind available", async () => {
-  const mem = createMemoryStorage();
-  const store = createLanguageDetectionSettingsStore(mem.storage);
+test("detection settings: starts with no added detectors and every detector available", async () => {
+  const { mem, channels, preferences } = createStores();
 
-  expect(store.detectorOrder()).toEqual([]);
-  expect(store.availableDetectors()).toEqual(["ai", "google", "google-cloud"]);
-  expect(store.isEnabled("ai")).toBe(false);
-  expect(store.isEnabled("google")).toBe(false);
-  expect(store.isEnabled("google-cloud")).toBe(false);
-  expect(store.savedAiBinding()).toBeNull();
-  expect(store.savedGoogleCloudBinding()).toBeNull();
-  expect(store.enabledDetectors()).toEqual([]);
-  expect(store.snapshot()).toEqual({
+  expect(channels.order()).toEqual([]);
+  expect(channels.available()).toEqual(["ai", "google", "google-cloud"]);
+  expect(channels.skippedCount()).toBe(0);
+  expect(channels.loadError()).toBeNull();
+  expect(preferences.preferences()).toEqual({
+    nativeLanguage: null,
+    preferredTranslationLanguage: null,
+  });
+  expect(preferences.loadError()).toBeNull();
+  expect(preferences.saveError()).toBeNull();
+
+  await channels.load();
+  await preferences.load();
+
+  expect(channels.loadError()).toBeNull();
+  expect(channels.order()).toEqual([]);
+  expect(channels.available()).toEqual(["ai", "google", "google-cloud"]);
+  expect(preferences.snapshot()).toEqual({
     detectors: [],
     nativeLanguage: null,
     preferredTranslationLanguage: null,
   });
-  expect(store.loadError()).toBeNull();
-
-  await store.load();
-  expect(store.loadError()).toBeNull();
-  expect(store.detectorOrder()).toEqual([]);
-  expect(store.availableDetectors()).toEqual(["ai", "google", "google-cloud"]);
-  expect(store.enabledDetectors()).toEqual([]);
-  expect(mem.getSetCalls()).toBe(0);
+  expect(mem.setCalls()).toBe(0);
 });
 
-test("detection settings: adding detectors appends them and enables the free Google endpoint immediately", async () => {
-  const mem = createMemoryStorage();
-  const store = createLanguageDetectionSettingsStore(mem.storage);
-  await store.load();
+test("detection settings: adds google enabled and enables ai and google-cloud on first save", async () => {
+  const { mem, channels } = createStores();
+  await channels.load();
 
-  expect((await store.addDetector("google")).ok).toBe(true);
-  expect(store.detectorOrder()).toEqual(["google"]);
-  expect(store.availableDetectors()).toEqual(["ai", "google-cloud"]);
-  expect(store.isEnabled("google")).toBe(true);
-  expect(store.enabledDetectors()).toEqual([{ kind: "google" }]);
+  expect((await channels.add("google")).ok).toBe(true);
+  expect(channels.order()).toEqual(["google"]);
+  expect(channels.available()).toEqual(["ai", "google-cloud"]);
+  expect(channels.isEnabled("google")).toBe(true);
+  expect(channels.binding("google")).toEqual({
+    enabled: true,
+    configured: true,
+    credentialRef: null,
+    config: {},
+  });
 
-  expect((await store.addDetector("ai")).ok).toBe(true);
-  expect(store.detectorOrder()).toEqual(["google", "ai"]);
-  expect(store.availableDetectors()).toEqual(["google-cloud"]);
-  expect(store.isEnabled("ai")).toBe(false);
+  expect((await channels.add("ai")).ok).toBe(true);
+  expect(channels.isEnabled("ai")).toBe(false);
+  expect(channels.binding("ai")?.configured).toBe(false);
+  expect(await channels.save("ai", { modelId: "m-1" }, { mode: "keep" })).toEqual({
+    ok: true,
+  });
+  expect(channels.isEnabled("ai")).toBe(true);
+  expect(channels.binding("ai")?.config).toEqual({ modelId: "m-1" });
 
-  // Re-adding an already added detector is a no-op without writing again.
-  const writes = mem.getSetCalls();
-  expect((await store.addDetector("google")).ok).toBe(true);
-  expect(mem.getSetCalls()).toBe(writes);
+  expect((await channels.add("google-cloud")).ok).toBe(true);
+  expect(channels.isEnabled("google-cloud")).toBe(false);
+  const saved = await channels.save(
+    "google-cloud",
+    {},
+    { mode: "replace", value: { apiKey: "cloud-key" } },
+  );
+  expect(saved.ok).toBe(true);
+  expect(channels.isEnabled("google-cloud")).toBe(true);
+  const credentialRef = channels.binding("google-cloud")?.credentialRef ?? null;
+  expect(credentialRef).not.toBeNull();
 
-  const reopened = createLanguageDetectionSettingsStore(mem.storage);
+  const collection = JSON.parse(mem.backing[DETECT_COLLECTION_STORAGE_KEY]!);
+  expect(collection.version).toBe(1);
+  expect(collection.order).toEqual(["google", "ai", "google-cloud"]);
+  expect(collection.channels.google).toEqual({
+    enabled: true,
+    configured: true,
+    config: {},
+    credentialRef: null,
+  });
+  expect(collection.channels.ai).toEqual({
+    enabled: true,
+    configured: true,
+    config: { modelId: "m-1" },
+    credentialRef: null,
+  });
+  expect(collection.channels["google-cloud"].credentialRef).toBe(credentialRef);
+  expect(mem.backing[DETECT_COLLECTION_STORAGE_KEY]!.includes("cloud-key")).toBe(false);
+  expect(mem.backing[credentialStorageKey(DETECT_CREDENTIAL_NAMESPACE, credentialRef!)]).toBe(
+    JSON.stringify({ apiKey: "cloud-key" }),
+  );
+  expect(await channels.readCredential(credentialRef)).toEqual({ apiKey: "cloud-key" });
+
+  const reopened = createDetectChannels(mem.storage);
   await reopened.load();
-  expect(reopened.detectorOrder()).toEqual(["google", "ai"]);
-  expect(reopened.availableDetectors()).toEqual(["google-cloud"]);
+  expect(reopened.order()).toEqual(["google", "ai", "google-cloud"]);
   expect(reopened.isEnabled("google")).toBe(true);
-  expect(reopened.isEnabled("ai")).toBe(false);
+  expect(reopened.binding("ai")?.config).toEqual({ modelId: "m-1" });
 });
 
-test("detection settings: removing a detector drops its binding and deletes any Google Cloud key", async () => {
-  const mem = createMemoryStorage();
-  const store = createLanguageDetectionSettingsStore(mem.storage);
-  await store.load();
+test("detection settings: saving a disabled detector keeps it disabled", async () => {
+  const { mem, channels } = createStores();
+  await channels.load();
 
-  await store.addDetector("google");
-  await store.saveAiModel("m-1");
-  const cloud = await store.saveGoogleCloudKey("cloud-secret");
-  expect(cloud.ok).toBe(true);
-  if (!cloud.ok) return;
+  expect((await channels.save("ai", { modelId: "m-1" }, { mode: "keep" })).ok).toBe(true);
+  expect(channels.isEnabled("ai")).toBe(true);
+  expect((await channels.setEnabled("ai", false)).ok).toBe(true);
 
-  expect(store.detectorOrder()).toEqual(["google", "ai", "google-cloud"]);
-  expect(store.availableDetectors()).toEqual([]);
-
-  const removedCloud = await store.removeDetector("google-cloud");
-  expect(removedCloud.ok).toBe(true);
-  expect(store.detectorOrder()).toEqual(["google", "ai"]);
-  expect(store.availableDetectors()).toEqual(["google-cloud"]);
-  expect(store.savedGoogleCloudBinding()).toBeNull();
-  expect(store.isEnabled("google-cloud")).toBe(false);
-  expect(mem.removed).toContain(
-    googleCloudDetectionCredentialStorageKey(cloud.binding.credentialRef),
-  );
-  expect(await store.readGoogleCloudCredential(cloud.binding.credentialRef)).toBeNull();
-
-  const removedAi = await store.removeDetector("ai");
-  expect(removedAi.ok).toBe(true);
-  expect(store.savedAiBinding()).toBeNull();
-  expect(store.isEnabled("ai")).toBe(false);
-  expect(store.detectorOrder()).toEqual(["google"]);
-  expect(store.availableDetectors()).toEqual(["ai", "google-cloud"]);
-
-  const reopened = createLanguageDetectionSettingsStore(mem.storage);
-  await reopened.load();
-  expect(reopened.detectorOrder()).toEqual(["google"]);
-  expect(reopened.savedAiBinding()).toBeNull();
-  expect(reopened.savedGoogleCloudBinding()).toBeNull();
+  // enableOnFirstSave applies to the first save only; editing keeps the user's switch.
+  expect((await channels.save("ai", { modelId: "m-2" }, { mode: "keep" })).ok).toBe(true);
+  expect(channels.binding("ai")?.config).toEqual({ modelId: "m-2" });
+  expect(channels.isEnabled("ai")).toBe(false);
+  expect(JSON.parse(mem.backing[DETECT_COLLECTION_STORAGE_KEY]!).channels.ai.enabled).toBe(false);
 });
 
-test("detection settings: saving the AI model adds and enables the detector and persists the v4 record", async () => {
-  const mem = createMemoryStorage();
-  const store = createLanguageDetectionSettingsStore(mem.storage);
-  await store.load();
+test("detection settings: refuses to enable an unconfigured detector and toggles a configured one", async () => {
+  const { channels, preferences } = createStores();
+  await channels.load();
+  await preferences.load();
 
-  const result = await store.saveAiModel("m-1");
-  expect(result.ok).toBe(true);
-  if (result.ok) expect(result.binding).toEqual({ kind: "ai", modelId: "m-1" });
+  const missing = await channels.setEnabled("google-cloud", true);
+  expect(missing.ok).toBe(false);
+  if (!missing.ok) expect(missing.key).toBe("channel_unconfigured");
 
-  expect(store.detectorOrder()).toEqual(["ai"]);
-  expect(store.savedAiBinding()).toEqual({ kind: "ai", modelId: "m-1" });
-  expect(store.isEnabled("ai")).toBe(true);
-  expect(store.isEnabled("google")).toBe(false);
-  expect(store.enabledDetectors()).toEqual([{ kind: "ai", modelId: "m-1" }]);
+  await channels.add("google");
+  expect((await channels.setEnabled("google", false)).ok).toBe(true);
+  expect(channels.isEnabled("google")).toBe(false);
+  expect(preferences.snapshot().detectors).toEqual([]);
+  expect((await channels.setEnabled("google", true)).ok).toBe(true);
+  expect(preferences.snapshot().detectors.map((detector) => detector.id)).toEqual(["google"]);
 
-  expect(JSON.parse(mem.backing[LANGUAGE_DETECTION_STORAGE_KEY]!)).toEqual({
-    version: 4,
-    order: ["ai"],
-    enabled: { ai: true, google: false, "google-cloud": false },
-    ai: { modelId: "m-1" },
-    googleCloud: null,
-    nativeLanguage: null,
-    preferredTranslationLanguage: null,
-  });
-
-  const reopened = createLanguageDetectionSettingsStore(mem.storage);
-  await reopened.load();
-  expect(reopened.loadError()).toBeNull();
-  expect(reopened.detectorOrder()).toEqual(["ai"]);
-  expect(reopened.savedAiBinding()).toEqual({ kind: "ai", modelId: "m-1" });
-  expect(reopened.enabledDetectors()).toEqual([{ kind: "ai", modelId: "m-1" }]);
-});
-
-test("detection settings: editing a disabled AI detector keeps it disabled", async () => {
-  const mem = createMemoryStorage();
-  const store = createLanguageDetectionSettingsStore(mem.storage);
-  await store.load();
-
-  await store.saveAiModel("m-1");
-  const disabled = await store.setEnabled("ai", false);
-  expect(disabled.ok).toBe(true);
-
-  const edited = await store.saveAiModel("m-2");
-  expect(edited.ok).toBe(true);
-  expect(store.savedAiBinding()).toEqual({ kind: "ai", modelId: "m-2" });
-  expect(store.isEnabled("ai")).toBe(false);
-  expect(store.enabledDetectors()).toEqual([]);
-  expect(JSON.parse(mem.backing[LANGUAGE_DETECTION_STORAGE_KEY]!).enabled.ai).toBe(false);
-});
-
-test("detection settings: the free Google endpoint enables after being added and unconfigured detectors refuse to enable", async () => {
-  const mem = createMemoryStorage();
-  const store = createLanguageDetectionSettingsStore(mem.storage);
-  await store.load();
-
-  const googleBeforeAdd = await store.setEnabled("google", true);
-  expect(googleBeforeAdd.ok).toBe(false);
-  if (!googleBeforeAdd.ok) expect(googleBeforeAdd.key).toBe("detector_unconfigured");
-
-  const google = await store.addDetector("google");
-  expect(google.ok).toBe(true);
-  expect(store.isEnabled("google")).toBe(true);
-  expect(store.enabledDetectors()).toEqual([{ kind: "google" }]);
-  expect((await store.setEnabled("google", false)).ok).toBe(true);
-  expect(store.isEnabled("google")).toBe(false);
-  expect((await store.setEnabled("google", true)).ok).toBe(true);
-  expect(store.isEnabled("google")).toBe(true);
-
-  await store.addDetector("ai");
-  const ai = await store.setEnabled("ai", true);
-  expect(ai.ok).toBe(false);
-  if (!ai.ok) expect(ai.key).toBe("detector_unconfigured");
-  expect(store.isEnabled("ai")).toBe(false);
-
-  await store.addDetector("google-cloud");
-  const cloud = await store.setEnabled("google-cloud", true);
-  expect(cloud.ok).toBe(false);
-  if (!cloud.ok) expect(cloud.key).toBe("detector_unconfigured");
-  expect(store.isEnabled("google-cloud")).toBe(false);
-
-  await store.saveAiModel("m-1");
-  expect(store.isEnabled("ai")).toBe(true);
-  expect(store.enabledDetectors()).toEqual([{ kind: "google" }, { kind: "ai", modelId: "m-1" }]);
-});
-
-test("detection settings: saves a Google Cloud key apart from the record and replaces the old key", async () => {
-  const mem = createMemoryStorage();
-  const store = createLanguageDetectionSettingsStore(mem.storage);
-  await store.load();
-
-  const saved = await store.saveGoogleCloudKey("first-key");
-  expect(saved.ok).toBe(true);
-  if (!saved.ok) return;
-  const firstRef = saved.binding.credentialRef;
-
-  expect(store.savedGoogleCloudBinding()).toEqual({
-    kind: "google-cloud",
-    credentialRef: firstRef,
-  });
-  expect(store.isEnabled("google-cloud")).toBe(true);
-  expect(store.enabledDetectors()).toEqual([{ kind: "google-cloud", credentialRef: firstRef }]);
-  expect(mem.backing[googleCloudDetectionCredentialStorageKey(firstRef)]).toBe("first-key");
-  expect(mem.backing[LANGUAGE_DETECTION_STORAGE_KEY]!.includes("first-key")).toBe(false);
-  expect(await store.readGoogleCloudCredential(firstRef)).toBe("first-key");
-
-  const disabled = await store.setEnabled("google-cloud", false);
-  expect(disabled.ok).toBe(true);
-
-  const replaced = await store.saveGoogleCloudKey("second-key");
-  expect(replaced.ok).toBe(true);
-  if (!replaced.ok) return;
-  expect(replaced.binding.credentialRef).not.toBe(firstRef);
-  expect(mem.removed).toContain(googleCloudDetectionCredentialStorageKey(firstRef));
-  expect(await store.readGoogleCloudCredential(firstRef)).toBeNull();
-  expect(await store.readGoogleCloudCredential(replaced.binding.credentialRef)).toBe("second-key");
-  expect(store.isEnabled("google-cloud")).toBe(false);
-
-  const reopened = createLanguageDetectionSettingsStore(mem.storage);
-  await reopened.load();
-  expect(reopened.loadError()).toBeNull();
-  expect(reopened.savedGoogleCloudBinding()).toEqual({
-    kind: "google-cloud",
-    credentialRef: replaced.binding.credentialRef,
-  });
-  expect(await reopened.readGoogleCloudCredential(replaced.binding.credentialRef)).toBe(
-    "second-key",
-  );
-});
-
-test("detection settings: reuses a readable Google Cloud key and rejects a blank one", async () => {
-  const mem = createMemoryStorage();
-  const store = createLanguageDetectionSettingsStore(mem.storage);
-  await store.load();
-
-  const blank = await store.saveGoogleCloudKey("   ");
-  expect(blank.ok).toBe(false);
-  if (!blank.ok) expect(blank.key).toBe("google_cloud_key_required");
-  expect(mem.getSetCalls()).toBe(0);
-
-  const nothingSaved = await store.saveGoogleCloudKey(null);
-  expect(nothingSaved.ok).toBe(false);
-  if (!nothingSaved.ok) expect(nothingSaved.key).toBe("google_cloud_key_required");
-
-  const saved = await store.saveGoogleCloudKey("cloud-key");
-  expect(saved.ok).toBe(true);
-  if (!saved.ok) return;
-
-  const kept = await store.saveGoogleCloudKey(null);
-  expect(kept.ok).toBe(true);
-  if (!kept.ok) return;
-  expect(kept.binding.credentialRef).toBe(saved.binding.credentialRef);
-  expect(await store.readGoogleCloudCredential(saved.binding.credentialRef)).toBe("cloud-key");
-  expect(mem.removed).toEqual([]);
-});
-
-test("detection settings: a failed old-key cleanup does not undo the new key", async () => {
-  const mem = createMemoryStorage();
-  const store = createLanguageDetectionSettingsStore(mem.storage);
-  await store.load();
-
-  const first = await store.saveGoogleCloudKey("first-key");
-  expect(first.ok).toBe(true);
-  if (!first.ok) return;
-
-  mem.setRemoveError(new Error("ERR_NSH_IO"));
-  const replaced = await store.saveGoogleCloudKey("second-key");
-  expect(replaced.ok).toBe(true);
-  if (!replaced.ok) return;
-  expect(store.savedGoogleCloudBinding()).toEqual({
-    kind: "google-cloud",
-    credentialRef: replaced.binding.credentialRef,
-  });
-  expect(await store.readGoogleCloudCredential(replaced.binding.credentialRef)).toBe("second-key");
+  await channels.add("ai");
+  const unconfigured = await channels.setEnabled("ai", true);
+  expect(unconfigured.ok).toBe(false);
+  expect(preferences.snapshot().detectors.map((detector) => detector.id)).toEqual(["google"]);
 });
 
 test("detection settings: reorders detectors, clamps targets, and keeps same-slot moves inert", async () => {
-  const mem = createMemoryStorage();
-  const store = createLanguageDetectionSettingsStore(mem.storage);
-  await store.load();
-  await store.saveAiModel("m-1");
-  await store.addDetector("google");
-  await store.addDetector("google-cloud");
+  const { mem, channels } = createStores();
+  await channels.load();
+  await channels.add("google");
+  await channels.save("ai", { modelId: "m-1" }, { mode: "keep" });
+  await channels.save("google-cloud", {}, { mode: "replace", value: { apiKey: "cloud-key" } });
 
-  const moved = await store.moveDetectorTo("google", 0);
-  expect(moved.ok).toBe(true);
-  expect(store.detectorOrder()).toEqual(["google", "ai", "google-cloud"]);
-  expect(store.enabledDetectors()).toEqual([{ kind: "google" }, { kind: "ai", modelId: "m-1" }]);
+  expect(channels.order()).toEqual(["google", "ai", "google-cloud"]);
+  const writes = mem.setCalls();
+  expect((await channels.moveTo("google", 0)).ok).toBe(true);
+  expect((await channels.moveTo("ai", 1)).ok).toBe(true);
+  expect(mem.setCalls()).toBe(writes);
 
-  const writes = mem.getSetCalls();
-  expect((await store.moveDetectorTo("google", 0)).ok).toBe(true);
-  expect((await store.moveDetectorTo("ai", 1)).ok).toBe(true);
-  expect(mem.getSetCalls()).toBe(writes);
+  expect((await channels.moveTo("google", 2)).ok).toBe(true);
+  expect(channels.order()).toEqual(["ai", "google-cloud", "google"]);
+  expect((await channels.moveTo("google", -5)).ok).toBe(true);
+  expect(channels.order()).toEqual(["google", "ai", "google-cloud"]);
+  expect((await channels.moveTo("google", 99)).ok).toBe(true);
+  expect(channels.order()).toEqual(["ai", "google-cloud", "google"]);
 
-  expect((await store.moveDetectorTo("google", 99)).ok).toBe(true);
-  expect(store.detectorOrder()).toEqual(["ai", "google-cloud", "google"]);
-  expect((await store.moveDetectorTo("google", -5)).ok).toBe(true);
-  expect(store.detectorOrder()).toEqual(["google", "ai", "google-cloud"]);
-
-  const reopened = createLanguageDetectionSettingsStore(mem.storage);
+  const reopened = createDetectChannels(mem.storage);
   await reopened.load();
-  expect(reopened.detectorOrder()).toEqual(["google", "ai", "google-cloud"]);
+  expect(reopened.order()).toEqual(["ai", "google-cloud", "google"]);
 });
 
-test("detection settings: saves and restores the language preferences", async () => {
-  const mem = createMemoryStorage();
-  const store = createLanguageDetectionSettingsStore(mem.storage);
-  await store.load();
+test("detection settings: removing a detector also clears its stored credential", async () => {
+  const { mem, channels } = createStores();
+  await channels.load();
+  await channels.add("google-cloud");
+  await channels.save("google-cloud", {}, { mode: "replace", value: { apiKey: "cloud-key" } });
+  const credentialRef = channels.binding("google-cloud")?.credentialRef ?? null;
+  const credentialKey = credentialStorageKey(DETECT_CREDENTIAL_NAMESPACE, credentialRef!);
+  expect(mem.backing[credentialKey]).toBeDefined();
 
-  const native = await store.setPreference("nativeLanguage", "zh");
-  expect(native.ok).toBe(true);
-  const preferred = await store.setPreference("preferredTranslationLanguage", "en");
-  expect(preferred.ok).toBe(true);
-  expect(store.preferences()).toEqual(PREFERENCES);
-  expect(store.snapshot()).toEqual({
-    detectors: [],
-    nativeLanguage: "zh",
-    preferredTranslationLanguage: "en",
-  });
+  expect((await channels.remove("google-cloud")).ok).toBe(true);
+  expect(channels.order()).toEqual([]);
+  expect(channels.available()).toEqual(["ai", "google", "google-cloud"]);
+  expect(channels.binding("google-cloud")).toBeNull();
+  expect(channels.isEnabled("google-cloud")).toBe(false);
+  expect(mem.removed).toContain(credentialKey);
+  expect(mem.backing[credentialKey]).toBeUndefined();
+  expect(await channels.readCredential(credentialRef)).toBeNull();
 
-  const raw = JSON.parse(mem.backing[LANGUAGE_DETECTION_STORAGE_KEY]!);
-  expect(raw.nativeLanguage).toBe("zh");
-  expect(raw.preferredTranslationLanguage).toBe("en");
-
-  const reopened = createLanguageDetectionSettingsStore(mem.storage);
+  const reopened = createDetectChannels(mem.storage);
   await reopened.load();
-  expect(reopened.loadError()).toBeNull();
-  expect(reopened.snapshot()).toEqual({
+  expect(reopened.order()).toEqual([]);
+});
+
+test("detection settings: reports malformed and unsupported stored collections without writing", async () => {
+  for (const [raw, key] of [
+    ["{ not json", "storage_malformed"],
+    [JSON.stringify({ version: 2, order: [], channels: {} }), "storage_unsupported_version"],
+    [
+      JSON.stringify({ version: 1, order: ["google"], channels: { google: { enabled: true } } }),
+      "storage_malformed",
+    ],
+  ]) {
+    const { mem, channels } = createStores({ [DETECT_COLLECTION_STORAGE_KEY]: raw });
+    await channels.load();
+
+    expect(channels.loadError()?.key).toBe(key);
+    expect(channels.loadError()?.message).toBeTruthy();
+    expect(channels.order()).toEqual([]);
+    expect(mem.backing[DETECT_COLLECTION_STORAGE_KEY]).toBe(raw);
+    expect(mem.setCalls()).toBe(0);
+  }
+});
+
+test("detection settings: rejects malformed configs and unsupported channel actions", async () => {
+  const { mem, channels } = createStores();
+  await channels.load();
+
+  const invalid = await channels.save("ai", { modelId: 42 }, { mode: "keep" });
+  expect(invalid.ok).toBe(false);
+  if (!invalid.ok) expect(invalid.key).toBe("invalid_config");
+
+  const notConfigurable = await channels.save("google", {}, { mode: "keep" });
+  expect(notConfigurable.ok).toBe(false);
+  if (!notConfigurable.ok) expect(notConfigurable.key).toBe("channel_not_configurable");
+
+  const unknown = await channels.save("unknown", {}, { mode: "keep" });
+  expect(unknown.ok).toBe(false);
+  if (!unknown.ok) expect(unknown.key).toBe("unknown_channel");
+
+  expect(mem.backing[DETECT_COLLECTION_STORAGE_KEY]).toBeUndefined();
+});
+
+test("detection settings: counts a stored channel that this build no longer registers", async () => {
+  const raw = storedCollection({
+    order: ["google", "legacy"],
+    channels: {
+      google: { enabled: true, configured: true, config: {}, credentialRef: null },
+      legacy: { enabled: true, configured: true, config: {}, credentialRef: null },
+    },
+  });
+  const { mem, channels } = createStores({ [DETECT_COLLECTION_STORAGE_KEY]: raw });
+  await channels.load();
+
+  expect(channels.loadError()).toBeNull();
+  expect(channels.skippedCount()).toBe(1);
+  expect(channels.order()).toEqual(["google"]);
+  expect(channels.binding("legacy")).toBeNull();
+  expect(channels.available()).toEqual(["ai", "google-cloud"]);
+  expect(mem.backing[DETECT_COLLECTION_STORAGE_KEY]).toBe(raw);
+  expect(mem.setCalls()).toBe(0);
+});
+
+test("detection settings: loads preferences independently and snapshots enabled detectors with them", async () => {
+  const { mem, channels, preferences } = createStores();
+  await preferences.load();
+
+  expect((await preferences.setPreference("nativeLanguage", "zh")).ok).toBe(true);
+  expect((await preferences.setPreference("preferredTranslationLanguage", "en")).ok).toBe(true);
+  expect(preferences.preferences()).toEqual(PREFERENCES);
+  expect(JSON.parse(mem.backing[LANGUAGE_DETECTION_PREFERENCES_STORAGE_KEY]!)).toEqual({
+    version: 1,
+    nativeLanguage: "zh",
+    preferredTranslationLanguage: "en",
+  });
+  expect(preferences.snapshot()).toEqual({
     detectors: [],
     nativeLanguage: "zh",
     preferredTranslationLanguage: "en",
   });
+
+  await channels.load();
+  await channels.add("google");
+  const snapshot = preferences.snapshot();
+  expect(snapshot.detectors.map((detector) => detector.id)).toEqual(["google"]);
+  expect(snapshot.detectors[0]!.binding.enabled).toBe(true);
+  expect(snapshot).toMatchObject({
+    nativeLanguage: "zh",
+    preferredTranslationLanguage: "en",
+  });
+
+  const reopened = createLanguageDetectionPreferencesStore(mem.storage, { channels });
+  await reopened.load();
+  expect(reopened.preferences()).toEqual(PREFERENCES);
+  expect(reopened.loadError()).toBeNull();
 });
 
 test("detection settings: rejects invalid and identical preferences without writing", async () => {
-  const mem = createMemoryStorage();
-  const store = createLanguageDetectionSettingsStore(mem.storage);
-  await store.load();
+  const { mem, preferences } = createStores();
+  await preferences.load();
 
-  const automatic = await store.setPreference(
+  const automatic = await preferences.setPreference(
     "nativeLanguage",
-    "auto" as unknown as LanguageDetectionPreferences["nativeLanguage"],
+    "auto" as unknown as LanguageId,
   );
   expect(automatic.ok).toBe(false);
   if (!automatic.ok) expect(automatic.key).toBe("preference_invalid");
+  expect(mem.setCalls()).toBe(0);
 
-  const native = await store.setPreference("nativeLanguage", "zh");
-  expect(native.ok).toBe(true);
+  expect((await preferences.setPreference("nativeLanguage", "zh")).ok).toBe(true);
+  expect(preferences.saveError()).toBeNull();
 
-  const identical = await store.setPreference("preferredTranslationLanguage", "zh");
+  const identical = await preferences.setPreference("preferredTranslationLanguage", "zh");
   expect(identical.ok).toBe(false);
   if (!identical.ok) expect(identical.key).toBe("preferences_identical");
-
-  expect(mem.getSetCalls()).toBe(1);
-  expect(store.snapshot()).toEqual({
-    detectors: [],
+  expect(preferences.saveError()).toBeTruthy();
+  expect(mem.setCalls()).toBe(1);
+  expect(preferences.preferences()).toEqual({
     nativeLanguage: "zh",
     preferredTranslationLanguage: null,
   });
+
+  expect((await preferences.setPreference("preferredTranslationLanguage", "en")).ok).toBe(true);
+  expect(preferences.saveError()).toBeNull();
+  expect((await preferences.setPreference("nativeLanguage", null)).ok).toBe(true);
+  expect(preferences.preferences()).toEqual({
+    nativeLanguage: null,
+    preferredTranslationLanguage: "en",
+  });
 });
 
-test("detection settings: keeps malformed storage untouched and reports a load error", async () => {
-  const raw = "{ not json";
-  const mem = createMemoryStorage({ [LANGUAGE_DETECTION_STORAGE_KEY]: raw });
-  const store = createLanguageDetectionSettingsStore(mem.storage);
-  await store.load();
-
-  expect(store.loadError()?.key).toBe("storage_malformed");
-  expect(store.loadError()?.message).toBeTruthy();
-  expect(store.enabledDetectors()).toEqual([]);
-  expect(store.detectorOrder()).toEqual([]);
-  expect(mem.backing[LANGUAGE_DETECTION_STORAGE_KEY]).toBe(raw);
-  expect(mem.getSetCalls()).toBe(0);
-});
-
-test("detection settings: keeps an unsupported version untouched and reports a load error", async () => {
-  const raw = detectionRecord({ modelId: "m-1" }).replace('"version":4', '"version":3');
-  const mem = createMemoryStorage({ [LANGUAGE_DETECTION_STORAGE_KEY]: raw });
-  const store = createLanguageDetectionSettingsStore(mem.storage);
-  await store.load();
-
-  expect(store.loadError()?.key).toBe("storage_unsupported_version");
-  expect(store.enabledDetectors()).toEqual([]);
-  expect(mem.backing[LANGUAGE_DETECTION_STORAGE_KEY]).toBe(raw);
-  expect(mem.getSetCalls()).toBe(0);
-});
-
-test("detection settings: rejects an enabled detector without its saved configuration or list entry", async () => {
-  const records = [
-    detectionRecord({ enabled: { ai: true }, modelId: null }),
-    detectionRecord({ enabled: { "google-cloud": true }, credentialRef: null }),
-    detectionRecord({ order: [], enabled: { google: true } }),
-    detectionRecord({ order: ["google"], modelId: "m-1", enabled: { ai: false } }),
-    detectionRecord({
-      order: ["google"],
-      credentialRef: "ref-1",
-      enabled: { "google-cloud": false },
-    }),
-  ];
-
-  for (const raw of records) {
-    const mem = createMemoryStorage({ [LANGUAGE_DETECTION_STORAGE_KEY]: raw });
-    const store = createLanguageDetectionSettingsStore(mem.storage);
-    await store.load();
-
-    expect(store.loadError()?.key).toBe("storage_malformed");
-    expect(store.enabledDetectors()).toEqual([]);
-    expect(store.savedAiBinding()).toBeNull();
-    expect(store.savedGoogleCloudBinding()).toBeNull();
-    expect(mem.getSetCalls()).toBe(0);
-  }
-});
-
-test("detection settings: rejects a malformed order, enabled map, or detector binding", async () => {
-  const records = [
-    JSON.stringify({ version: 4, order: ["ai"], enabled: {}, ai: null, googleCloud: null }),
-    JSON.stringify({
-      version: 4,
-      order: ["ai", "ai"],
-      enabled: { ai: false, google: false, "google-cloud": false },
-      ai: null,
-      googleCloud: null,
-    }),
-    JSON.stringify({
-      version: 4,
-      order: ["ai", "google", "google-cloud"],
-      enabled: { ai: false, google: "no", "google-cloud": false },
-      ai: null,
-      googleCloud: null,
-    }),
-    JSON.stringify({
-      version: 4,
-      order: ["ai", "google", "google-cloud"],
-      enabled: { ai: false, google: false, "google-cloud": false },
-      ai: { modelId: 42 },
-      googleCloud: null,
-    }),
-    JSON.stringify({
-      version: 4,
-      order: ["ai", "google", "google-cloud"],
-      enabled: { ai: false, google: false, "google-cloud": false },
-      ai: null,
-      googleCloud: { credentialRef: "   " },
-    }),
-  ];
-
-  for (const raw of records) {
-    const mem = createMemoryStorage({ [LANGUAGE_DETECTION_STORAGE_KEY]: raw });
-    const store = createLanguageDetectionSettingsStore(mem.storage);
-    await store.load();
-    expect(store.loadError()?.key).toBe("storage_malformed");
-    expect(store.detectorOrder()).toEqual([]);
-    expect(mem.backing[LANGUAGE_DETECTION_STORAGE_KEY]).toBe(raw);
-    expect(mem.getSetCalls()).toBe(0);
-  }
-});
-
-test("detection settings: reports a read failure and keeps detection off", async () => {
-  const mem = createMemoryStorage();
-  mem.setGetError(new Error("ERR_NSH_IO"));
-  const store = createLanguageDetectionSettingsStore(mem.storage);
-  await store.load();
-
-  expect(store.loadError()?.key).toBe("storage_read_failed");
-  expect(store.enabledDetectors()).toEqual([]);
-});
-
-test("detection settings: rejects a blank model ID without writing", async () => {
-  const mem = createMemoryStorage();
-  const store = createLanguageDetectionSettingsStore(mem.storage);
-  await store.load();
-
-  const blank = await store.saveAiModel("   ");
-  expect(blank.ok).toBe(false);
-  if (!blank.ok) expect(blank.key).toBe("model_id_blank");
-  expect(mem.getSetCalls()).toBe(0);
-  expect(store.savedAiBinding()).toBeNull();
-});
-
-test("detection settings: keeps the last saved snapshot when a write fails", async () => {
-  const mem = createMemoryStorage();
-  const store = createLanguageDetectionSettingsStore(mem.storage);
-  await store.load();
-  await store.saveAiModel("m-1");
-  await store.addDetector("google");
-  const savedOrder = store.detectorOrder();
+test("detection settings: keeps the saved preferences when a write fails", async () => {
+  const { mem, preferences } = createStores();
+  await preferences.load();
+  expect((await preferences.setPreference("nativeLanguage", "zh")).ok).toBe(true);
 
   mem.setSetError(new Error("ERR_NSH_QUOTA_EXCEEDED"));
-  const failed = await store.moveDetectorTo("ai", 1);
-
-  expect(failed.ok).toBe(false);
-  if (!failed.ok) expect(failed.key).toBe("storage_write_failed");
-  expect(store.detectorOrder()).toEqual(savedOrder);
-  expect(store.savedAiBinding()).toEqual({ kind: "ai", modelId: "m-1" });
-
+  const failed = await preferences.setPreference("preferredTranslationLanguage", "en");
   mem.setSetError(null);
-  const reopened = createLanguageDetectionSettingsStore(mem.storage);
-  await reopened.load();
-  expect(reopened.detectorOrder()).toEqual(savedOrder);
-  expect(reopened.savedAiBinding()).toEqual({ kind: "ai", modelId: "m-1" });
-});
-
-test("detection settings: a failed record write removes the key it just stored", async () => {
-  const mem = createMemoryStorage();
-  const store = createLanguageDetectionSettingsStore(mem.storage);
-  await store.load();
-  const saved = await store.saveGoogleCloudKey("first-key");
-  expect(saved.ok).toBe(true);
-  if (!saved.ok) return;
-
-  let writes = 0;
-  mem.setWriteHook(async () => {
-    writes += 1;
-    if (writes === 2) throw new Error("ERR_NSH_QUOTA_EXCEEDED");
-  });
-  const failed = await store.saveGoogleCloudKey("second-key");
-  mem.setWriteHook(null);
 
   expect(failed.ok).toBe(false);
   if (!failed.ok) expect(failed.key).toBe("storage_write_failed");
-  expect(store.savedGoogleCloudBinding()).toEqual(saved.binding);
-  const storedKeys = Object.keys(mem.backing).filter((key) =>
-    key.startsWith(LANGUAGE_GOOGLE_CLOUD_CREDENTIAL_KEY_PREFIX),
-  );
-  expect(storedKeys).toEqual([
-    googleCloudDetectionCredentialStorageKey(saved.binding.credentialRef),
-  ]);
-});
-
-test("detection settings: serializes writes so a late failure cannot replace a saved snapshot", async () => {
-  const mem = createMemoryStorage();
-  const store = createLanguageDetectionSettingsStore(mem.storage);
-  await store.load();
-
-  let releaseFirstWrite = () => {};
-  const firstWriteGate = new Promise<void>((resolve) => {
-    releaseFirstWrite = resolve;
+  expect(preferences.saveError()).toBeTruthy();
+  expect(preferences.preferences()).toEqual({
+    nativeLanguage: "zh",
+    preferredTranslationLanguage: null,
   });
-  let writeCount = 0;
-  mem.setWriteHook(async () => {
-    writeCount += 1;
-    if (writeCount === 1) await firstWriteGate;
+  expect(JSON.parse(mem.backing[LANGUAGE_DETECTION_PREFERENCES_STORAGE_KEY]!)).toEqual({
+    version: 1,
+    nativeLanguage: "zh",
+    preferredTranslationLanguage: null,
   });
 
-  const first = store.saveAiModel("m-1");
-  const second = store.setPreference("nativeLanguage", "zh");
-  releaseFirstWrite();
-
-  const [firstResult, secondResult] = await Promise.all([first, second]);
-  expect(firstResult.ok).toBe(true);
-  expect(secondResult.ok).toBe(true);
-  expect(mem.getSetCalls()).toBe(2);
-  expect(store.savedAiBinding()).toEqual({ kind: "ai", modelId: "m-1" });
-  expect(store.snapshot()).toEqual({
-    detectors: [{ kind: "ai", modelId: "m-1" }],
+  const reopened = createLanguageDetectionPreferencesStore(mem.storage, {
+    channels: createDetectChannels(mem.storage),
+  });
+  await reopened.load();
+  expect(reopened.preferences()).toEqual({
     nativeLanguage: "zh",
     preferredTranslationLanguage: null,
   });
 });
 
-test("detection settings: loads a disabled saved configuration and one unset preference", async () => {
-  const mem = createMemoryStorage({
-    [LANGUAGE_DETECTION_STORAGE_KEY]: detectionRecord({
-      order: ["google", "google-cloud", "ai"],
-      enabled: { ai: false, google: false, "google-cloud": false },
-      modelId: "m-1",
-      credentialRef: "ref-1",
-      nativeLanguage: "zh",
-    }),
-    [googleCloudDetectionCredentialStorageKey("ref-1")]: "cloud-key",
-  });
-  const store = createLanguageDetectionSettingsStore(mem.storage);
-  await store.load();
+test("detection settings: reports malformed and unsupported preference records without writing", async () => {
+  const records: [string, string][] = [
+    ["{ not json", "storage_malformed"],
+    [
+      JSON.stringify({ version: 2, nativeLanguage: null, preferredTranslationLanguage: null }),
+      "storage_unsupported_version",
+    ],
+    [
+      JSON.stringify({ version: 1, nativeLanguage: "auto", preferredTranslationLanguage: null }),
+      "storage_malformed",
+    ],
+    [
+      JSON.stringify({ version: 1, nativeLanguage: "zh", preferredTranslationLanguage: "zh" }),
+      "storage_malformed",
+    ],
+  ];
+  for (const [raw, key] of records) {
+    const { mem, preferences } = createStores({
+      [LANGUAGE_DETECTION_PREFERENCES_STORAGE_KEY]: raw,
+    });
+    await preferences.load();
 
-  expect(store.loadError()).toBeNull();
-  expect(store.detectorOrder()).toEqual(["google", "google-cloud", "ai"]);
-  expect(store.savedAiBinding()).toEqual({ kind: "ai", modelId: "m-1" });
-  expect(store.savedGoogleCloudBinding()).toEqual({
-    kind: "google-cloud",
-    credentialRef: "ref-1",
-  });
-  expect(store.enabledDetectors()).toEqual([]);
-  expect(store.snapshot()).toEqual({
+    expect(preferences.loadError()?.key).toBe(key);
+    expect(preferences.loadError()?.message).toBeTruthy();
+    expect(preferences.preferences()).toEqual({
+      nativeLanguage: null,
+      preferredTranslationLanguage: null,
+    });
+    expect(mem.backing[LANGUAGE_DETECTION_PREFERENCES_STORAGE_KEY]).toBe(raw);
+    expect(mem.setCalls()).toBe(0);
+  }
+});
+
+test("detection settings: reports a collection read failure and keeps detection off", async () => {
+  const { mem, channels, preferences } = createStores();
+  mem.setGetError(new Error("ERR_NSH_IO"));
+  await channels.load();
+  await preferences.load();
+
+  expect(channels.loadError()?.key).toBe("storage_read_failed");
+  expect(channels.order()).toEqual([]);
+  expect(preferences.loadError()?.key).toBe("storage_read_failed");
+  expect(preferences.snapshot()).toEqual({
     detectors: [],
-    nativeLanguage: "zh",
+    nativeLanguage: null,
     preferredTranslationLanguage: null,
   });
-  expect(await store.readGoogleCloudCredential("ref-1")).toBe("cloud-key");
-  expect(await store.readGoogleCloudCredential("missing-ref")).toBeNull();
+});
+test("pre-acceptance: a failed preferences load blocks changes", async () => {
+  const malformed = JSON.stringify({
+    version: 1,
+    nativeLanguage: "xx",
+    preferredTranslationLanguage: null,
+  });
+  const { mem, preferences } = createStores({
+    [LANGUAGE_DETECTION_PREFERENCES_STORAGE_KEY]: malformed,
+  });
+  await preferences.load();
+
+  const loadError = preferences.loadError();
+  expect(loadError).toMatchObject({ key: "storage_malformed" });
+  const before = mem.backing[LANGUAGE_DETECTION_PREFERENCES_STORAGE_KEY];
+  expect(before).toBe(malformed);
+
+  const blocked = await preferences.setPreference("nativeLanguage", "zh");
+  expect(blocked).toMatchObject({
+    ok: false,
+    key: "storage_malformed",
+    message: loadError!.message,
+  });
+  expect(mem.backing[LANGUAGE_DETECTION_PREFERENCES_STORAGE_KEY]).toBe(before);
+  expect(mem.setCalls()).toBe(0);
+  expect(preferences.preferences()).toEqual({
+    nativeLanguage: null,
+    preferredTranslationLanguage: null,
+  });
+
+  mem.backing[LANGUAGE_DETECTION_PREFERENCES_STORAGE_KEY] = JSON.stringify({
+    version: 1,
+    nativeLanguage: null,
+    preferredTranslationLanguage: null,
+  });
+  await preferences.load();
+  expect(preferences.loadError()).toBeNull();
+  expect(await preferences.setPreference("nativeLanguage", "zh")).toEqual({ ok: true });
+  expect(mem.setCalls()).toBe(1);
 });

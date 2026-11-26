@@ -1,6 +1,6 @@
-import { AUTO_LANGUAGE, type LanguageId, type TargetLanguageId } from "../presets/languages";
+import { AUTO_LANGUAGE, type LanguageId, type TargetLanguageId } from "../../framework/languages";
 import type { LanguageDetectionFailureCode } from "./detect";
-import type { LanguageDetectionSnapshot } from "./settings";
+import type { LanguageDetectionSnapshot } from "./preferences";
 
 export type LanguageResolutionFailureCode =
   | LanguageDetectionFailureCode

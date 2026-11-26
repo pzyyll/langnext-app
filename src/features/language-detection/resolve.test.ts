@@ -1,10 +1,15 @@
 import { expect, test } from "nsh/test";
 import { resolveTargetLanguage } from "./resolve";
-import type { LanguageDetectionSnapshot } from "./settings";
+import type { EnabledDetectionChannel, LanguageDetectionSnapshot } from "./preferences";
+
+const AI_DETECTOR: EnabledDetectionChannel = {
+  id: "ai",
+  binding: { enabled: true, configured: true, credentialRef: null, config: { modelId: "m1" } },
+};
 
 function detection(overrides: Partial<LanguageDetectionSnapshot> = {}): LanguageDetectionSnapshot {
   return {
-    detectors: [{ kind: "ai", modelId: "m1" }],
+    detectors: [AI_DETECTOR],
     nativeLanguage: "zh",
     preferredTranslationLanguage: "en",
     ...overrides,
