@@ -54,8 +54,10 @@ export interface ModelChoiceOption {
   label: string;
 }
 
-/** Whether a saved model can serve a purpose, with the reason when it cannot. */
-export type ModelBindingStatus = { ok: true; label: string } | { ok: false; reason: string };
+/** Whether a saved model can serve a purpose, with its label and reason when it cannot. */
+export type ModelBindingStatus =
+  | { ok: true; label: string }
+  | { ok: false; reason: string; label?: string };
 
 /** The protocol route plus transient credential a model call runs with. */
 export interface ModelConnectionRoute {
@@ -140,6 +142,11 @@ export interface ChannelSettingsProps<C = unknown> {
   onClearCredential(): void;
 }
 
+/** Resolvers a list summary may use without importing feature state. */
+export interface ChannelDescribeHost {
+  resolveModelBinding?: (modelId: string, purpose: ModelPurpose) => ModelBindingStatus;
+}
+
 /** Everything one capability call receives: its credential plus host services. */
 export interface HostServices {
   /** Credential read for this single channel call; never exposes other channel refs. */
@@ -177,7 +184,7 @@ export interface CapabilityChannelContribution<
   configurable: boolean;
   config: ConfigSchema<C>;
   credential: readonly CredentialField[] | null;
-  describe(binding: ChannelBinding<C>): string;
+  describe(binding: ChannelBinding<C>, host?: ChannelDescribeHost): string;
   signature?(binding: ChannelBinding<C>): string;
   validate?(draft: {
     config: C;

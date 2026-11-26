@@ -15,7 +15,7 @@ export function modelHostServices(
       const info = resolveModelBindingInfo(modelId, purpose);
       return info.available
         ? { ok: true, label: info.label }
-        : { ok: false, reason: info.reason ?? "" };
+        : { ok: false, reason: info.reason ?? "", label: info.label };
     },
     ...(onManageModels !== undefined ? { onManageModels } : {}),
   };

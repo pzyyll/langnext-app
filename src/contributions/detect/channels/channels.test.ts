@@ -1,3 +1,4 @@
+import { t } from "nsh/i18n";
 import { expect, test } from "nsh/test";
 import { ProviderProtocolError } from "../../../modules/ai/contracts/errors";
 import type {
@@ -478,4 +479,18 @@ test("detect contribution: describe reports configured and unconfigured channels
     googleCloudDetectionContribution.describe(binding<GoogleCloudDetectionConfig>({}, "ref-1")),
   ).toBeTruthy();
   expect(aiDetectionContribution.describe(binding({ modelId: "m-1" }))).toBe("m-1");
+  expect(
+    aiDetectionContribution.describe(binding({ modelId: "m-1" }), {
+      resolveModelBinding: () => ({ ok: true, label: "OpenAI Main · gpt-4.1-mini" }),
+    }),
+  ).toBe("OpenAI Main · gpt-4.1-mini");
+  expect(
+    aiDetectionContribution.describe(binding({ modelId: "m-removed" }), {
+      resolveModelBinding: () => ({
+        ok: false,
+        reason: "deleted",
+        label: t("presets.model.unavailableLabel"),
+      }),
+    }),
+  ).toBe(t("presets.model.unavailableLabel"));
 });

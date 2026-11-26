@@ -767,7 +767,9 @@ test("language detection: starts with the header add button, adds channels via p
   expect(app.shows("id:settings-detection-detail-card")).toBe(false);
   expect(app.shows("id:settings-detection-role-ai")).toBe(true);
   expect(app.texts()).toContain("Primary");
-  expect(app.accessibility("id:settings-detection-summary-ai")?.name).toBe("m-1");
+  expect(app.accessibility("id:settings-detection-summary-ai")?.name).toBe(
+    "OpenAI Main · gpt-4.1-mini",
+  );
   expect(app.enabled("id:settings-detection-toggle-ai")).toBe(true);
 
   // Adding the free Google channel appends and enables it without opening a detail page.
@@ -795,13 +797,17 @@ test("language detection: starts with the header add button, adds channels via p
   expect(app.shows("id:settings-detection-card")).toBe(false);
   await app.press("id:settings-nav-language-detection");
   await app.waitFor("id:settings-detection-card");
-  expect(app.accessibility("id:settings-detection-summary-ai")?.name).toBe("m-1");
+  expect(app.accessibility("id:settings-detection-summary-ai")?.name).toBe(
+    "OpenAI Main · gpt-4.1-mini",
+  );
 
   const reopened = await open(APP_ENTRY, { ...viewport, storage: app.storage() });
   await reopened.press("id:nav-settings");
   await reopened.press("id:settings-nav-language-detection");
   await reopened.waitFor("id:settings-detection-card");
-  expect(reopened.accessibility("id:settings-detection-summary-ai")?.name).toBe("m-1");
+  expect(reopened.accessibility("id:settings-detection-summary-ai")?.name).toBe(
+    "OpenAI Main · gpt-4.1-mini",
+  );
   expect(reopened.shows("id:settings-detection-role-ai")).toBe(true);
   expect(reopened.shows("id:settings-detection-role-google")).toBe(true);
   expect(reopened.requests()).toHaveLength(0);
@@ -1091,7 +1097,7 @@ test("language detection: keeps unavailable saved models and offers Models recov
   await app.press("id:nav-settings");
   await app.press("id:settings-nav-language-detection");
   await app.waitFor("id:settings-detection-summary-ai");
-  expect(app.accessibility("id:settings-detection-summary-ai")?.name).toBe("m-removed");
+  expect(app.accessibility("id:settings-detection-summary-ai")?.name).toBe("Deleted model");
   expect(app.enabled("id:settings-detection-toggle-ai")).toBe(true);
 
   await app.press("id:settings-detection-channel-ai");
@@ -1113,7 +1119,9 @@ test("language detection: keeps unavailable saved models and offers Models recov
   await emptyCatalog.press("id:nav-settings");
   await emptyCatalog.press("id:settings-nav-language-detection");
   await emptyCatalog.waitFor("id:settings-detection-summary-ai");
-  expect(emptyCatalog.accessibility("id:settings-detection-summary-ai")?.name).toBe("m-removed");
+  expect(emptyCatalog.accessibility("id:settings-detection-summary-ai")?.name).toBe(
+    "Deleted model",
+  );
   await emptyCatalog.press("id:settings-detection-channel-ai");
   await emptyCatalog.waitFor("id:settings-detection-manage-models");
   expect(emptyCatalog.texts()).toContain("No enabled text-capable models available.");
@@ -1164,7 +1172,9 @@ test("language detection: reorders detectors and toggles enable state while pres
   );
   expect(app.shows("id:settings-detection-role-ai")).toBe(false);
   expect(app.shows("id:settings-detection-role-google")).toBe(true);
-  expect(app.accessibility("id:settings-detection-summary-ai")?.name).toBe("m-1");
+  expect(app.accessibility("id:settings-detection-summary-ai")?.name).toBe(
+    "OpenAI Main · gpt-4.1-mini",
+  );
 
   await app.press("id:settings-detection-channel-ai");
   await app.waitFor("id:settings-detection-detail-card");
@@ -1473,7 +1483,7 @@ test("ocr settings: starts empty, adds AI from the empty state, and configures i
   expect(app.shows("id:settings-ocr-empty")).toBe(false);
   expect(app.shows("id:settings-ocr-role-ai")).toBe(true);
   expect(app.texts()).toContain("Primary");
-  expect(app.accessibility("id:settings-ocr-summary-ai")?.name).toBe("m-vision");
+  expect(app.accessibility("id:settings-ocr-summary-ai")?.name).toBe("OpenAI Main · gpt-4.1");
   expect(app.enabled("id:settings-ocr-toggle-ai")).toBe(true);
   expect(app.shows("id:settings-ocr-grip-ai")).toBe(false);
 
@@ -1483,7 +1493,7 @@ test("ocr settings: starts empty, adds AI from the empty state, and configures i
   expect(app.shows("id:settings-ocr-card")).toBe(false);
   await app.press("id:settings-nav-ocr");
   await app.waitFor("id:settings-ocr-card");
-  expect(app.accessibility("id:settings-ocr-summary-ai")?.name).toBe("m-vision");
+  expect(app.accessibility("id:settings-ocr-summary-ai")?.name).toBe("OpenAI Main · gpt-4.1");
 
   expect(app.texts()).not.toContain(OCR_PRIORITY_HINT.en);
   await app.hover("id:settings-ocr-priority-info");
@@ -1493,7 +1503,7 @@ test("ocr settings: starts empty, adds AI from the empty state, and configures i
   await reopened.press("id:nav-settings");
   await reopened.press("id:settings-nav-ocr");
   await reopened.waitFor("id:settings-ocr-card");
-  expect(reopened.accessibility("id:settings-ocr-summary-ai")?.name).toBe("m-vision");
+  expect(reopened.accessibility("id:settings-ocr-summary-ai")?.name).toBe("OpenAI Main · gpt-4.1");
   expect(reopened.shows("id:settings-ocr-role-ai")).toBe(true);
   expect(reopened.shows("id:settings-ocr-add")).toBe(true);
   expect(reopened.shows("id:settings-ocr-windows-only")).toBe(false);
@@ -1628,7 +1638,7 @@ test("ocr settings: keeps an unavailable saved model and offers Models recovery"
   await app.press("id:nav-settings");
   await app.press("id:settings-nav-ocr");
   await app.waitFor("id:settings-ocr-summary-ai");
-  expect(app.accessibility("id:settings-ocr-summary-ai")?.name).toBe("m-removed");
+  expect(app.accessibility("id:settings-ocr-summary-ai")?.name).toBe("Deleted model");
 
   await app.press("id:settings-ocr-channel-ai");
   await app.waitFor("id:settings-ocr-model-unavailable");

@@ -121,6 +121,7 @@ interface CapabilityListProps {
   compact: boolean;
   collection: ChannelCollection;
   contributions: ReadonlyMap<string, ErasedContribution>;
+  describeChannel: (id: string) => string;
   credentialStates: Record<string, CredentialState>;
   busy: boolean;
   listError: string | null;
@@ -193,7 +194,7 @@ function CapabilityList(props: CapabilityListProps) {
         toneClass: "text-destructive",
       };
     }
-    const described = props.collection.describe(id);
+    const described = props.describeChannel(id);
     return {
       text: described.length > 0 ? described : t("settings.capabilities.configured"),
       toneClass: "text-muted-foreground",
@@ -965,6 +966,16 @@ export function CapabilitySection(props: CapabilitySectionProps) {
       .filter((contribution): contribution is ErasedContribution => contribution !== undefined);
   };
 
+  /** Summaries may resolve a saved model to its display label through host services. */
+  const describeChannel = (id: string): string => {
+    const contribution = contributions().get(id);
+    const binding = props.collection.binding(id);
+    if (contribution === undefined || binding === null) return "";
+    return contribution.describe(binding, {
+      resolveModelBinding: props.hostServices?.resolveModelBinding,
+    });
+  };
+
   const selectedContribution = () => {
     const id = selected();
     if (id === null) return null;
@@ -987,6 +998,7 @@ export function CapabilitySection(props: CapabilitySectionProps) {
           compact={props.compact}
           collection={props.collection}
           contributions={contributions()}
+          describeChannel={describeChannel}
           credentialStates={credentialStates()}
           busy={adding()}
           listError={listError()}

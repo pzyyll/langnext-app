@@ -355,5 +355,19 @@ test("ocr contribution: describe names the saved configuration", () => {
   );
   expect(googleCloudOcrChannel.describe(bindingOf({}))).toBe(t("settings.ocr.configured"));
   expect(aiOcrChannel.describe(bindingOf({ modelId: "m-vision" }))).toBe("m-vision");
+  expect(
+    aiOcrChannel.describe(bindingOf({ modelId: "m-vision" }), {
+      resolveModelBinding: () => ({ ok: true, label: "OpenAI Main · gpt-4.1" }),
+    }),
+  ).toBe("OpenAI Main · gpt-4.1");
+  expect(
+    aiOcrChannel.describe(bindingOf({ modelId: "m-removed" }), {
+      resolveModelBinding: () => ({
+        ok: false,
+        reason: "deleted",
+        label: t("presets.model.unavailableLabel"),
+      }),
+    }),
+  ).toBe(t("presets.model.unavailableLabel"));
   expect(aiOcrChannel.describe(bindingOf({ modelId: "  " }))).toBe(t("settings.ocr.notConfigured"));
 });

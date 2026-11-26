@@ -118,10 +118,13 @@ export const aiDetectionContribution: CapabilityChannelContribution<
   configurable: true,
   config: aiDetectionConfig,
   credential: null,
-  describe: (binding) =>
-    binding.config.modelId.trim().length > 0
-      ? binding.config.modelId
-      : t("settings.languageDetection.notConfigured"),
+  describe: (binding, host) => {
+    const modelId = binding.config.modelId.trim();
+    if (modelId.length === 0) return t("settings.languageDetection.notConfigured");
+    const resolved = host?.resolveModelBinding?.(modelId, "text");
+    if (resolved === undefined) return modelId;
+    return resolved.ok ? resolved.label : (resolved.label ?? t("presets.model.unavailableLabel"));
+  },
   validate: ({ config }) =>
     config.modelId.trim().length > 0
       ? { ok: true }

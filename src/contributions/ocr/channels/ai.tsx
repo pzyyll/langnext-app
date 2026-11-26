@@ -154,10 +154,13 @@ export const aiOcrChannel: CapabilityChannelContribution<
     defaults: () => ({ modelId: "" }),
   },
   credential: null,
-  describe: (binding) =>
-    binding.config.modelId.trim().length > 0
-      ? binding.config.modelId.trim()
-      : t("settings.ocr.notConfigured"),
+  describe: (binding, host) => {
+    const modelId = binding.config.modelId.trim();
+    if (modelId.length === 0) return t("settings.ocr.notConfigured");
+    const resolved = host?.resolveModelBinding?.(modelId, "image");
+    if (resolved === undefined) return modelId;
+    return resolved.ok ? resolved.label : (resolved.label ?? t("presets.model.unavailableLabel"));
+  },
   validate: ({ config }) =>
     config.modelId.trim().length > 0
       ? { ok: true }
