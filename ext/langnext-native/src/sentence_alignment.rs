@@ -103,6 +103,14 @@ impl SentenceAlignmentNative {
         let _ = semantic_worker(semantic::cleanup).await;
     }
 
+    /// Prepares the verified local semantic model runtime without network access.
+    pub async fn prepare_semantic_model() -> bool {
+        #[cfg(windows)]
+        return semantic_worker(semantic::prepare).await.unwrap_or(false);
+        #[cfg(not(windows))]
+        false
+    }
+
     /// Aligns completed text on a blocking worker, without network access.
     pub async fn align_semantic(
         source_text: String,

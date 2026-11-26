@@ -58,8 +58,17 @@ settings:
   quickTranslate:
     sentenceAlignment: 译文对照
     alignmentHelp: 开启译文对照模式需要下载离线资源
+    semanticModel: 语义模型
+    alignmentModelName: Multilingual E5 Small
+    alignmentModelDownloaded: 已下载
+    downloadAlignmentModel: 下载
     downloadingAlignmentModel: "正在下载对齐模型：%{progress}%"
     alignmentModelDownloadFailed: 无法下载对齐模型。
+    alignmentDownloadTitle: 下载对齐模型？
+    alignmentDownloadDescription: 译文对照需要使用离线 Multilingual E5 Small 模型（约 135 MB）。
+    downloadAndEnable: 下载并开启
+    alignmentPendingEnable: 下载完成后自动开启
+    alignmentPrepareFailed: 无法加载对齐模型。
     alignmentSaveError: 无法保存译文对照设置，请重试。
     windowsOnly: 译文对照仅在 Windows 上可用。
   theme:

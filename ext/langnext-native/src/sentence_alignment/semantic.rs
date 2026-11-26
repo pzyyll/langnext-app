@@ -174,6 +174,38 @@ fn load(directory: &Path) -> Result<TextEmbedding, String> {
     .map_err(|_| MODEL_ERROR.into())
 }
 
+fn ensure_runtime<'a>(
+    runtime: &'a mut Option<(PathBuf, TextEmbedding)>,
+    directory: &Path,
+) -> Result<&'a mut TextEmbedding, String> {
+    if runtime.as_ref().is_none_or(|(path, _)| path != directory) {
+        *runtime = Some((directory.to_owned(), load(directory)?));
+    }
+    runtime
+        .as_mut()
+        .map(|(_, model)| model)
+        .ok_or_else(|| MODEL_ERROR.into())
+}
+
+pub(super) fn prepare(directory: &Path) -> bool {
+    if !installed(directory) {
+        if let Ok(mut runtime) = RUNTIME.lock()
+            && runtime.as_ref().is_some_and(|(path, _)| path == directory)
+        {
+            *runtime = None;
+        }
+        return false;
+    }
+    let Ok(mut runtime) = RUNTIME.lock() else {
+        return false;
+    };
+    if let Err(err) = ensure_runtime(&mut runtime, directory) {
+        log::warn!("Could not prepare the semantic alignment model: {err}");
+        return false;
+    }
+    true
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct Match {
     source: usize,
@@ -279,10 +311,7 @@ pub(super) fn align(
     let source_spans = add_spans(&sources, &mut inputs);
     let target_spans = add_spans(&targets, &mut inputs);
     let mut runtime = RUNTIME.lock().map_err(|_| MODEL_ERROR)?;
-    if runtime.as_ref().is_none_or(|(path, _)| path != directory) {
-        *runtime = Some((directory.to_owned(), load(directory)?));
-    }
-    let (_, model) = runtime.as_mut().ok_or(MODEL_ERROR)?;
+    let model = ensure_runtime(&mut runtime, directory)?;
     let embeddings = model
         .embed(&inputs, Some(INFERENCE_BATCH_SIZE))
         .map_err(|_| MODEL_ERROR)?;
@@ -321,9 +350,24 @@ mod tests {
     use super::*;
 
     #[test]
+    fn prepare_returns_false_for_missing_assets_without_network() {
+        let missing = std::env::temp_dir().join(format!(
+            "langnext-missing-alignment-model-{}",
+            std::process::id()
+        ));
+        let _ = fs::remove_dir_all(&missing);
+        assert!(!prepare(&missing));
+        assert_eq!(
+            align(&missing, "One sentence.", &[Some("一句话。".into())]).unwrap(),
+            None
+        );
+    }
+
+    #[test]
     #[ignore = "requires the pinned model in LANGNEXT_ALIGNMENT_MODEL_DIR"]
     fn aligns_reported_prose_and_markdown_with_the_real_model() {
         let directory = PathBuf::from(std::env::var_os("LANGNEXT_ALIGNMENT_MODEL_DIR").unwrap());
+        assert!(prepare(&directory));
         let sources = [
             "The app sends Anki requests only to `http://127.0.0.1:8765`.",
             "On a complete forward result, select **Add to Anki**.",

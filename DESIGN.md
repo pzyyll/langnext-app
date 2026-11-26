@@ -100,10 +100,12 @@ Hovering an eligible result sentence or stepping through result sentences with `
 
 The highlight adds no overlay, popover, live region, travel, fade, or layout animation.
 
-The Sentence alignment switch is in Settings → Application → Quick Translate. The info tooltip explains that the switch requires an offline download. There is no download control in the floating window.
+The Sentence alignment switch is in Settings → Application → Quick Translate. A separate Semantic model row below it displays **Multilingual E5 Small** and owns manual **Download**, **Cancel**, **Retry**, progress, and the **Downloaded** badge. Turning **Sentence alignment** on without an installed model opens a confirmation dialog (**Cancel** and **Download and enable**) before any transfer starts. There is no download control in the floating window.
 
-| Surface                  | Change                                      | Motion                                                                 | Reduced Motion   |
-| ------------------------ | ------------------------------------------- | ---------------------------------------------------------------------- | ---------------- |
-| Settings switch and info | Toggle, focus, hover                        | Shared switch thumb, focus ring, and tooltip                           | Immediate change |
-| Settings status          | Model check, progress, retry, finish, error | The bar follows the download percentage; no pulse or artificial motion | Same             |
-| Quick Translate result   | Turn alignment on or off                    | Preview appears or clears without replaying translation                | Same             |
+| Surface                        | Change                                                                                | Motion                                                                                                                  | Reduced Motion               |
+| ------------------------------ | ------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------- | ---------------------------- |
+| Settings switch and info       | Toggle, disabled while downloading, focus, hover                                      | Shared `navigationFeedback`, `switchThumb`, focus ring, and `tooltip` (`150ms` ease-out)                                | Immediate change (`0ms`)     |
+| Semantic model row and actions | Hover and press on **Download**, **Cancel**, and **Retry**; **Downloaded** badge swap | Shared `pressScale` (`150ms` ease-out, `active:scale-95`); badge and controls replace in place without layout animation | No transition or scale       |
+| Model transfer status          | Progress percentage, **Turns on after download** hint, download/load/save alerts      | `Progress` indicator follows actual transfer percentage; hints and alerts replace in place with no pulse or travel      | Same                         |
+| Download confirmation dialog   | Open, button hover/press, **Cancel**, **Download and enable**, Escape, backdrop press | Shared `dialogAnimation` (`fade`), `pressScale` on buttons, focus moves inside dialog and returns on dismiss            | Instant open/close, no scale |
+| Quick Translate result         | Turn alignment on or off                                                              | Preview appears or clears immediately without replaying translation                                                     | Same                         |

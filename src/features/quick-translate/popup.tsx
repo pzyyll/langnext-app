@@ -1003,8 +1003,11 @@ export function QuickTranslatePopup(props: QuickTranslatePopupProps) {
   const currentRenderMode = (): AlignmentRenderMode =>
     props.markdownEnabled ? "markdown" : "plain";
   const isPreviewWindowVisible = () => props.windowVisible?.() ?? true;
-  const alignmentEnabled = () => props.sentenceAlignmentEnabled?.() ?? true;
-  const semanticEnabled = () => alignmentEnabled() && (props.semanticModelReady?.() ?? false);
+  const requiresSemanticModel = props.semanticModelReady !== undefined;
+  const semanticEnabled = () =>
+    (props.sentenceAlignmentEnabled?.() ?? true) && (props.semanticModelReady?.() ?? false);
+  const alignmentEnabled = () =>
+    requiresSemanticModel ? semanticEnabled() : (props.sentenceAlignmentEnabled?.() ?? true);
   const alignmentKey = (cardId: string, resultId: number, mode: AlignmentRenderMode) =>
     `${cardId}:${resultId}:${mode}`;
 
@@ -1070,8 +1073,10 @@ export function QuickTranslatePopup(props: QuickTranslatePopupProps) {
     if (semanticEnabled()) {
       semanticRevision();
       const pairs = semanticPairs.get(resultKey)?.pairs;
-      if (pairs === undefined) return null;
+      if (!pairs) return null;
       matches = pairs;
+    } else if (requiresSemanticModel) {
+      return null;
     }
     const key = matches === null ? resultKey : `${resultKey}:semantic`;
     const existing = alignmentCache.get(key);

@@ -1,4 +1,4 @@
-import { Text } from "nsh";
+import { Text, type ViewRef } from "nsh";
 import { Switch as BaseSwitch } from "nsh/base";
 import { motion } from "../motion";
 import { buildTooltip } from "./tooltip";
@@ -15,6 +15,7 @@ interface SwitchProps {
   variant?: "row" | "inline";
   size?: SwitchSize;
   testID?: string;
+  ref?: (node: ViewRef) => void;
   onChange: (checked: boolean) => void;
 }
 
@@ -25,6 +26,7 @@ export function Switch(props: SwitchProps) {
 
   return (
     <BaseSwitch
+      ref={(node) => props.ref?.(node)}
       testID={props.testID}
       accessibilityLabel={props.accessibilityLabel ?? props.label}
       tooltip={

@@ -418,7 +418,7 @@ function QuickTranslateWindowBody(props: {
             windowVisible={() => props.controller.isOpen() && win.state()?.visible !== false}
             scrollRevision={() => scrollRevision()}
             sentenceAlignmentEnabled={sentenceAlignmentEnabled}
-            semanticModelReady={alignmentModel.ready}
+            semanticModelReady={() => sentenceAlignmentEnabled() && alignmentModel.ready()}
             onAttachSourceInput={(node) => props.controller.attachSourceInput(node)}
           />
         </View>

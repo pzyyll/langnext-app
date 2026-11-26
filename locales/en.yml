@@ -58,8 +58,17 @@ settings:
   quickTranslate:
     sentenceAlignment: Sentence alignment
     alignmentHelp: Enabling sentence alignment requires an offline download.
+    semanticModel: Semantic model
+    alignmentModelName: Multilingual E5 Small
+    alignmentModelDownloaded: Downloaded
+    downloadAlignmentModel: Download
     downloadingAlignmentModel: "Downloading alignment model: %{progress}%"
     alignmentModelDownloadFailed: Could not download the alignment model.
+    alignmentDownloadTitle: Download alignment model?
+    alignmentDownloadDescription: Sentence alignment uses the offline Multilingual E5 Small model (about 135 MB).
+    downloadAndEnable: Download and enable
+    alignmentPendingEnable: Turns on after download
+    alignmentPrepareFailed: Could not load the alignment model.
     alignmentSaveError: Could not save sentence alignment. Try again.
     windowsOnly: Sentence alignment is available on Windows only.
   theme:
