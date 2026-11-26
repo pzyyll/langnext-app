@@ -4447,9 +4447,22 @@ test("back-translation: keyboard Tab and Enter/Space open, speak, copy, retry, a
   await app.waitFor("id:quick-translate-card-card-1 >> id:quick-translate-speak-back-translation");
   expect(app.requests().filter((r) => r.url.includes("chat/completions"))).toHaveLength(2);
 
-  // Shift+Tab from the active pill walks back past upper Copy (1), upper Speak (2),
-  // embedded Close (3), embedded Retry (4), embedded Copy (5) to embedded Speak (6).
-  for (let step = 0; step < 6; step += 1) {
+  // Shift+Tab past upper Copy and Speak to the back-translation preview.
+  for (let step = 0; step < 3; step += 1) {
+    await app.keyboard.press("shift+tab");
+  }
+  await app.keyboard.press("arrowright");
+  expect(app.accessibility("id:quick-translate-back-translation-preview")?.value).toBe(
+    "Sentence 1 of 1: Good morning",
+  );
+  await app.keyboard.press("enter");
+  const popover = "id:quick-translate-sentence-popover";
+  await app.waitFor(`${popover} >> text:Good morning`);
+  await app.keyboard.press("escape");
+  await app.waitFor(popover, { state: "gone" });
+
+  // Continue back past embedded Close, Retry, and Copy to embedded Speak.
+  for (let step = 0; step < 4; step += 1) {
     await app.keyboard.press("shift+tab");
   }
   await app.keyboard.press("space");
@@ -4476,8 +4489,8 @@ test("back-translation: keyboard Tab and Enter/Space open, speak, copy, retry, a
   await app.waitFor("id:quick-translate-card-card-1 >> text:Hello keyboard");
   expect(app.requests().filter((r) => r.url.includes("chat/completions"))).toHaveLength(2);
 
-  // From focused active pill, Shift+Tab across upper Copy (1), upper Speak (2), embedded Close (3) to embedded Retry (4).
-  for (let step = 0; step < 4; step += 1) {
+  // From the active pill, Shift+Tab across upper Copy, Speak, back-translation preview, and Close to Retry.
+  for (let step = 0; step < 5; step += 1) {
     await app.keyboard.press("shift+tab");
   }
   await app.keyboard.press("enter");
@@ -4546,6 +4559,105 @@ test("back-translation: renders zh-CN localization across states and actions", a
   );
   await app.waitFor("role:button[回译]");
   expect(app.texts()).not.toContain("回译");
+});
+
+test("back-translation alignment: highlights the original independently of the forward result", async () => {
+  let calls = 0;
+  const app = await open(POPUP_HARNESS, {
+    width: 520,
+    height: 600,
+    platform: "windows",
+    storage: seedWithPresets([makePreset()]),
+    network: {
+      "POST https://api.openai.com/v1/chat/completions": () => ({
+        status: 200,
+        body: {
+          choices: [
+            {
+              message: {
+                content:
+                  ++calls === 1
+                    ? "今天用 NSH。第二句草稿有效。"
+                    : calls === 2
+                      ? "Run NSH today. A second draft works."
+                      : "Run NSH today. A revised draft works.",
+              },
+            },
+          ],
+        },
+      }),
+    },
+  });
+
+  const card = "id:quick-translate-card-card-1";
+  const source = "id:quick-translate-source";
+  const original = `${source} >> text:Second draft works.`;
+  const forward = `${card} >> id:quick-translate-result-text >> text:第二句草稿有效。`;
+  const back = `${card} >> id:quick-translate-back-translation-preview`;
+  const sentence = `${back} >> text:A second draft works.`;
+  const popover = "id:quick-translate-sentence-popover";
+
+  await app.waitFor(source);
+  await app.type(source, "Use NSH today. Second draft works.");
+  await app.keyboard.press("enter");
+  await app.waitFor(forward);
+  await app.press(`${card} >> id:quick-translate-back-translate`);
+  await app.waitFor(back);
+  expect(app.accessibility(back)?.label).toBe("Back-translation");
+
+  await app.hover(sentence);
+  const highlight = app.spanStyle(sentence).backgroundColor;
+  expect(highlight).toBeTruthy();
+  expect(app.spanStyle(original).backgroundColor).toEqual(highlight);
+  expect(app.spanStyle(forward).backgroundColor).toBeUndefined();
+
+  await app.press(sentence);
+  await app.waitFor(`${popover} >> text:Second draft works.`);
+
+  await app.press(`${card} >> id:quick-translate-retry-back-translation`);
+  const retriedSentence = `${back} >> text:A revised draft works.`;
+  await app.waitFor(retriedSentence);
+  expect(app.shows(popover)).toBe(false);
+  expect(app.shows(sentence)).toBe(false);
+  await app.press(retriedSentence);
+  await app.waitFor(`${popover} >> text:Second draft works.`);
+
+  await app.press(`${card} >> id:quick-translate-close-back-translation`);
+  await app.waitFor(back, { state: "gone" });
+  expect(app.shows(popover)).toBe(false);
+  expect(app.spanStyle(original).backgroundColor).toBeUndefined();
+  expect(app.shows(forward)).toBe(true);
+});
+
+test("back-translation alignment: opens the original from a formatted Markdown fragment with the source collapsed", async () => {
+  let calls = 0;
+  const app = await open(POPUP_HARNESS, {
+    ...viewport,
+    storage: seedWithPresets([makePreset()]),
+    network: {
+      "POST https://api.openai.com/v1/chat/completions": () => ({
+        status: 200,
+        body: {
+          choices: [{ message: { content: ++calls === 1 ? "Bonjour !" : "Hello **again**!" } }],
+        },
+      }),
+    },
+  });
+
+  const source = "id:quick-translate-source";
+  const back = "id:quick-translate-back-translation-preview";
+  await app.press("id:harness-toggle-markdown");
+  await app.type(source, "Good morning!");
+  await app.keyboard.press("enter");
+  await app.press("id:quick-translate-back-translate");
+  await app.waitFor(back);
+  await app.press("id:quick-translate-collapse-source");
+  await app.waitFor(source, { state: "gone" });
+
+  const formatted = `${back} >> id:result-seg-0-frag-1`;
+  expect(app.spanStyle(`${formatted} >> text:again`).fontWeight).toBeGreaterThanOrEqual(600);
+  await app.press(formatted);
+  await app.waitFor("id:quick-translate-sentence-popover >> text:Good morning!");
 });
 
 test("sentence highlight live: plain text highlights matched source sentence on hover, clears across collapse and copy", async () => {

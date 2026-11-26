@@ -6,6 +6,10 @@ import {
   type TextViewLinkPressEvent,
 } from "nsh/base";
 import {
+  translationOutputClass,
+  type TranslationOutputSize,
+} from "../../components/ui/translation-output";
+import {
   ALIGNMENT_SEGMENT_NODE_NAME,
   type AlignmentSegmentMarks,
   type AlignmentSegmentNodeData,
@@ -21,7 +25,7 @@ export interface SentenceSegment {
 export interface AlignedTranslationProps {
   testID?: string;
   text: string;
-  textClass?: string;
+  size?: TranslationOutputSize;
   document?: TextViewDocument | null;
   segments: readonly SentenceSegment[];
   activeSegmentId?: string | null;
@@ -130,7 +134,7 @@ function buildSegmentFragmentClass(
 
 export function AlignedTranslation(props: AlignedTranslationProps) {
   const pieces = () => buildTextPieces(props.text, props.segments);
-  const textClass = () => props.textClass ?? "text-base leading-relaxed text-card-foreground";
+  const textClass = () => translationOutputClass(props.size);
 
   const renderCustomSegment = (node: TextViewCustomNode) => {
     if (node.name !== ALIGNMENT_SEGMENT_NODE_NAME) {

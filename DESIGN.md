@@ -92,14 +92,14 @@ The window adds no overlay, travel, live region, drag, or layout animation.
 
 ## Quick Translate Sentence Highlight
 
-Sentence alignment stays active whether the source input is expanded or collapsed. Hovering an eligible result sentence or stepping through result sentences with `Left`/`Right` while focused applies `bg-brand-soft` synchronously to that result sentence and, when the source editor is expanded, adds an inline `bg-brand-soft` decoration on the aligned range in `QuickTranslateSourceEditor`.
+The same setting aligns the translation and back-translation with the original text. Alignment stays active when the source editor is collapsed. Hover over a matched sentence or use `Left`/`Right` in its preview to highlight the sentence. If the source editor is expanded, it highlights the matching original sentence. Only the active output shows a highlight.
 
-Clicking an aligned result sentence (or pressing `Enter`/`Space` when `quick-translate-result-preview` is focused) opens an anchored `AnchoredPopover` displaying the aligned original source sentence text and holds `bg-brand-soft` on the active sentence while open. Clicking another aligned sentence or stepping with `Left`/`Right` updates the popover in place; clicking the active sentence again, clicking outside, pressing `Escape`, scrolling, toggling source collapse, editing source, toggling Markdown, retrying, or hiding the window closes it.
+Click a matched sentence or press `Enter`/`Space` in its preview to open the anchored popover with the original sentence. The highlight stays active while the popover is open. Selecting another sentence updates the popover. Click the active sentence again, click outside, or press `Escape` to close it. Scrolling, changing the source or Markdown mode, retrying the active output, closing the back-translation, or hiding the window also closes it.
 
-| Surface                        | Gesture / Trigger                                                                | Motion                                                                                            | Reduced Motion          |
-| ------------------------------ | -------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------- | ----------------------- |
-| Result sentence & source range | Pointer hover, click hold, keyboard `Left`/`Right`, accessibility `Prev`/`Next`  | Immediate `bg-brand-soft` toggle (0 ms); no scroll, focus move, or caret change                   | Same immediate toggle   |
-| Source sentence popover        | Sentence click, keyboard `Enter`/`Space`, accessibility `Show original`, dismiss | Shared `popupEnter` (`150ms` `easeOut`, opacity `0 → 1`, translateY `-4pt → 0`); updates in place | Instant open, no travel |
+| Surface                                                     | Gesture / Trigger                                                                | Motion                                                                                            | Reduced Motion          |
+| ----------------------------------------------------------- | -------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------- | ----------------------- |
+| Translation or back-translation sentence and original range | Pointer hover, click hold, keyboard `Left`/`Right`, accessibility `Prev`/`Next`  | Immediate `bg-brand-soft` toggle; no scroll, focus move, or caret change                          | Same immediate toggle   |
+| Source sentence popover                                     | Sentence click, keyboard `Enter`/`Space`, accessibility `Show original`, dismiss | Shared `popupEnter` (`150ms` `easeOut`, opacity `0 → 1`, translateY `-4pt → 0`); updates in place | Instant open, no travel |
 
 The highlight itself adds no live region or layout animation.
 

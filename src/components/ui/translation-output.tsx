@@ -8,6 +8,10 @@ const OUTPUT_CLASS: Record<TranslationOutputSize, string> = {
   sm: "text-sm leading-relaxed text-card-foreground",
 };
 
+export function translationOutputClass(size: TranslationOutputSize = "default"): string {
+  return OUTPUT_CLASS[size];
+}
+
 export function TranslationOutput(props: {
   testID: string;
   text: string;
@@ -15,7 +19,7 @@ export function TranslationOutput(props: {
   streaming: boolean;
   size?: TranslationOutputSize;
 }) {
-  const outputClass = () => OUTPUT_CLASS[props.size ?? "default"];
+  const outputClass = () => translationOutputClass(props.size);
   return (
     <If
       when={props.markdownEnabled}
