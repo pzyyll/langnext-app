@@ -50,10 +50,18 @@ settings:
     general: General
     appearance: Appearance
     shortcuts: Shortcuts
+    quickTranslate: Quick Translate
     languageDetection: Language Detection
     ocr: OCR
     tts: Text-to-Speech
     wordbook: Wordbook
+  quickTranslate:
+    sentenceAlignment: Sentence alignment
+    alignmentHelp: Enabling sentence alignment requires an offline download.
+    downloadingAlignmentModel: "Downloading alignment model: %{progress}%"
+    alignmentModelDownloadFailed: Could not download the alignment model.
+    alignmentSaveError: Could not save sentence alignment. Try again.
+    windowsOnly: Sentence alignment is available on Windows only.
   theme:
     title: Theme
   appearance:
@@ -873,9 +881,6 @@ quickTranslate:
   previousSentence: Previous aligned sentence
   nextSentence: Next aligned sentence
   sentencePreviewValue: "Sentence %{current} of %{total}: %{text}"
-  downloadAlignmentModel: Download offline alignment model (135 MB)
-  downloadingAlignmentModel: "Downloading alignment model: %{progress}%"
-  alignmentModelDownloadFailed: Could not download the alignment model.
   error:
     blankInput: Enter text to translate.
     presetDisabled: Selected preset is disabled. Enable it in Presets or choose another preset.

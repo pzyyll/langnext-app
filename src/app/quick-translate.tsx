@@ -16,7 +16,6 @@ import { Button } from "../components/ui/button";
 import { Icon } from "../components/ui/icon";
 import { toast } from "../components/ui/toast";
 import { alignmentModel } from "../features/quick-translate/alignment-model";
-import { AlignmentModelDownload } from "../features/quick-translate/alignment-model-download";
 import { beginHistoryAction } from "../features/quick-translate/history";
 import { QuickTranslateHistoryMenu } from "../features/quick-translate/history-menu";
 import { QuickTranslateLanguageBar } from "../features/quick-translate/language-menu";
@@ -34,6 +33,7 @@ import {
 } from "../features/quick-translate/session";
 import { createAnkiClient } from "../features/wordbook/anki-client";
 import { wordbookSettingsStore } from "../features/wordbook/settings";
+import { sentenceAlignmentEnabled } from "../features/settings/quick-translate";
 import { selectionCopyEnabled } from "../features/settings/selection-copy";
 import {
   createTranslationShortcutSetting,
@@ -417,15 +417,13 @@ function QuickTranslateWindowBody(props: {
             playbackAllowed={() => props.controller.attachedWindow()?.state()?.visible === true}
             windowVisible={() => props.controller.isOpen() && win.state()?.visible !== false}
             scrollRevision={() => scrollRevision()}
+            sentenceAlignmentEnabled={sentenceAlignmentEnabled}
             semanticModelReady={alignmentModel.ready}
             onAttachSourceInput={(node) => props.controller.attachSourceInput(node)}
           />
         </View>
       </Scroll>
       <View class="shrink-0" onLayout={({ bounds }) => footerHeight.set(bounds.size.height)}>
-        <If when={platform.os === "windows"}>
-          <AlignmentModelDownload />
-        </If>
         <QuickTranslateFooter session={session} />
       </View>
     </View>

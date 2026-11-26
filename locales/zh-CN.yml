@@ -50,10 +50,18 @@ settings:
     general: 通用
     appearance: 外观
     shortcuts: 快捷键
+    quickTranslate: 快捷翻译
     languageDetection: 语言检测
     ocr: OCR
     tts: 语音合成
     wordbook: 生词本
+  quickTranslate:
+    sentenceAlignment: 译文对照
+    alignmentHelp: 开启译文对照模式需要下载离线资源
+    downloadingAlignmentModel: "正在下载对齐模型：%{progress}%"
+    alignmentModelDownloadFailed: 无法下载对齐模型。
+    alignmentSaveError: 无法保存译文对照设置，请重试。
+    windowsOnly: 译文对照仅在 Windows 上可用。
   theme:
     title: 主题
   appearance:
@@ -873,9 +881,6 @@ quickTranslate:
   previousSentence: 上一句对齐文本
   nextSentence: 下一句对齐文本
   sentencePreviewValue: "第 %{current} / %{total} 句：%{text}"
-  downloadAlignmentModel: 下载离线对齐模型（135 MB）
-  downloadingAlignmentModel: "正在下载对齐模型：%{progress}%"
-  alignmentModelDownloadFailed: 无法下载对齐模型。
   error:
     blankInput: 请输入要翻译的文本。
     presetDisabled: 所选预设已停用，请在“预设”中启用或选择其他预设。

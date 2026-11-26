@@ -75,6 +75,8 @@ export interface QuickTranslatePopupProps {
   windowVisible?: Accessor<boolean>;
   /** Increments when the outer scroll container moves. */
   scrollRevision?: Accessor<number>;
+  /** Whether to show sentence alignment for completed results. */
+  sentenceAlignmentEnabled?: Accessor<boolean>;
   /** True after the user has installed the offline model. */
   semanticModelReady?: Accessor<boolean>;
   onAttachSourceInput?: (input: SourceInputHandle | null) => void;
@@ -1001,7 +1003,8 @@ export function QuickTranslatePopup(props: QuickTranslatePopupProps) {
   const currentRenderMode = (): AlignmentRenderMode =>
     props.markdownEnabled ? "markdown" : "plain";
   const isPreviewWindowVisible = () => props.windowVisible?.() ?? true;
-  const semanticEnabled = () => props.semanticModelReady?.() ?? false;
+  const alignmentEnabled = () => props.sentenceAlignmentEnabled?.() ?? true;
+  const semanticEnabled = () => alignmentEnabled() && (props.semanticModelReady?.() ?? false);
   const alignmentKey = (cardId: string, resultId: number, mode: AlignmentRenderMode) =>
     `${cardId}:${resultId}:${mode}`;
 
@@ -1010,7 +1013,7 @@ export function QuickTranslatePopup(props: QuickTranslatePopupProps) {
   ): card is CardViewItem & {
     result: Extract<CardResultState, { status: "success" }>;
   } => {
-    if (platform.os !== "windows") return false;
+    if (platform.os !== "windows" || !alignmentEnabled()) return false;
     if (isSourceCollapsed() || showingHistory() || isComposing() || !isPreviewWindowVisible()) {
       return false;
     }
@@ -1019,10 +1022,10 @@ export function QuickTranslatePopup(props: QuickTranslatePopupProps) {
   };
 
   effect(() => {
-    if (!semanticEnabled()) return;
+    const cards = semanticEnabled() ? props.session.cards() : [];
     const mode = currentRenderMode();
     const current = new Set<string>();
-    for (const card of props.session.cards()) {
+    for (const card of cards) {
       if (!isCardEligibleForAlignment(card)) continue;
       const result = card.result;
       const key = alignmentKey(card.id, result.resultId, mode);
@@ -1195,7 +1198,7 @@ export function QuickTranslatePopup(props: QuickTranslatePopupProps) {
     const semanticState = semanticEnabled();
     const alignmentChanged = semanticState !== lastSemanticState;
     lastSemanticState = semanticState;
-    if (alignmentChanged) {
+    if (alignmentChanged || !alignmentEnabled()) {
       focusedPreview.set(null);
       clearActiveMatch();
     }
@@ -1245,7 +1248,7 @@ export function QuickTranslatePopup(props: QuickTranslatePopupProps) {
 
   const activeSourceHighlight = (): SourceHighlightRange | null => {
     const current = activeMatch();
-    if (!current) return null;
+    if (!current || !alignmentEnabled()) return null;
     if (isSourceCollapsed() || showingHistory() || isComposing() || !isPreviewWindowVisible()) {
       return null;
     }

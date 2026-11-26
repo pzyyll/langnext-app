@@ -100,4 +100,10 @@ Hovering an eligible result sentence or stepping through result sentences with `
 
 The highlight adds no overlay, popover, live region, travel, fade, or layout animation.
 
-An optional Windows model download appears above the Quick Translate footer. Its label gives the download size before any transfer. The shared button uses its existing hover and press feedback. Progress, cancellation, and failure replace the same row without animation. Once installed, the row goes away and completed results gain semantic matches without delaying or replaying translation.
+The Sentence alignment switch is in Settings → Application → Quick Translate. The info tooltip explains that the switch requires an offline download. There is no download control in the floating window.
+
+| Surface                  | Change                                      | Motion                                                                 | Reduced Motion   |
+| ------------------------ | ------------------------------------------- | ---------------------------------------------------------------------- | ---------------- |
+| Settings switch and info | Toggle, focus, hover                        | Shared switch thumb, focus ring, and tooltip                           | Immediate change |
+| Settings status          | Model check, progress, retry, finish, error | The bar follows the download percentage; no pulse or artificial motion | Same             |
+| Quick Translate result   | Turn alignment on or off                    | Preview appears or clears without replaying translation                | Same             |

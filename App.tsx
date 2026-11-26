@@ -15,6 +15,7 @@ import { loadQuickTranslatePreferences } from "./src/features/quick-translate/pr
 import { loadAppearance } from "./src/features/settings/appearance";
 import { loadLanguage } from "./src/features/settings/language";
 import { loadLogLevel } from "./src/features/settings/log-level";
+import { loadSentenceAlignment } from "./src/features/settings/quick-translate";
 import { loadSelectionCopy } from "./src/features/settings/selection-copy";
 import { loadSelectionHint } from "./src/features/settings/selection-hint";
 import { loadSilentLaunch } from "./src/features/settings/silent-launch";
@@ -36,6 +37,7 @@ async function startApp() {
     await Promise.all([
       loadAppearance(),
       loadLanguage(),
+      loadSentenceAlignment(),
       loadSelectionCopy(),
       loadSelectionHint(),
       loadSilentLaunch(),

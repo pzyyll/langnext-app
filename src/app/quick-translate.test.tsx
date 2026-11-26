@@ -35,6 +35,7 @@ const HARNESS_SHORTCUT_MODE_KEY = "__test.qt.shortcutMode";
 const HARNESS_PLATFORM_OS_KEY = "__test.qt.platformOs";
 const viewport = { width: 1040, height: 720, platform: "windows" as const };
 const AUTO_TRANSLATE_DEBOUNCE_MS = 500;
+const SENTENCE_ALIGNMENT_STORAGE_KEY = "settings.quickTranslate.sentenceAlignment";
 
 /** Popup selections live in the popup's own preferences; presets never supply languages. */
 function popupPreferences(overrides: Record<string, unknown> = {}): string {
@@ -283,7 +284,7 @@ async function headlessHasAlignmentModel(): Promise<boolean | null> {
   }
 }
 
-test("offline alignment model: does not download until requested and reports a failed transfer", async () => {
+test("offline alignment model: the settings switch opts in to downloading and reports a failed transfer", async () => {
   if ((await headlessHasAlignmentModel()) === false) return;
   const app = await open(HARNESS_ENTRY, {
     ...viewport,
@@ -296,14 +297,65 @@ test("offline alignment model: does not download until requested and reports a f
     },
   });
   await app.press("id:harness-tray-quick-translate");
-  const download = "id:quick-translate-download-alignment";
-  await app.waitFor(download);
+  await app.waitFor("id:quick-translate-source");
+  expect(app.shows("id:quick-translate-download-alignment")).toBe(false);
   expect(app.requests()).toHaveLength(0);
-  await app.press(download);
-  await app.waitFor(t("quickTranslate.alignmentModelDownloadFailed"));
-  expect(app.shows(download)).toBe(true);
+  await app.press("id:quick-translate-close");
+  await app.press("id:nav-settings");
+  await app.press("id:settings-nav-quick-translate");
+  const toggle = "id:settings-sentence-alignment-switch";
+  await app.waitFor(toggle);
+  expect(app.accessibility(toggle)?.checked).toBe("false");
+  await app.hover("id:settings-sentence-alignment-info");
+  await app.waitFor(t("settings.quickTranslate.alignmentHelp"));
+  expect(app.requests()).toHaveLength(0);
+  await app.press(toggle);
+  await app.waitFor("id:settings-alignment-download-error");
+  expect(app.accessibility(toggle)?.checked).toBe("true");
+  expect(app.storage()[SENTENCE_ALIGNMENT_STORAGE_KEY]).toBe("true");
   expect(app.requests().map((request) => request.method)).toEqual(["GET"]);
   expect(app.requests()[0]!.body ?? "").toBe("");
+  await app.press(toggle);
+  await app.waitUntil(() => app.storage()[SENTENCE_ALIGNMENT_STORAGE_KEY] === "false");
+  expect(app.shows("id:settings-alignment-download-error")).toBe(false);
+});
+
+test("offline alignment model: turning off aborts the download before the next enable", async () => {
+  if (!(await headlessHasAlignmentModel())) return;
+  let attempts = 0;
+  const app = await open(HARNESS_ENTRY, {
+    ...viewport,
+    clock: {},
+    storage: { "settings.language": "en" },
+    network: {
+      "GET https://huggingface.co/Xenova/multilingual-e5-small/*": () => ({
+        status: 503,
+        body: "Unavailable",
+        delay: ++attempts === 1 ? 10_000 : 0,
+      }),
+    },
+  });
+  await app.press("id:nav-settings");
+  await app.press("id:settings-nav-quick-translate");
+  const toggle = "id:settings-sentence-alignment-switch";
+  const progress = "id:settings-alignment-download-progress";
+  const progressBar = "id:settings-alignment-download-progress-bar";
+  expect(app.shows(progressBar)).toBe(false);
+  await app.press(toggle);
+  await app.waitFor(progress);
+  await app.waitFor(progressBar);
+  expect(app.accessibility(progressBar)?.role).toBe("progressbar");
+  await app.waitUntil(() => attempts === 1);
+  await app.press(toggle);
+  await app.waitUntil(() => app.storage()[SENTENCE_ALIGNMENT_STORAGE_KEY] === "false");
+  expect(app.shows(progress)).toBe(false);
+  expect(app.shows(progressBar)).toBe(false);
+  expect(app.shows("id:settings-alignment-download-error")).toBe(false);
+
+  await app.press(toggle);
+  await app.waitUntil(() => attempts === 2, { timeout: 1000 });
+  await app.waitFor("id:settings-alignment-download-error");
+  expect(app.shows(progressBar)).toBe(false);
 });
 
 test("offline alignment model: aligns the complete result without another provider request", async () => {
@@ -324,6 +376,7 @@ test("offline alignment model: aligns the complete result without another provid
       [QUICK_TRANSLATE_PREFERENCES_KEY]: popupPreferences({
         cards: [{ id: "card-1", presetId: quickPreset.id }],
       }),
+      [SENTENCE_ALIGNMENT_STORAGE_KEY]: "true",
     },
     network: {
       "POST https://api.openai.com/v1/chat/completions": {
@@ -351,6 +404,17 @@ test("offline alignment model: aligns the complete result without another provid
   await app.waitFor("id:quick-translate-result-preview");
   await app.press("id:quick-translate-copy");
   expect(app.clipboard()).toBe(target);
+  expect(app.requests()).toHaveLength(1);
+
+  await app.press("id:quick-translate-pin");
+  await app.press("id:nav-settings");
+  await app.press("id:settings-nav-quick-translate");
+  const toggle = "id:settings-sentence-alignment-switch";
+  expect(app.accessibility(toggle)?.checked).toBe("true");
+  await app.press(toggle);
+  await app.waitUntil(() => app.storage()[SENTENCE_ALIGNMENT_STORAGE_KEY] === "false");
+  expect(app.shows("id:quick-translate-result-preview")).toBe(false);
+  expect(app.texts()).toContain(target);
   expect(app.requests()).toHaveLength(1);
 });
 

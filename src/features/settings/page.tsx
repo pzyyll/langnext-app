@@ -22,6 +22,7 @@ import { language, languageError, selectLanguage, type LanguagePreference } from
 import { LanguageDetectionSection } from "./language-detection-section";
 import { logLevelError, selectLogLevel } from "./log-level";
 import { OcrSection } from "./ocr-section";
+import { QuickTranslateSection } from "./quick-translate-section";
 import { ShortcutsSection } from "./shortcuts-section";
 import { TtsSection, type TtsChannelId } from "./tts-section";
 import { WordbookSection } from "./wordbook-section";
@@ -33,6 +34,7 @@ export type SettingsSection =
   | "general"
   | "appearance"
   | "shortcuts"
+  | "quick-translate"
   | "language-detection"
   | "ocr"
   | "tts"
@@ -58,6 +60,7 @@ const SETTINGS_GROUPS: readonly SettingsGroup[] = [
       { id: "general", labelKey: "settings.sections.general" },
       { id: "appearance", labelKey: "settings.sections.appearance" },
       { id: "shortcuts", labelKey: "settings.sections.shortcuts" },
+      { id: "quick-translate", labelKey: "settings.sections.quickTranslate" },
     ],
   },
   {
@@ -619,6 +622,9 @@ export function SettingsPage(props: {
                     platformOs={currentOs()}
                     shortcuts={props.shortcuts}
                   />
+                </If>
+                <If when={selectedSection() === "quick-translate"}>
+                  <QuickTranslateSection compact={compact()} platformOs={currentOs()} />
                 </If>
                 <If when={selectedSection() === "language-detection"}>
                   <LanguageDetectionSection

@@ -13,6 +13,8 @@ const status = signal<ModelStatus>("checking");
 const progress = signal(0);
 let cancelDownload: (() => void) | null = null;
 let checked = false;
+let requestId = 0;
+let work = Promise.resolve();
 
 async function load() {
   if (platform.os !== "windows" || checked) return;
@@ -88,7 +90,22 @@ export const alignmentModel = {
   status: () => status(),
   ready: () => status() === "ready",
   progress: () => progress(),
-  load,
-  install,
-  cancel: () => cancelDownload?.(),
+  ensureInstalled: () => {
+    const id = ++requestId;
+    work = work.then(async () => {
+      if (id !== requestId) return;
+      try {
+        await load();
+        if (id === requestId) await install();
+      } catch {
+        if (id !== requestId) return;
+        status.set("error");
+        log.warn("Could not install the offline alignment model.");
+      }
+    });
+  },
+  cancel: () => {
+    requestId += 1;
+    cancelDownload?.();
+  },
 };

@@ -11,6 +11,7 @@ import { ttsSettingsStore } from "../../features/tts/settings";
 import { wordbookSettingsStore } from "../../features/wordbook/settings";
 import { loadAppearance } from "../../features/settings/appearance";
 import { loadLanguage } from "../../features/settings/language";
+import { loadSentenceAlignment } from "../../features/settings/quick-translate";
 import { loadSelectionHint } from "../../features/settings/selection-hint";
 import {
   DEFAULT_QUICK_TRANSLATE_SHORTCUT,
@@ -444,6 +445,7 @@ void Promise.all([
   loadSelectionHint(),
   Storage.getItem(HARNESS_SELECTION_HINT_MODE_KEY),
   Storage.getItem("__test.qt.openNearWorkAreaBottom"),
+  loadSentenceAlignment(),
 ]).then(
   ([
     ,
