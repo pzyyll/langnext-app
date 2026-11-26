@@ -798,8 +798,8 @@ function PresetCardRow(props: PresetCardRowProps) {
               </View>
             </If>
             <View class="flex-row items-center justify-between gap-2 px-4 pt-1 pb-2.5">
-              {/* Align the leading action icon with the px-4 body spine while preserving the 24pt hit target. */}
-              <View class="-ml-1 flex-row items-center gap-0.5">
+              {/* Pull the 24pt speaker left 4pt so its glyph aligns with the px-4 spine. */}
+              <View class="-ml-1 shrink-0">
                 <If
                   when={(() => {
                     const res = props.card().result;
@@ -815,6 +815,8 @@ function PresetCardRow(props: PresetCardRowProps) {
                     onPress={() => props.onSpeak()}
                   />
                 </If>
+              </View>
+              <View class="shrink-0 flex-row items-center gap-0.5">
                 <If
                   when={(() => {
                     const res = props.card().result;
@@ -890,11 +892,11 @@ function PresetCardRow(props: PresetCardRowProps) {
                     />
                   </Button>
                 </If>
+                <RetryIconButton
+                  testID="quick-translate-retry"
+                  onPress={() => props.onRetry(props.card().id)}
+                />
               </View>
-              <RetryIconButton
-                testID="quick-translate-retry"
-                onPress={() => props.onRetry(props.card().id)}
-              />
             </View>
             <If when={props.speakError() !== null}>
               <View class="px-4 pb-2.5">
