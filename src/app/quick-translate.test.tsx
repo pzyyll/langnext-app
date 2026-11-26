@@ -3266,6 +3266,72 @@ test("quick ocr: replaces the draft with the recognized text and translates once
   expect(app.texts().some((line) => line.includes("ocrCap=1"))).toBe(true);
 });
 
+const PASTED_PNG = "src/app/__tests__/fixtures/clipboard-16.png";
+
+test("quick translate: a pasted image is recognized without a screen capture", async () => {
+  const app = await open(HARNESS_ENTRY, {
+    ...viewport,
+    storage: ocrSeed(),
+    network: ocrRoutes(JSON.stringify({ text: OCR_TEXT }), 400),
+  });
+
+  await app.press("id:harness-tray-quick-translate");
+  await app.waitFor("id:quick-translate-source");
+  await app.press("id:quick-translate-pin");
+  await app.type("id:quick-translate-source", "old draft");
+
+  await app.paste("id:quick-translate-source", { files: [PASTED_PNG] });
+  await app.waitFor("id:quick-translate-ocr-busy");
+  expect(hasQuickSource(app, "old draft")).toBe(true);
+  expect(app.texts().some((line) => line.includes("ocrCap=0|"))).toBe(true);
+
+  await app.waitUntil(() => hasQuickSource(app, OCR_TEXT));
+  await app.waitFor("翻译结果");
+  const vision = app.requests().filter((request) => request.url.includes("vision.example.com"));
+  expect(vision).toHaveLength(1);
+  const sent = JSON.parse(vision[0]!.body!);
+  expect(sent.input[0].content[1].type).toBe("input_image");
+  const translation = app.requests().find((request) => request.url.includes("api.openai.com"));
+  expect(JSON.parse(translation!.body!).messages[1].content).toBe(OCR_TEXT);
+  expect(app.window("quick-translate").state()?.visible).toBe(true);
+  expect(app.shows("id:quick-translate-source")).toBe(true);
+});
+
+test("quick translate: pasted text stays text and does not call OCR", async () => {
+  const app = await open(HARNESS_ENTRY, {
+    ...viewport,
+    storage: ocrSeed(),
+    network: ocrRoutes(JSON.stringify({ text: OCR_TEXT })),
+  });
+
+  await app.press("id:harness-tray-quick-translate");
+  await app.waitFor("id:quick-translate-source");
+  await app.paste("id:quick-translate-source", { text: "Pasted sentence" });
+
+  expect(hasQuickSource(app, "Pasted sentence")).toBe(true);
+  expect(app.requests().some((request) => request.url.includes("vision.example.com"))).toBe(false);
+  expect(app.shows("id:quick-translate-ocr-busy")).toBe(false);
+});
+
+test("quick translate: a pasted image without OCR keeps the draft and shows setup", async () => {
+  const app = await open(HARNESS_ENTRY, {
+    ...viewport,
+    storage: { "settings.language": "en" },
+  });
+
+  await app.press("id:harness-tray-quick-translate");
+  await app.waitFor("id:quick-translate-source");
+  await app.type("id:quick-translate-source", "kept draft");
+  await app.paste("id:quick-translate-source", { files: [PASTED_PNG] });
+  await app.waitFor("id:quick-translate-ocr-status");
+
+  expect(app.texts()).toContain(
+    "Configure OCR in Settings, or choose another way to get the text.",
+  );
+  expect(hasQuickSource(app, "kept draft")).toBe(true);
+  expect(app.requests()).toHaveLength(0);
+});
+
 test("quick ocr: cancelling keeps the draft and restores the popup", async () => {
   const app = await open(HARNESS_ENTRY, {
     ...viewport,

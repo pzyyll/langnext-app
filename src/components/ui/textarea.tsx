@@ -6,6 +6,7 @@ import {
   View,
   type InputRef,
   type JSX,
+  type PasteEvent,
   type SubmitBehavior,
 } from "nsh";
 import { Input as BaseInput } from "nsh/base";
@@ -52,6 +53,7 @@ interface TextareaProps {
   initialFontStep?: number;
   onFontStep?: (step: number) => void;
   onChange?: (value: string) => void;
+  onPaste?: (event: PasteEvent) => void;
   onFocus?: () => void;
   onSubmit?: (text: string) => void;
   onCompositionChange?: (event: { composing: boolean; text: string }) => void;
@@ -265,6 +267,7 @@ export function Textarea(props: TextareaProps) {
           // A disabled field takes no edits either: platforms keep text fields editable.
           readonly={props.readonly || props.disabled}
           onChange={({ value }) => props.onChange?.(value)}
+          onPaste={(event) => props.onPaste?.(event)}
           onFocus={() => props.onFocus?.()}
           onSubmit={({ text }) => props.onSubmit?.(text)}
           onCompositionChange={(event) => props.onCompositionChange?.(event)}
