@@ -1,5 +1,7 @@
 # Langnext
 
+[中文](README.zh-CN.md)
+
 Langnext is a desktop application for translation. You can type text, translate a selection, or translate text in a screenshot. One Quick Translate window can show several translations of the same text.
 
 ## Prepare a translation
