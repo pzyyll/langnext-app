@@ -2,7 +2,6 @@ import { expect, open, test } from "nsh/test";
 import { CREDENTIAL_KEY_PREFIX, MODELS_STORAGE_KEY, PROVIDERS_STORAGE_KEY } from "./store";
 import type { ProviderChannel } from "../../modules/ai/contracts/channel";
 import type { ProviderModel } from "../../modules/ai/contracts/model";
-import { emptyCatalogCache } from "./__tests__/fixtures";
 
 const APP_ENTRY = "../../../App.tsx";
 const viewport = { width: 1040, height: 720, platform: "windows" as const };
@@ -11,7 +10,7 @@ function createStorageMock(
   initial: Record<string, string> = { "settings.language": "en" },
   onSet?: (key: string, value: string, backing: Record<string, string>) => Promise<void> | void,
 ) {
-  const backing: Record<string, string> = { ...emptyCatalogCache(), ...initial };
+  const backing: Record<string, string> = { ...initial };
   return {
     backing,
     modules: {

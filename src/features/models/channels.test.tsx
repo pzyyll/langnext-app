@@ -8,8 +8,6 @@ import {
 import type { ProviderChannel } from "../../modules/ai/contracts/channel";
 import type { ProviderModel } from "../../modules/ai/contracts/model";
 import {
-  catalogCache,
-  emptyCatalogCache,
   makeChannel,
   makeModel,
   makeSeedStorage,
@@ -21,10 +19,14 @@ const APP_ENTRY = "../../../App.tsx";
 const MODELS_DEV_REQUEST = "GET https://models.dev/models.json";
 const viewport = { width: 1040, height: 720, platform: "windows" as const };
 
+function providerRequests<T extends { url: string }>(app: { requests(): T[] }): T[] {
+  return app.requests().filter((request) => !request.url.includes("models.dev"));
+}
+
 test("provider channels: saves an empty OpenAI draft offline", async () => {
   const app = await open(APP_ENTRY, {
     ...viewport,
-    storage: { ...emptyCatalogCache(), "settings.language": "en" },
+    storage: { "settings.language": "en" },
   });
 
   await app.press("id:empty-add-channel-button");
@@ -185,7 +187,7 @@ test("provider channels: same-channel updates retain pending connection edits", 
 test("provider channels: Gemini has one fixed default API", async () => {
   const app = await open(APP_ENTRY, {
     ...viewport,
-    storage: { ...emptyCatalogCache(), "settings.language": "en" },
+    storage: { "settings.language": "en" },
   });
 
   await app.press("id:empty-add-channel-button");
@@ -206,7 +208,7 @@ test("provider channels: Gemini has one fixed default API", async () => {
 test("provider channels: Anthropic has one fixed default API", async () => {
   const app = await open(APP_ENTRY, {
     ...viewport,
-    storage: { ...emptyCatalogCache(), "settings.language": "en" },
+    storage: { "settings.language": "en" },
   });
 
   await app.press("id:empty-add-channel-button");
@@ -226,7 +228,7 @@ test("provider channels: Anthropic has one fixed default API", async () => {
 test("provider channels: OpenAI defaults to Responses and allows only Chat and Responses", async () => {
   const app = await open(APP_ENTRY, {
     ...viewport,
-    storage: { ...emptyCatalogCache(), "settings.language": "en" },
+    storage: { "settings.language": "en" },
   });
 
   await app.press("id:empty-add-channel-button");
@@ -251,7 +253,7 @@ test("provider channels: OpenAI defaults to Responses and allows only Chat and R
 test("provider channels: DeepSeek allows Chat, Responses, and Messages without DeepSeek protocol", async () => {
   const app = await open(APP_ENTRY, {
     ...viewport,
-    storage: { ...emptyCatalogCache(), "settings.language": "en" },
+    storage: { "settings.language": "en" },
   });
 
   await app.press("id:empty-add-channel-button");
@@ -275,7 +277,7 @@ test("provider channels: DeepSeek allows Chat, Responses, and Messages without D
 test("provider channels: Custom allows all four protocols with no preset URL", async () => {
   const app = await open(APP_ENTRY, {
     ...viewport,
-    storage: { ...emptyCatalogCache(), "settings.language": "en" },
+    storage: { "settings.language": "en" },
   });
 
   await app.press("id:empty-add-channel-button");
@@ -299,7 +301,7 @@ test("provider channels: Custom allows all four protocols with no preset URL", a
 test("provider channels: picker dismissal keeps selection and proxy URL keeps preset", async () => {
   const emptyApp = await open(APP_ENTRY, {
     ...viewport,
-    storage: { ...emptyCatalogCache(), "settings.language": "en" },
+    storage: { "settings.language": "en" },
   });
   await emptyApp.press("id:empty-add-channel-button");
   await emptyApp.waitFor("id:add-channel-dialog");
@@ -344,7 +346,7 @@ test("provider channels: picker dismissal keeps selection and proxy URL keeps pr
 test("provider channels: edits manual models before first save", async () => {
   const app = await open(APP_ENTRY, {
     ...viewport,
-    storage: { ...emptyCatalogCache(), "settings.language": "en" },
+    storage: { "settings.language": "en" },
   });
 
   await startDraftFromEmptyState(app, "openai");
@@ -393,7 +395,7 @@ test("provider channels: edits manual models before first save", async () => {
 test("provider channels: removes draft model entries without writing storage", async () => {
   const app = await open(APP_ENTRY, {
     ...viewport,
-    storage: { ...emptyCatalogCache(), "settings.language": "en" },
+    storage: { "settings.language": "en" },
   });
 
   await startDraftFromEmptyState(app, "openai");
@@ -432,7 +434,7 @@ test("provider channels: removes draft model entries without writing storage", a
 test("provider channels: closing model dialogs keeps channel draft intact", async () => {
   const app = await open(APP_ENTRY, {
     ...viewport,
-    storage: { ...emptyCatalogCache(), "settings.language": "en" },
+    storage: { "settings.language": "en" },
   });
 
   await startDraftFromEmptyState(app, "openai");
@@ -472,7 +474,7 @@ test("provider channels: closing model dialogs keeps channel draft intact", asyn
 test("provider channels: models inherit default API until overridden", async () => {
   const app = await open(APP_ENTRY, {
     ...viewport,
-    storage: { ...emptyCatalogCache(), "settings.language": "en" },
+    storage: { "settings.language": "en" },
   });
 
   await startDraftFromEmptyState(app, "openai");
@@ -522,7 +524,7 @@ test("provider channels: models inherit default API until overridden", async () 
 test("provider channels: clearing a model override restores inheritance", async () => {
   const app = await open(APP_ENTRY, {
     ...viewport,
-    storage: { ...emptyCatalogCache(), "settings.language": "en" },
+    storage: { "settings.language": "en" },
   });
 
   await startDraftFromEmptyState(app, "openai");
@@ -634,7 +636,7 @@ test("provider channels: saved channel editor filters model overrides and preser
 test("provider channels: DeepSeek model allows Messages override without Gemini", async () => {
   const app = await open(APP_ENTRY, {
     ...viewport,
-    storage: { ...emptyCatalogCache(), "settings.language": "en" },
+    storage: { "settings.language": "en" },
   });
 
   await startDraftFromEmptyState(app, "deepseek");
@@ -675,7 +677,7 @@ test("provider channels: DeepSeek model allows Messages override without Gemini"
 test("provider channels: draft discovery uses current proxy inputs", async () => {
   const app = await open(APP_ENTRY, {
     ...viewport,
-    storage: { ...emptyCatalogCache(), "settings.language": "en" },
+    storage: { "settings.language": "en" },
     network: {
       "GET https://proxy.example.com/custom-prefix/models": {
         status: 200,
@@ -698,9 +700,10 @@ test("provider channels: draft discovery uses current proxy inputs", async () =>
   await app.press("id:get-models-button");
   await app.waitFor("id:model-row-gpt-4.1-mini");
 
-  expect(app.requests()).toHaveLength(1);
-  expect(app.requests()[0]!.url).toBe("https://proxy.example.com/custom-prefix/models");
-  expect(app.requests()[0]!.headers.authorization).toBe("Bearer sk-draft-proxy-key");
+  const requests = providerRequests(app);
+  expect(requests).toHaveLength(1);
+  expect(requests[0]!.url).toBe("https://proxy.example.com/custom-prefix/models");
+  expect(requests[0]!.headers.authorization).toBe("Bearer sk-draft-proxy-key");
   expect(app.shows("id:model-row-gpt-4.1-mini >> text:Default (OpenAI Chat Completions)")).toBe(
     true,
   );
@@ -751,8 +754,9 @@ test("provider channels: dirty saved editor tests and fetches with keep, replace
   await app.press("id:clear-token-button");
   await app.press("id:get-models-button");
   await app.waitFor("id:model-row-gpt-4.1-mini");
-  expect(app.requests()).toHaveLength(3);
-  expect(app.requests()[2]!.headers.authorization).toBeUndefined();
+  const requests = providerRequests(app);
+  expect(requests).toHaveLength(3);
+  expect(requests[2]!.headers.authorization).toBeUndefined();
 
   const stored = JSON.parse(app.storage()[PROVIDERS_STORAGE_KEY]!) as Array<{
     baseUrl: string | null;
@@ -763,7 +767,7 @@ test("provider channels: dirty saved editor tests and fetches with keep, replace
 test("provider channels: Custom without URL saves locally but rejects network actions", async () => {
   const app = await open(APP_ENTRY, {
     ...viewport,
-    storage: { ...emptyCatalogCache(), "settings.language": "en" },
+    storage: { "settings.language": "en" },
   });
 
   await startDraftFromEmptyState(app, "custom");
@@ -819,6 +823,7 @@ test("provider channels: resync preserves one configured model per ID", async ()
       credentials: { [deepseek.id]: "sk-ds-dummy" },
     }),
     network: {
+      [MODELS_DEV_REQUEST]: { status: 200, body: {} },
       "GET https://api.deepseek.com/models": {
         status: 200,
         body: { data: [{ id: "deepseek-chat", display_name: "DeepSeek Chat" }] },
@@ -852,7 +857,7 @@ test("provider channels: resync preserves one configured model per ID", async ()
   await app.type("id:connection-url-input", "https://proxy.example.com/ds");
 
   await app.press("id:get-models-button");
-  await app.waitUntil(() => app.requests().length === 2);
+  await app.waitUntil(() => providerRequests(app).length === 2);
 
   expect(app.count("id:model-row-deepseek-chat")).toBe(1);
   expect(app.texts()).toContain("DeepSeek Primary");
@@ -983,7 +988,7 @@ test("provider channels: resync tracks missing, manual, duplicate IDs, and faile
 test("provider channels: saves manual and fetched draft models locally", async () => {
   const app = await open(APP_ENTRY, {
     ...viewport,
-    storage: { ...emptyCatalogCache(), "settings.language": "en" },
+    storage: { "settings.language": "en" },
     network: {
       "GET https://proxy.example.com/ds/models": {
         status: 200,
@@ -1078,7 +1083,7 @@ test("provider channels: saves manual and fetched draft models locally", async (
 test("provider channels: saves draft offline with empty key after network failure", async () => {
   const app = await open(APP_ENTRY, {
     ...viewport,
-    storage: { ...emptyCatalogCache(), "settings.language": "en" },
+    storage: { "settings.language": "en" },
     network: {
       "GET https://unreachable.example.com/v1/models": {
         status: 503,
@@ -1104,7 +1109,7 @@ test("provider channels: saves draft offline with empty key after network failur
   await app.press("id:save-channel-button");
   await app.waitUntil(() => !app.shows("id:cancel-channel-button"));
 
-  expect(app.requests()).toHaveLength(1);
+  expect(providerRequests(app)).toHaveLength(1);
   expect(app.shows("id:model-row-local-gguf")).toBe(true);
 
   const reopened = await open(APP_ENTRY, {
@@ -1228,7 +1233,7 @@ test("provider channels: draft Cancel returns to previous channel or empty state
   // Part 2: cancelling a draft started from empty state returns to empty state.
   const emptyApp = await open(APP_ENTRY, {
     ...viewport,
-    storage: { ...emptyCatalogCache(), "settings.language": "en" },
+    storage: { "settings.language": "en" },
   });
   await startDraftFromEmptyState(emptyApp, "openai");
   await emptyApp.clear("id:channel-name-input");
@@ -1248,7 +1253,7 @@ test("provider channels: draft Cancel returns to previous channel or empty state
 test("provider channels: leaving Models waits for discard confirmation", async () => {
   const app = await open(APP_ENTRY, {
     ...viewport,
-    storage: { ...emptyCatalogCache(), "settings.language": "en" },
+    storage: { "settings.language": "en" },
   });
 
   await startDraftFromEmptyState(app, "openai");
@@ -1350,7 +1355,7 @@ test("provider channels: stale catalog cannot populate a replacement draft", asy
 
   const app = await open(APP_ENTRY, {
     ...viewport,
-    storage: { ...emptyCatalogCache(), "settings.language": "en" },
+    storage: { "settings.language": "en" },
     network: {
       "GET https://api.openai.com/v1/models": () =>
         new Promise<StubResponse>((resolve) => {
@@ -1362,7 +1367,7 @@ test("provider channels: stale catalog cannot populate a replacement draft", asy
   await startDraftFromEmptyState(app, "openai");
   await app.type("id:connection-token-input", "sk-openai-dummy");
   const firstFetch = app.press("id:get-models-button");
-  await app.waitUntil(() => app.requests().length === 1);
+  await app.waitUntil(() => providerRequests(app).length === 1);
 
   // Mid-request input edits invalidate the pending catalog immediately so user can keep working.
   await app.clear("id:connection-url-input");
@@ -1373,7 +1378,7 @@ test("provider channels: stale catalog cannot populate a replacement draft", asy
   await app.clear("id:connection-url-input");
   await app.type("id:connection-url-input", "https://api.openai.com/v1");
   const secondFetch = app.press("id:get-models-button");
-  await app.waitUntil(() => app.requests().length === 2);
+  await app.waitUntil(() => providerRequests(app).length === 2);
 
   await app.press("id:cancel-channel-button");
   await app.waitFor("id:discard-draft-dialog");
@@ -1439,14 +1444,14 @@ test("provider channels: switching saved channels and editing connection mid-req
 
   // Changing API type or API key mid-request invalidates the in-flight request.
   const firstFetch = app.press("id:get-models-button");
-  await app.waitUntil(() => app.requests().length === 1);
+  await app.waitUntil(() => providerRequests(app).length === 1);
   await app.press("id:connection-adapter-select");
   await app.waitFor("role:option[OpenAI Chat Completions]");
   await app.press("role:option[OpenAI Chat Completions]");
   await app.waitUntil(() => app.enabled("id:get-models-button"));
 
   const secondFetch = app.press("id:get-models-button");
-  await app.waitUntil(() => app.requests().length === 2);
+  await app.waitUntil(() => providerRequests(app).length === 2);
   await app.type("id:connection-token-input", "sk-replacement");
   await app.waitUntil(() => app.enabled("id:get-models-button"));
 
@@ -1460,7 +1465,7 @@ test("provider channels: switching saved channels and editing connection mid-req
 
   // Switch saved channels while a request is pending; delayed response must not affect either channel.
   const thirdFetch = app.press("id:get-models-button");
-  await app.waitUntil(() => app.requests().length === 3);
+  await app.waitUntil(() => providerRequests(app).length === 3);
   await app.press("id:channel-item-ch-anthropic");
   await app.waitUntil(() => app.value("id:connection-url-input") === "https://api.anthropic.com");
 
@@ -1484,7 +1489,7 @@ test("provider channels: saving during a pending fetch keeps visible models and 
 
   const app = await open(APP_ENTRY, {
     ...viewport,
-    storage: { ...emptyCatalogCache(), "settings.language": "en" },
+    storage: { "settings.language": "en" },
     network: {
       "GET https://api.openai.com/v1/models": () => {
         callCount += 1;
@@ -1512,7 +1517,7 @@ test("provider channels: saving during a pending fetch keeps visible models and 
 
   // Start slow fetch, then press Save before it resolves.
   const draftFetch = app.press("id:get-models-button");
-  await app.waitUntil(() => app.requests().length === 1);
+  await app.waitUntil(() => providerRequests(app).length === 1);
 
   await app.press("id:save-channel-button");
   await app.waitUntil(() => !app.shows("id:cancel-channel-button"));
@@ -1537,7 +1542,7 @@ test("provider channels: saving during a pending fetch keeps visible models and 
 test("provider channels: draft HTTP consent follows the current root", async () => {
   const app = await open(APP_ENTRY, {
     ...viewport,
-    storage: { ...emptyCatalogCache(), "settings.language": "en" },
+    storage: { "settings.language": "en" },
     network: {
       "GET http://one.example.com/models": {
         status: 200,
@@ -1600,7 +1605,7 @@ test("provider channels: draft HTTP consent follows the current root", async () 
   await app.press("id:save-channel-button");
   await app.waitUntil(() => !app.shows("id:cancel-channel-button"));
 
-  expect(app.requests().map((r) => r.url)).toEqual([
+  expect(providerRequests(app).map((request) => request.url)).toEqual([
     "http://one.example.com/models",
     "http://two.example.com/v1/models",
   ]);
@@ -1609,7 +1614,7 @@ test("provider channels: draft HTTP consent follows the current root", async () 
 test("provider channels: loopback HTTP, URL validation, and positive numeric limits", async () => {
   const app = await open(APP_ENTRY, {
     ...viewport,
-    storage: { ...emptyCatalogCache(), "settings.language": "en" },
+    storage: { "settings.language": "en" },
     network: {
       "GET http://127.0.0.1:11434/v1/models": {
         status: 200,
@@ -1671,7 +1676,7 @@ test("provider channels: loopback HTTP, URL validation, and positive numeric lim
 test("provider channels: keep, replace, and clear preserve credential isolation across reopen", async () => {
   const app = await open(APP_ENTRY, {
     ...viewport,
-    storage: { ...emptyCatalogCache(), "settings.language": "en" },
+    storage: { "settings.language": "en" },
     network: {
       "GET https://api.openai.com/v1/models": {
         status: 200,
@@ -1747,7 +1752,7 @@ test("provider channels: keep, replace, and clear preserve credential isolation 
 test("provider channels: keyboard completes the provider draft flow", async () => {
   const app = await open(APP_ENTRY, {
     ...viewport,
-    storage: { ...emptyCatalogCache(), "settings.language": "en" },
+    storage: { "settings.language": "en" },
   });
 
   // Escape dismisses picker without creating a draft.
@@ -1823,7 +1828,7 @@ test("provider channels: keyboard completes the provider draft flow", async () =
 test("provider channels: renders zh-CN localization without missing keys", async () => {
   const app = await open(APP_ENTRY, {
     ...viewport,
-    storage: { ...emptyCatalogCache(), "settings.language": "zh-CN" },
+    storage: { "settings.language": "zh-CN" },
   });
 
   expect(app.texts()).toContain("添加渠道");
@@ -1879,7 +1884,7 @@ test("provider channels: compact 720x520 layout supports reduced motion draft fl
     height: 520,
     platform: "windows" as const,
     reducedMotion: true,
-    storage: { ...emptyCatalogCache(), "settings.language": "en" },
+    storage: { "settings.language": "en" },
   });
 
   await app.press("id:empty-add-channel-button");
@@ -2006,7 +2011,7 @@ test("provider channels: sync succeeds when the models.dev catalog is unreachabl
   expect(app.storage()[MODELS_STORAGE_KEY]).toContain("alpha-model-v1");
 });
 
-test("provider channels: a manual model inherits cached models.dev facts", async () => {
+test("provider channels: a manual model inherits models.dev facts without calling the provider", async () => {
   const channel = makeChannel({
     id: "ch-manual-facts",
     presetId: "anthropic",
@@ -2020,17 +2025,18 @@ test("provider channels: a manual model inherits cached models.dev facts", async
     storage: makeSeedStorage({
       channels: [channel],
       credentials: { [channel.id]: "sk-ant" },
-      extra: catalogCache({
-        "anthropic/claude-sonnet-4-5": {
-          text: true,
-          image: true,
-          pdf: true,
-          video: false,
-          contextLimit: 200_000,
-          maxTokens: 64_000,
-        },
-      }),
     }),
+    network: {
+      [MODELS_DEV_REQUEST]: {
+        status: 200,
+        body: {
+          "anthropic/claude-sonnet-4-5": {
+            modalities: { input: ["text", "image", "pdf"] },
+            limit: { context: 200_000, output: 64_000 },
+          },
+        },
+      },
+    },
   });
 
   await app.press("id:add-model-button");
@@ -2043,7 +2049,7 @@ test("provider channels: a manual model inherits cached models.dev facts", async
   expect(app.shows("id:model-row-claude-sonnet-4-5 >> text:64K out")).toBe(true);
   expect(app.shows("id:model-row-claude-sonnet-4-5 >> label:PDF")).toBe(true);
   // The catalog provides discovery facts only, never a user override.
-  expect(app.requests()).toHaveLength(0);
+  expect(app.requests().map((request) => request.url)).toEqual(["https://models.dev/models.json"]);
 });
 
 test("ai workspace: unknown provider remains visible without requests", async () => {

@@ -2,6 +2,7 @@ import { AudioPlayer } from "nsh";
 import { mkdir, readdir, unlink, writeFile } from "fs/promises";
 import { join } from "path";
 import { pathToFileURL } from "url";
+import { appDataDirectory } from "../../services/app-data";
 
 /** App-owned directory under the data directory. Playback files live only here. */
 export const TTS_PLAYBACK_DIRECTORY = "tts-playback";
@@ -44,14 +45,6 @@ function encodeBase64(bytes: Uint8Array): string {
 
 function headlessPlaybackUrl(name: string, bytes: Uint8Array): string {
   return `data:audio/mpeg;filename=${TTS_PLAYBACK_DIRECTORY}/${name};base64,${encodeBase64(bytes)}`;
-}
-
-function appDataDirectory(): string | null {
-  // The bundled default import of `process` does not carry the live dataDir getter.
-  const runtime = (globalThis as { process?: { dataDir?: string | null } }).process;
-  const root = runtime?.dataDir;
-  if (typeof root !== "string" || root.length === 0) return null;
-  return root;
 }
 
 /** Whether this device can open a local player. A missing data directory is not a refusal: the headless test engine keeps no files. */

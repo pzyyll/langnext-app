@@ -1,12 +1,7 @@
 import { t } from "nsh/i18n";
 import { expect, open, test, type App } from "nsh/test";
 import { SPLIT_RAIL_STORAGE_KEYS } from "../../components/layout/split-rail";
-import {
-  emptyCatalogCache,
-  makeChannel,
-  makeModel,
-  makeSeedStorage,
-} from "../models/__tests__/fixtures";
+import { makeChannel, makeModel, makeSeedStorage } from "../models/__tests__/fixtures";
 import {
   deepLCredentialStorageKey,
   googleCloudCredentialStorageKey,
@@ -118,7 +113,7 @@ test("presets ui: saves a new preset", async () => {
   // With zero eligible models, Save is blocked on a new draft and Manage Models offers recovery.
   const emptyModelsApp = await open(APP_ENTRY, {
     ...viewport,
-    storage: { ...emptyCatalogCache(), "settings.language": "en" },
+    storage: { "settings.language": "en" },
   });
   await emptyModelsApp.press("id:nav-presets");
   await emptyModelsApp.waitFor("id:presets-page");

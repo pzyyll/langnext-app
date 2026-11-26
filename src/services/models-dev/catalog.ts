@@ -1,7 +1,10 @@
 // ABOUTME: Client for the models.dev catalog that seeds model capabilities and token limits.
-// ABOUTME: Refreshes https://models.dev/models.json once per 24h; the bundled snapshot answers when it cannot.
+// ABOUTME: Refreshes https://models.dev/models.json once per 24h into the app data directory; the bundled snapshot answers when it cannot.
 import { Storage } from "nsh";
+import { mkdir, readFile, rename, stat, unlink, writeFile } from "fs/promises";
+import { join } from "path";
 import bundledCatalogUrl from "../../../assets/catalog/models.dev.json?url";
+import { appDataDirectory } from "../app-data";
 import { createHttpFetch } from "../http";
 import { createLogger } from "../log";
 
@@ -9,8 +12,12 @@ import { createLogger } from "../log";
 const CATALOG_URL = "https://models.dev/models.json";
 /** The copy of that catalog the app ships, refreshed by `mise run catalog`. */
 const BUNDLED_CATALOG_URL = bundledCatalogUrl;
-/** Storage key holding the derived catalog cache. */
-export const CATALOG_CACHE_KEY = "models.dev.catalog.v1";
+/** Directory under the app data directory that holds the downloaded catalog. */
+const DOWNLOADED_CATALOG_DIRECTORY = "catalog";
+/** Raw models.dev document, the same shape as `assets/catalog/models.dev.json`. */
+const DOWNLOADED_CATALOG_FILE_NAME = "models.dev.json";
+/** Earlier builds kept derived facts in app storage. Drop that entry so it no longer uses the quota. */
+const LEGACY_CATALOG_STORAGE_KEY = "models.dev.catalog.v1";
 /** Refresh the remote catalog only after this age (24h). */
 const CACHE_TTL_MS = 24 * 60 * 60 * 1000;
 /** Bound the catalog request so model discovery is not blocked indefinitely. */
@@ -41,17 +48,19 @@ export interface CatalogIndex {
   lookup(modelKey: string, providerId: string | null): CatalogFacts | null;
 }
 
-/** Disk cache envelope so the refresh age survives restarts. */
-interface CatalogCache {
+/** One downloaded models.dev document and the time it was written. */
+export interface DownloadedCatalog {
+  /** Raw models.dev JSON, the same document shape as the bundled snapshot. */
+  body: string;
+  /** When that file was written, in milliseconds since the Unix epoch. */
   fetchedAt: number;
-  models: Record<string, CatalogFacts>;
 }
 
-/** Injected dependencies, replaced in tests to avoid the network and app storage. */
+/** Injected dependencies, replaced in tests to avoid the network and the data directory. */
 export interface CatalogDeps {
   now: () => number;
-  readCache: () => Promise<string | null>;
-  writeCache: (value: string) => Promise<void>;
+  readDownloadedCatalog: () => Promise<DownloadedCatalog | null>;
+  writeDownloadedCatalog: (body: string) => Promise<void>;
   fetchCatalog: () => Promise<string>;
   readBundledCatalog: () => Promise<string>;
 }
@@ -68,12 +77,12 @@ interface RawCatalogEntry {
   limit?: { context?: unknown; output?: unknown };
 }
 
-/** Creates a catalog reader over the given dependencies, defaulting to the app's storage and network. */
+/** Creates a catalog reader over the given dependencies, defaulting to the app data directory and network. */
 export function createCatalog(deps: Partial<CatalogDeps> = {}): Catalog {
   const resolved: CatalogDeps = {
     now: deps.now ?? (() => Date.now()),
-    readCache: deps.readCache ?? (() => Storage.getItem(CATALOG_CACHE_KEY)),
-    writeCache: deps.writeCache ?? ((value) => Storage.setItem(CATALOG_CACHE_KEY, value)),
+    readDownloadedCatalog: deps.readDownloadedCatalog ?? readDownloadedCatalogFile,
+    writeDownloadedCatalog: deps.writeDownloadedCatalog ?? writeDownloadedCatalogFile,
     fetchCatalog: deps.fetchCatalog ?? fetchCatalogBody,
     readBundledCatalog: deps.readBundledCatalog ?? fetchBundledCatalogBody,
   };
@@ -83,7 +92,7 @@ export function createCatalog(deps: Partial<CatalogDeps> = {}): Catalog {
   const readBundledIndex = (): Promise<CatalogIndex | null> => {
     bundledIndex ??= (async () => {
       try {
-        return buildIndex(parseCatalogBody(await resolved.readBundledCatalog()));
+        return indexFromCatalogBody(await resolved.readBundledCatalog());
       } catch (error) {
         log.warn("Could not read the bundled models.dev catalog.", error);
         return null;
@@ -92,39 +101,32 @@ export function createCatalog(deps: Partial<CatalogDeps> = {}): Catalog {
     return bundledIndex;
   };
 
-  const readCachedIndex = async (): Promise<{ index: CatalogIndex; fetchedAt: number } | null> => {
-    let raw: string | null;
+  const readDownloadedIndex = async (): Promise<{
+    index: CatalogIndex;
+    fetchedAt: number;
+  } | null> => {
+    let downloaded: DownloadedCatalog | null;
     try {
-      raw = await resolved.readCache();
+      downloaded = await resolved.readDownloadedCatalog();
     } catch (error) {
-      log.warn("Could not read the models.dev catalog cache.", error);
+      log.warn("Could not read the downloaded models.dev catalog.", error);
       return null;
     }
-    if (!raw) return null;
+    if (!downloaded) return null;
     try {
-      const parsed: unknown = JSON.parse(raw);
-      if (!parsed || typeof parsed !== "object") return null;
-      const cache = parsed as Partial<CatalogCache>;
-      if (
-        typeof cache.fetchedAt !== "number" ||
-        !cache.models ||
-        typeof cache.models !== "object"
-      ) {
-        return null;
-      }
-      return { index: buildIndex(coerceCachedModels(cache.models)), fetchedAt: cache.fetchedAt };
+      return { index: indexFromCatalogBody(downloaded.body), fetchedAt: downloaded.fetchedAt };
     } catch (error) {
-      log.warn("Could not parse the models.dev catalog cache.", error);
+      log.warn("Could not parse the downloaded models.dev catalog.", error);
       return null;
     }
   };
 
   return {
     load: async () => {
-      const cached = await readCachedIndex();
+      const downloaded = await readDownloadedIndex();
       const now = resolved.now();
-      if (cached && now - cached.fetchedAt < CACHE_TTL_MS) {
-        return cached.index;
+      if (downloaded && now - downloaded.fetchedAt < CACHE_TTL_MS) {
+        return downloaded.index;
       }
       if (inFlight) {
         return inFlight;
@@ -133,17 +135,17 @@ export function createCatalog(deps: Partial<CatalogDeps> = {}): Catalog {
       const pending = (async (): Promise<CatalogIndex | null> => {
         try {
           const body = await resolved.fetchCatalog();
-          const models = parseCatalogBody(body);
+          const index = indexFromCatalogBody(body);
           try {
-            await resolved.writeCache(JSON.stringify({ fetchedAt: now, models }));
+            await resolved.writeDownloadedCatalog(body);
           } catch (error) {
-            log.warn("Could not cache the models.dev catalog.", error);
+            log.warn("Could not save the downloaded models.dev catalog.", error);
           }
-          return buildIndex(models);
+          return index;
         } catch (error) {
           log.warn("Could not refresh the models.dev catalog.", error);
-          // A stale cache is newer than the bundle, and the bundle is the last resort.
-          return cached?.index ?? (await readBundledIndex());
+          // A stale download is newer than the bundle, and the bundle is the last resort.
+          return downloaded?.index ?? (await readBundledIndex());
         } finally {
           inFlight = null;
         }
@@ -155,9 +157,20 @@ export function createCatalog(deps: Partial<CatalogDeps> = {}): Catalog {
 }
 
 const defaultCatalog = createCatalog();
+let legacyStorageCleared = false;
 
-/** Loads the shared catalog index, or `null` when the network, the cache and the bundle all fail. */
+/** Drops the derived catalog that older builds stored in `storage.json`. */
+function releaseLegacyCatalogStorage(): void {
+  if (legacyStorageCleared) return;
+  legacyStorageCleared = true;
+  void Storage.removeItem(LEGACY_CATALOG_STORAGE_KEY).catch((error) => {
+    log.warn("Could not remove the models.dev catalog from app storage.", error);
+  });
+}
+
+/** Loads the shared catalog index, or `null` when the network, the download and the bundle all fail. */
 export function loadCatalog(): Promise<CatalogIndex | null> {
+  releaseLegacyCatalogStorage();
   return defaultCatalog.load();
 }
 
@@ -211,6 +224,10 @@ function maxLimit(a: number | null, b: number | null): number | null {
   return Math.max(a, b);
 }
 
+function indexFromCatalogBody(body: string): CatalogIndex {
+  return buildIndex(parseCatalogBody(body));
+}
+
 function parseCatalogBody(body: string): Record<string, CatalogFacts> {
   const parsed: unknown = JSON.parse(body);
   if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
@@ -225,24 +242,6 @@ function coerceModels(entries: Record<string, unknown>): Record<string, CatalogF
   for (const [fullId, raw] of Object.entries(entries)) {
     if (!raw || typeof raw !== "object") continue;
     models[fullId] = factsFromEntry(raw as RawCatalogEntry);
-  }
-  return models;
-}
-
-/** Reads the derived facts kept in the cache, which omit the raw catalog fields. */
-function coerceCachedModels(entries: Record<string, unknown>): Record<string, CatalogFacts> {
-  const models: Record<string, CatalogFacts> = {};
-  for (const [fullId, raw] of Object.entries(entries)) {
-    if (!raw || typeof raw !== "object") continue;
-    const cached = raw as Partial<CatalogFacts>;
-    models[fullId] = {
-      text: typeof cached.text === "boolean" ? cached.text : true,
-      image: cached.image === true,
-      pdf: cached.pdf === true,
-      video: cached.video === true,
-      contextLimit: positiveTokenCount(cached.contextLimit),
-      maxTokens: positiveTokenCount(cached.maxTokens),
-    };
   }
   return models;
 }
@@ -305,4 +304,46 @@ async function fetchCatalogBody(): Promise<string> {
   } finally {
     clearTimeout(timer);
   }
+}
+
+function downloadedCatalogPath(): string | null {
+  const root = appDataDirectory();
+  if (root === null) return null;
+  return join(root, DOWNLOADED_CATALOG_DIRECTORY, DOWNLOADED_CATALOG_FILE_NAME);
+}
+
+function errorCode(error: unknown): string | undefined {
+  if (!error || typeof error !== "object") return undefined;
+  const code = (error as { code?: unknown }).code;
+  return typeof code === "string" ? code : undefined;
+}
+
+async function readDownloadedCatalogFile(): Promise<DownloadedCatalog | null> {
+  const filePath = downloadedCatalogPath();
+  if (filePath === null) return null;
+  try {
+    const [body, info] = await Promise.all([readFile(filePath, "utf8"), stat(filePath)]);
+    if (typeof info.mtimeMs !== "number" || !Number.isFinite(info.mtimeMs)) return null;
+    return { body, fetchedAt: info.mtimeMs };
+  } catch (error) {
+    if (errorCode(error) === "ENOENT") return null;
+    log.warn("Could not read the downloaded models.dev catalog.", error);
+    return null;
+  }
+}
+
+async function writeDownloadedCatalogFile(body: string): Promise<void> {
+  const filePath = downloadedCatalogPath();
+  const root = appDataDirectory();
+  if (filePath === null || root === null) throw new Error("The app has no data directory.");
+  const directory = join(root, DOWNLOADED_CATALOG_DIRECTORY);
+  await mkdir(directory, { recursive: true });
+  const temporary = join(directory, `${DOWNLOADED_CATALOG_FILE_NAME}.tmp`);
+  await writeFile(temporary, body);
+  try {
+    await unlink(filePath);
+  } catch (error) {
+    if (errorCode(error) !== "ENOENT") throw error;
+  }
+  await rename(temporary, filePath);
 }

@@ -13,6 +13,7 @@ import {
   createCatalog,
   type CatalogDeps,
   type CatalogIndex,
+  type DownloadedCatalog,
 } from "../../../services/models-dev/catalog";
 import { createAiClient, type AiClientInput } from "./client";
 import { createJsonHttpClient } from "./http";
@@ -450,14 +451,14 @@ function catalogBoundary(
   options: {
     body?: Record<string, unknown>;
     fail?: boolean;
-    cache?: string | null;
+    downloaded?: DownloadedCatalog | null;
     snapshot?: Record<string, unknown>;
   } = {},
 ): () => Promise<CatalogIndex | null> {
   const deps: Partial<CatalogDeps> = {
     now: () => 1_000_000,
-    readCache: async () => options.cache ?? null,
-    writeCache: async () => {},
+    readDownloadedCatalog: async () => options.downloaded ?? null,
+    writeDownloadedCatalog: async () => {},
     fetchCatalog: async () => {
       if (options.fail) throw new Error("offline");
       return JSON.stringify(options.body ?? {});
@@ -544,29 +545,25 @@ test("ai client: discovery falls back when the catalog is unavailable", async ()
     {
       modelKey: "gemini-2.5-flash",
       displayName: null,
-      // The bundled snapshot answers when the network and the cache do not.
+      // The bundled snapshot answers when the network and the download do not.
       contextLimit: 262_144,
       maxTokens: 32_768,
       capabilities: { text: true, image: true, pdf: false, video: false },
     },
   ]);
 
-  const staleCache = JSON.stringify({
+  const staleDownload: DownloadedCatalog = {
     fetchedAt: 1_000_000 - DAY_MS,
-    models: {
+    body: JSON.stringify({
       "google/gemini-2.5-flash": {
-        text: true,
-        image: true,
-        pdf: true,
-        video: false,
-        contextLimit: 1_048_576,
-        maxTokens: 65_536,
+        modalities: { input: ["text", "image", "pdf"] },
+        limit: { context: 1_048_576, output: 65_536 },
       },
-    },
-  });
+    }),
+  };
   const stale = createBuiltInHarness(
     geminiListing(),
-    catalogBoundary({ fail: true, cache: staleCache }),
+    catalogBoundary({ fail: true, downloaded: staleDownload }),
   );
   const staleModels = await stale.client.discoverModels(geminiDiscoveryInput);
   expect(staleModels).toEqual([

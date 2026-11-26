@@ -1,6 +1,5 @@
 import { expect, open, test } from "nsh/test";
 import { SPLIT_RAIL_STORAGE_KEYS } from "../../components/layout/split-rail";
-import { emptyCatalogCache } from "./__tests__/fixtures";
 import { credentialStorageKey, MODELS_STORAGE_KEY, PROVIDERS_STORAGE_KEY } from "./store";
 import type { ProviderChannel } from "../../modules/ai/contracts/channel";
 import type { ProviderModel } from "../../modules/ai/contracts/model";
@@ -113,7 +112,6 @@ function seededStorage(
   models = sampleModels(),
 ): Record<string, string> {
   return {
-    ...emptyCatalogCache(),
     "settings.language": "en",
     [PROVIDERS_STORAGE_KEY]: JSON.stringify(channels),
     [MODELS_STORAGE_KEY]: JSON.stringify(models),
@@ -125,7 +123,7 @@ function seededStorage(
 test("creates a new channel with non-loopback HTTP confirmation and stores secrets separately", async () => {
   const app = await open(APP_ENTRY, {
     ...viewport,
-    storage: { ...emptyCatalogCache(), "settings.language": "en" },
+    storage: { "settings.language": "en" },
   });
   expect(app.shows("id:empty-add-channel-button")).toBe(true);
 
@@ -407,6 +405,9 @@ test("adds manual models, configures model overrides, searches, persists filter,
   const app = await open(APP_ENTRY, {
     ...viewport,
     storage: seededStorage(),
+    network: {
+      "GET https://models.dev/models.json": { status: 200, body: {} },
+    },
   });
 
   await app.press("id:add-model-button");

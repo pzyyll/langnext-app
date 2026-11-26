@@ -1,5 +1,5 @@
 import { expect, test } from "nsh/test";
-import { CATALOG_CACHE_KEY, createCatalog, type CatalogDeps } from "./catalog";
+import { createCatalog, type CatalogDeps, type DownloadedCatalog } from "./catalog";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
@@ -33,25 +33,27 @@ const SNAPSHOT_CATALOG = JSON.stringify({
 interface Harness {
   catalog: ReturnType<typeof createCatalog>;
   fetches: () => number;
-  stored: () => string | null;
+  saved: () => DownloadedCatalog | null;
 }
 
 function createHarness(
   options: {
-    cache?: string | null;
+    saved?: DownloadedCatalog | null;
     fetchBody?: string;
     failFetch?: boolean;
     snapshotBody?: string;
     failSnapshot?: boolean;
+    failWrite?: boolean;
   } = {},
 ): Harness {
   let fetches = 0;
-  let cache = options.cache ?? null;
+  let saved = options.saved ?? null;
   const deps: Partial<CatalogDeps> = {
     now: () => 1_000_000,
-    readCache: async () => cache,
-    writeCache: async (value) => {
-      cache = value;
+    readDownloadedCatalog: async () => saved,
+    writeDownloadedCatalog: async (body) => {
+      if (options.failWrite) throw new Error("disk full");
+      saved = { fetchedAt: 1_000_000, body };
     },
     fetchCatalog: async () => {
       fetches += 1;
@@ -70,7 +72,7 @@ function createHarness(
   return {
     catalog: createCatalog(deps),
     fetches: () => fetches,
-    stored: () => cache,
+    saved: () => saved,
   };
 }
 
@@ -164,57 +166,41 @@ test("models.dev catalog: treats missing modalities as text and drops empty limi
   });
 });
 
-test("models.dev catalog: caches derived facts and skips the network within the TTL", async () => {
+test("models.dev catalog: saves the raw document and skips the network within the TTL", async () => {
   const harness = createHarness();
   await harness.catalog.load();
   expect(harness.fetches()).toBe(1);
+  expect(harness.saved()).toEqual({ fetchedAt: 1_000_000, body: SAMPLE_CATALOG });
 
-  const cache = JSON.parse(harness.stored()!) as {
-    fetchedAt: number;
-    models: Record<string, unknown>;
-  };
-  expect(cache.fetchedAt).toBe(1_000_000);
-  expect(Object.keys(cache.models)).toContain("openai/gpt-4o-mini");
-  // The cache keeps derived facts only, not the raw catalog body.
-  expect(cache.models["openai/gpt-4o-mini"]).toEqual({
-    text: true,
-    image: true,
-    pdf: true,
-    video: false,
-    contextLimit: 128_000,
-    maxTokens: 16_384,
-  });
-
-  const second = createHarness({ cache: harness.stored() });
+  const second = createHarness({ saved: harness.saved() });
   const facts = (await second.catalog.load())!.lookup("gpt-4o-mini", "openai");
-  expect(facts).toMatchObject({ contextLimit: 128_000 });
+  expect(facts).toMatchObject({ contextLimit: 128_000, pdf: true });
   expect(second.fetches()).toBe(0);
 });
 
-test("models.dev catalog: refreshes an expired cache and falls back to it when offline", async () => {
-  const expired = JSON.stringify({
+test("models.dev catalog: refreshes an expired download and falls back to it when offline", async () => {
+  const expired: DownloadedCatalog = {
     fetchedAt: 1_000_000 - DAY_MS,
-    models: {
+    body: JSON.stringify({
       "openai/gpt-4o-mini": {
-        text: true,
-        image: true,
-        pdf: true,
-        video: false,
-        contextLimit: 128_000,
-        maxTokens: 16_384,
+        modalities: { input: ["text"] },
+        limit: { context: 32_000, output: 1_024 },
       },
-    },
-  });
+    }),
+  };
 
-  const refreshed = createHarness({ cache: expired });
+  const refreshed = createHarness({ saved: expired });
   expect((await refreshed.catalog.load())!.lookup("gpt-4o-mini", "openai")).toMatchObject({
     maxTokens: 16_384,
   });
   expect(refreshed.fetches()).toBe(1);
+  expect(refreshed.saved()?.body).toBe(SAMPLE_CATALOG);
 
-  const offline = createHarness({ cache: expired, failFetch: true });
+  const offline = createHarness({ saved: expired, failFetch: true });
   expect((await offline.catalog.load())!.lookup("gpt-4o-mini", "openai")).toMatchObject({
-    contextLimit: 128_000,
+    contextLimit: 32_000,
+    maxTokens: 1_024,
+    image: false,
   });
   expect(offline.fetches()).toBe(1);
 
@@ -222,7 +208,7 @@ test("models.dev catalog: refreshes an expired cache and falls back to it when o
   expect(await empty.catalog.load()).toBeNull();
 });
 
-test("models.dev catalog: serves the bundled snapshot when the network fails and no cache exists", async () => {
+test("models.dev catalog: serves the bundled snapshot when the network fails and no download exists", async () => {
   const offline = createHarness({ failFetch: true });
   const index = await offline.catalog.load();
 
@@ -238,11 +224,21 @@ test("models.dev catalog: serves the bundled snapshot when the network fails and
   expect(index!.lookup("unknown-model", null)).toBeNull();
 });
 
-test("models.dev catalog: ignores a corrupt cache and refetches", async () => {
-  const { catalog, fetches } = createHarness({ cache: "{not json" });
+test("models.dev catalog: ignores a corrupt download and refetches", async () => {
+  const { catalog, fetches } = createHarness({
+    saved: { fetchedAt: 1_000_000, body: "{not json" },
+  });
   const index = await catalog.load();
 
   expect(index!.lookup("gpt-4o-mini", "openai")).toMatchObject({ image: true });
+  expect(fetches()).toBe(1);
+});
+
+test("models.dev catalog: keeps the fetched index when the download cannot be saved", async () => {
+  const { catalog, fetches } = createHarness({ failWrite: true });
+  const facts = (await catalog.load())!.lookup("gpt-4o-mini", "openai");
+
+  expect(facts).toMatchObject({ contextLimit: 128_000 });
   expect(fetches()).toBe(1);
 });
 
@@ -252,8 +248,4 @@ test("models.dev catalog: shares one refresh between concurrent loads", async ()
 
   expect(fetches()).toBe(1);
   expect(first).toBe(second);
-});
-
-test("models.dev catalog: cache key is namespaced for the model metadata", () => {
-  expect(CATALOG_CACHE_KEY).toBe("models.dev.catalog.v1");
 });
