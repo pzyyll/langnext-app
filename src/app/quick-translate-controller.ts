@@ -8,8 +8,11 @@ import {
   type WindowRef,
   type WindowState,
 } from "nsh/desktop";
-import { checkOcrReadiness, recognizeScreenshot } from "../features/ocr/recognize";
-import { ocrSettingsStore } from "../features/ocr/settings";
+import {
+  checkOcrReadiness,
+  enabledOcrEntries,
+  recognizeScreenshot,
+} from "../features/ocr/recognize";
 import type { SourceDelivery, SourceDeliveryKind } from "../features/quick-translate/session";
 import type { SourceInputHandle } from "../features/quick-translate/source-editor";
 import type { ScreenCaptureOverlayConfig, ScreenCapturePort } from "../platform/screen-capture";
@@ -574,8 +577,7 @@ export function createQuickTranslateController(
       isCurrent() && draftGen === draftAtStart && openGen === closeAtStart;
 
     try {
-      const bindings = ocrSettingsStore.enabledBindings();
-      const readiness = await checkOcrReadiness(bindings);
+      const readiness = await checkOcrReadiness(enabledOcrEntries());
       if (!isCurrent()) return;
       if (!readiness.ready) {
         reportFailure(readiness.reason ?? t("ocr.failure.unconfigured"));
@@ -620,7 +622,7 @@ export function createQuickTranslateController(
       // Show the popup before asking the model, so the user can see the recognition status.
       ocrStateSignal.set({ phase: "recognizing", message: null });
       revealWindow();
-      const outcome = await recognizeScreenshot(bindings, captured.png, {
+      const outcome = await recognizeScreenshot(enabledOcrEntries(), captured.png, {
         signal: controller.signal,
       });
       if (!isStillWanted()) return;

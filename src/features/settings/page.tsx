@@ -14,17 +14,22 @@ import { Switch } from "../../components/ui/switch";
 import { buildTooltip } from "../../components/ui/tooltip";
 import { canOpenLogsFolder, openLogsFolder } from "../../platform/logs";
 import { logLevel, type LogLevel } from "../../services/log";
-import { languageDetectionStore, type LanguageDetectorKind } from "../language-detection/settings";
-import { ocrSettingsStore, type OcrServiceKind } from "../ocr/settings";
-import { ttsSettingsStore } from "../tts/settings";
+import {
+  getContributionRegistry,
+  type CapabilityId,
+  type ChannelCollection,
+} from "../../framework/contributions";
+import { detectChannels } from "../language-detection/store";
+import { ocrChannels } from "../ocr/store";
+import { ttsChannels } from "../tts/store";
 import { appearance, appearanceError, selectAppearance, type Appearance } from "./appearance";
 import { language, languageError, selectLanguage, type LanguagePreference } from "./language";
-import { LanguageDetectionSection } from "./language-detection-section";
+import { CapabilitySection } from "./capability-section";
+import { modelHostServices, ttsAudioHost } from "./capability-host-services";
+import { DetectionPreferencesCard } from "./detection-preferences-card";
 import { logLevelError, selectLogLevel } from "./log-level";
-import { OcrSection } from "./ocr-section";
 import { QuickTranslateSection } from "./quick-translate-section";
 import { ShortcutsSection } from "./shortcuts-section";
-import { TtsSection, type TtsChannelId } from "./tts-section";
 import { WordbookSection } from "./wordbook-section";
 import { selectSilentLaunch, silentLaunch, silentLaunchError } from "./silent-launch";
 import type { TranslationShortcutId, TranslationShortcutSetting } from "./shortcuts";
@@ -84,6 +89,69 @@ function sectionLabelKey(section: SettingsSection) {
 }
 
 const selectedSection = signal<SettingsSection>("general");
+
+type CapabilitySectionId = "language-detection" | "ocr" | "tts";
+
+interface CapabilitySectionMeta {
+  capability: CapabilityId;
+  testIdPrefix: string;
+  titleKey: string;
+  addKey: string;
+  emptyKey: string;
+  priorityHintKey: string;
+  breadcrumbLabelKey: string;
+}
+
+/** The three integration sections rendered by the shared capability host. */
+const CAPABILITY_SECTIONS: Record<CapabilitySectionId, CapabilitySectionMeta> = {
+  "language-detection": {
+    capability: "detect",
+    testIdPrefix: "settings-detection",
+    titleKey: "settings.sections.languageDetection",
+    addKey: "settings.languageDetection.addChannel",
+    emptyKey: "settings.languageDetection.emptyTitle",
+    priorityHintKey: "settings.languageDetection.priorityHint",
+    breadcrumbLabelKey: "settings.languageDetection.breadcrumbLabel",
+  },
+  ocr: {
+    capability: "ocr",
+    testIdPrefix: "settings-ocr",
+    titleKey: "settings.sections.ocr",
+    addKey: "settings.ocr.addChannel",
+    emptyKey: "settings.ocr.emptyTitle",
+    priorityHintKey: "settings.ocr.priorityHint",
+    breadcrumbLabelKey: "settings.ocr.breadcrumbLabel",
+  },
+  tts: {
+    capability: "tts",
+    testIdPrefix: "settings-tts",
+    titleKey: "settings.sections.tts",
+    addKey: "settings.tts.addChannel",
+    emptyKey: "settings.tts.emptyTitle",
+    priorityHintKey: "settings.tts.priorityHint",
+    breadcrumbLabelKey: "settings.tts.breadcrumbLabel",
+  },
+};
+
+function isCapabilitySection(section: SettingsSection): section is CapabilitySectionId {
+  return section === "language-detection" || section === "ocr" || section === "tts";
+}
+
+function collectionFor(capability: CapabilityId): ChannelCollection {
+  if (capability === "tts") return ttsChannels;
+  if (capability === "ocr") return ocrChannels;
+  return detectChannels;
+}
+
+function capabilityLabels(section: CapabilitySectionId) {
+  const meta = CAPABILITY_SECTIONS[section];
+  return {
+    titleKey: meta.titleKey,
+    addKey: meta.addKey,
+    emptyKey: meta.emptyKey,
+    priorityHintKey: meta.priorityHintKey,
+  };
+}
 
 interface HeaderBreadcrumb {
   testID: string;
@@ -314,9 +382,7 @@ export function SettingsPage(props: {
   const compact = () => windowSize().width < 860;
   const currentOs = () => props.platformOs ?? platform.os;
   const activeSectionLabelKey = () => sectionLabelKey(selectedSection());
-  const selectedOcrChannel = signal<OcrServiceKind | null>(null);
-  const selectedDetectionChannel = signal<LanguageDetectorKind | null>(null);
-  const selectedTtsChannel = signal<TtsChannelId | null>(null);
+  const selectedChannel = signal<string | null>(null);
   const detectionAddBusy = signal(false);
   const ocrAddBusy = signal(false);
   const ttsAddBusy = signal(false);
@@ -348,82 +414,51 @@ export function SettingsPage(props: {
   let openOcrAddDialog: (() => void) | null = null;
   let openTtsAddDialog: (() => void) | null = null;
 
+  const activeCapabilitySection = (): CapabilitySectionMeta | null => {
+    const section = selectedSection();
+    return isCapabilitySection(section) ? CAPABILITY_SECTIONS[section] : null;
+  };
+
+  const selectedContribution = () => {
+    const meta = activeCapabilitySection();
+    const id = selectedChannel();
+    if (meta === null || id === null) return null;
+    return (
+      getContributionRegistry()
+        .capabilities(meta.capability)
+        .find((contribution) => contribution.id === id) ?? null
+    );
+  };
+
   const headerBreadcrumb = (): HeaderBreadcrumb | null => {
-    const ocrChannel = selectedOcrChannel();
-    if (selectedSection() === "ocr" && ocrChannel !== null) {
-      return {
-        testID: "settings-ocr-breadcrumb",
-        accessibilityLabel: t("settings.ocr.breadcrumbLabel"),
-        items: [
-          {
-            label: t("settings.sections.ocr"),
-            testID: "settings-ocr-breadcrumb-root",
-            onPress: () => selectedOcrChannel.set(null),
-          },
-          {
-            label: t(`settings.ocr.${ocrChannel}`),
-            testID: "settings-ocr-detail-title",
-          },
-        ],
-      };
-    }
-
-    const detectionChannel = selectedDetectionChannel();
-    if (selectedSection() === "language-detection" && detectionChannel !== null) {
-      return {
-        testID: "settings-detection-breadcrumb",
-        accessibilityLabel: t("settings.languageDetection.breadcrumbLabel"),
-        items: [
-          {
-            label: t("settings.sections.languageDetection"),
-            testID: "settings-detection-breadcrumb-root",
-            onPress: () => selectedDetectionChannel.set(null),
-          },
-          {
-            label: t(`settings.languageDetection.${detectionChannel}`),
-            testID: "settings-detection-detail-title",
-          },
-        ],
-      };
-    }
-
-    const ttsChannel = selectedTtsChannel();
-    if (selectedSection() === "tts" && ttsChannel !== null) {
-      return {
-        testID: "settings-tts-breadcrumb",
-        accessibilityLabel: t("settings.tts.breadcrumbLabel"),
-        items: [
-          {
-            label: t("settings.sections.tts"),
-            testID: "settings-tts-breadcrumb-root",
-            onPress: () => selectedTtsChannel.set(null),
-          },
-          {
-            label: t(
-              ttsChannel === "azure" ? "settings.tts.azure.channel" : "settings.tts.channel",
-            ),
-            testID: "settings-tts-detail-title",
-          },
-        ],
-      };
-    }
-
-    return null;
+    const meta = activeCapabilitySection();
+    const contribution = selectedContribution();
+    if (meta === null || contribution === null) return null;
+    return {
+      testID: `${meta.testIdPrefix}-breadcrumb`,
+      accessibilityLabel: t(meta.breadcrumbLabelKey),
+      items: [
+        {
+          label: t(meta.titleKey),
+          testID: `${meta.testIdPrefix}-breadcrumb-root`,
+          onPress: () => selectedChannel.set(null),
+        },
+        {
+          label: t(contribution.labelKey),
+          testID: `${meta.testIdPrefix}-detail-title`,
+        },
+      ],
+    };
   };
 
   const showingBreadcrumb = () => headerBreadcrumb() !== null;
-  const showDetectionAddButton = () =>
-    selectedSection() === "language-detection" &&
+  const showAddButton = (section: CapabilitySectionId) =>
+    selectedSection() === section &&
     !showingBreadcrumb() &&
-    languageDetectionStore.availableDetectors().length > 0;
-  const showOcrAddButton = () =>
-    selectedSection() === "ocr" &&
-    !showingBreadcrumb() &&
-    ocrSettingsStore.availableChannels().length > 0;
-  const showTtsAddButton = () =>
-    selectedSection() === "tts" &&
-    !showingBreadcrumb() &&
-    ttsSettingsStore.availableChannels().length > 0;
+    collectionFor(CAPABILITY_SECTIONS[section].capability).available().length > 0;
+  const showDetectionAddButton = () => showAddButton("language-detection");
+  const showOcrAddButton = () => showAddButton("ocr");
+  const showTtsAddButton = () => showAddButton("tts");
   const headerPaddingClass = () =>
     compact()
       ? showingBreadcrumb()
@@ -475,9 +510,7 @@ export function SettingsPage(props: {
                                 onPress={() => {
                                   const apply = () => {
                                     selectedSection.set(item().id);
-                                    selectedOcrChannel.set(null);
-                                    selectedDetectionChannel.set(null);
-                                    selectedTtsChannel.set(null);
+                                    selectedChannel.set(null);
                                     sectionDialogOpen.set(false);
                                   };
                                   if (
@@ -627,11 +660,17 @@ export function SettingsPage(props: {
                   <QuickTranslateSection compact={compact()} platformOs={currentOs()} />
                 </If>
                 <If when={selectedSection() === "language-detection"}>
-                  <LanguageDetectionSection
+                  <CapabilitySection
+                    capability="detect"
+                    testIdPrefix="settings-detection"
+                    registry={getContributionRegistry()}
+                    collection={detectChannels}
+                    labels={capabilityLabels("language-detection")}
                     compact={compact()}
-                    selectedChannel={selectedDetectionChannel()}
-                    onSelectChannel={(channel) => selectedDetectionChannel.set(channel)}
-                    onManageModels={props.onNavigateToModels}
+                    selected={selectedChannel()}
+                    onSelect={(id) => selectedChannel.set(id)}
+                    extra={() => <DetectionPreferencesCard compact={compact()} />}
+                    hostServices={modelHostServices("text", props.onNavigateToModels)}
                     getAddButtonRef={() => detectionAddButtonNode}
                     onRegisterAddTrigger={(open) => {
                       openDetectionAddDialog = open;
@@ -644,12 +683,26 @@ export function SettingsPage(props: {
                   />
                 </If>
                 <If when={selectedSection() === "ocr"}>
-                  <OcrSection
+                  <CapabilitySection
+                    capability="ocr"
+                    testIdPrefix="settings-ocr"
+                    registry={getContributionRegistry()}
+                    collection={ocrChannels}
+                    labels={capabilityLabels("ocr")}
                     compact={compact()}
-                    platformOs={currentOs()}
-                    selectedChannel={selectedOcrChannel()}
-                    onSelectChannel={(channel) => selectedOcrChannel.set(channel)}
-                    onManageModels={props.onNavigateToModels}
+                    selected={selectedChannel()}
+                    onSelect={(id) => selectedChannel.set(id)}
+                    notice={() =>
+                      currentOs() !== "windows" ? (
+                        <Text
+                          testID="settings-ocr-windows-only"
+                          class="px-1 text-xs text-muted-foreground"
+                        >
+                          {t("settings.ocr.windowsOnly")}
+                        </Text>
+                      ) : null
+                    }
+                    hostServices={modelHostServices("image", props.onNavigateToModels)}
                     getAddButtonRef={() => ocrAddButtonNode}
                     onRegisterAddTrigger={(open) => {
                       openOcrAddDialog = open;
@@ -662,10 +715,16 @@ export function SettingsPage(props: {
                   />
                 </If>
                 <If when={selectedSection() === "tts"}>
-                  <TtsSection
+                  <CapabilitySection
+                    capability="tts"
+                    testIdPrefix="settings-tts"
+                    registry={getContributionRegistry()}
+                    collection={ttsChannels}
+                    labels={capabilityLabels("tts")}
                     compact={compact()}
-                    selectedChannel={selectedTtsChannel()}
-                    onSelectChannel={(channel) => selectedTtsChannel.set(channel)}
+                    selected={selectedChannel()}
+                    onSelect={(id) => selectedChannel.set(id)}
+                    hostServices={{ audio: ttsAudioHost }}
                     getAddButtonRef={() => ttsAddButtonNode}
                     onRegisterAddTrigger={(open) => {
                       openTtsAddDialog = open;

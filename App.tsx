@@ -1,13 +1,14 @@
 import { mount, platform } from "nsh";
-import { initializeAiModules } from "./src/app/ai-setup";
+import { initializeContributions } from "./src/app/contributions-setup";
 import { AppShell } from "./src/app/shell";
 import { StartupError, startupFailureMessage } from "./src/app/startup-error";
 import { loadSplitRailWidths } from "./src/components/layout/split-rail";
-import { languageDetectionStore } from "./src/features/language-detection/settings";
+import { languageDetectionPreferences } from "./src/features/language-detection/preferences";
+import { detectChannels } from "./src/features/language-detection/store";
 import { loadModelsState } from "./src/features/models/store";
-import { ocrSettingsStore } from "./src/features/ocr/settings";
+import { ocrChannels } from "./src/features/ocr/store";
 import { cleanupTtsPlaybackFiles } from "./src/features/tts/playback";
-import { ttsSettingsStore } from "./src/features/tts/settings";
+import { ttsChannels } from "./src/features/tts/store";
 import { wordbookSettingsStore } from "./src/features/wordbook/settings";
 import { loadSkippedNoticeDismissal } from "./src/features/presets/skipped-notice";
 import { presetsStore } from "./src/features/presets/store";
@@ -28,7 +29,7 @@ async function startApp() {
   try {
     await loadLogLevel();
     log.info(`Started on ${platform.os}; logs go to ${logFile() ?? "the platform's log"}`);
-    initializeAiModules();
+    initializeContributions();
     try {
       await cleanupTtsPlaybackFiles();
     } catch {
@@ -46,9 +47,10 @@ async function startApp() {
       loadModelsState(),
       presetsStore.load(),
       loadSkippedNoticeDismissal(),
-      languageDetectionStore.load(),
-      ocrSettingsStore.load(),
-      ttsSettingsStore.load(),
+      languageDetectionPreferences.load(),
+      detectChannels.load(),
+      ocrChannels.load(),
+      ttsChannels.load(),
       wordbookSettingsStore.load(),
       loadSplitRailWidths(),
     ]);

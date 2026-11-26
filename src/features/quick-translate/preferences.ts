@@ -7,7 +7,7 @@ import {
   isTargetLanguageId,
   type SourceLanguageId,
   type TargetLanguageId,
-} from "../presets/languages";
+} from "../../framework/languages";
 import type { PresetsStoreStatus, TranslationPreset } from "../presets/types";
 import { resolvePresetTemplate } from "./translate";
 

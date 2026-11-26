@@ -4,7 +4,7 @@ import { t } from "nsh/i18n";
 import { Button } from "../../components/ui/button";
 import { Icon } from "../../components/ui/icon";
 import { TranslationOutput } from "../../components/ui/translation-output";
-import { getLanguageLabel, isLanguageId } from "../presets/languages";
+import { getLanguageLabel, isLanguageId } from "../../framework/languages";
 
 function resultLanguages(result: HistoryResult): string {
   const { sourceLanguage, targetLanguage } = result;

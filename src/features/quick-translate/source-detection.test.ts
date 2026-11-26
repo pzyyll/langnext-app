@@ -1,11 +1,23 @@
 import { expect, test } from "nsh/test";
 import type { LanguageDetectionResult } from "../language-detection/detect";
-import type { LanguageDetectionSnapshot } from "../language-detection/settings";
+import type {
+  EnabledDetectionChannel,
+  LanguageDetectionSnapshot,
+} from "../language-detection/preferences";
 import { createSourceLanguageDetection, type SourceDetectionState } from "./source-detection";
+
+function channel(id: string, config: unknown = {}): EnabledDetectionChannel {
+  return {
+    id,
+    binding: { enabled: true, configured: true, credentialRef: null, config },
+  };
+}
+
+const AI_DETECTOR = channel("ai", { modelId: "m1" });
 
 function snapshot(overrides: Partial<LanguageDetectionSnapshot> = {}): LanguageDetectionSnapshot {
   return {
-    detectors: [{ kind: "ai", modelId: "m1" }],
+    detectors: [AI_DETECTOR],
     nativeLanguage: "zh",
     preferredTranslationLanguage: "en",
     ...overrides,
@@ -99,7 +111,7 @@ test("source detection: a changed detector chain detects again", async () => {
   });
 
   await detection.detect("Bonjour", snapshot());
-  await detection.detect("Bonjour", snapshot({ detectors: [{ kind: "google" }] }));
+  await detection.detect("Bonjour", snapshot({ detectors: [channel("google")] }));
 
   expect(calls).toBe(2);
 });

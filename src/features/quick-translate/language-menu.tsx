@@ -10,7 +10,7 @@ import {
   LANGUAGE_IDS,
   type SourceLanguageId,
   type TargetLanguageId,
-} from "../presets/languages";
+} from "../../framework/languages";
 import type { SourceDetectionState } from "./session";
 
 const SOURCE_LANGUAGE_OPTIONS: readonly SourceLanguageId[] = [AUTO_LANGUAGE, ...LANGUAGE_IDS];

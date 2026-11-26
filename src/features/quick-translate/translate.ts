@@ -12,7 +12,7 @@ import {
   createGoogleCloudTranslateClient,
   type GoogleCloudTranslateInput,
 } from "../../modules/google-cloud-translation/client";
-import { getLanguageLabel, type LanguageId } from "../presets/languages";
+import { getLanguageLabel, type LanguageId } from "../../framework/languages";
 import { presetsStore } from "../presets/store";
 import type { PromptTemplate, TranslationPreset } from "../presets/types";
 

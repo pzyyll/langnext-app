@@ -1,4 +1,4 @@
-import type { LanguageId } from "../../features/presets/languages";
+import type { LanguageId } from "../../framework/languages";
 
 /**
  * Google Cloud Translation Basic v2 NMT codes for the app's stable language set.

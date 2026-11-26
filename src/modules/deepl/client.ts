@@ -1,5 +1,5 @@
 import { t } from "nsh/i18n";
-import type { LanguageId } from "../../features/presets/languages";
+import type { LanguageId } from "../../framework/languages";
 import { ProviderProtocolError } from "../ai/contracts/errors";
 import type { JsonHttpClient, ResolvedRequestTarget } from "../ai/contracts/protocol";
 import { createJsonHttpClient } from "../ai/runtime/http";

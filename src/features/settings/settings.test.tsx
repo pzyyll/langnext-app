@@ -1,49 +1,108 @@
 import { expect, open, test, type StubRequest, type StubResponse } from "nsh/test";
 import { t } from "nsh/i18n";
 import { SPLIT_RAIL_STORAGE_KEYS } from "../../components/layout/split-rail";
-import {
-  googleCloudDetectionCredentialStorageKey,
-  LANGUAGE_DETECTION_STORAGE_KEY,
-} from "../language-detection/settings";
-import { makeChannel, makeModel, makeSeedStorage } from "../models/__tests__/fixtures";
-import {
-  baiduCredentialStorageKey,
-  googleCloudCredentialStorageKey,
-  OCR_STORAGE_KEY,
-} from "../ocr/settings";
-import { GOOGLE_CLOUD_TTS_URL, TTS_SAMPLE_TEXT } from "../tts/google-cloud";
+import { googleFamilyPricingLines } from "../../contributions/tts";
+import { GOOGLE_CLOUD_TTS_URL, TTS_SAMPLE_TEXT } from "../../contributions/tts/vendor/google-cloud";
 import {
   DEFAULT_GOOGLE_VOICE_PREFERENCES,
   type GoogleVoicePreferences,
-} from "../tts/google-preferences";
-import { googleSampleText } from "../tts/google-samples";
-import { GOOGLE_VOICE_FAMILIES, GOOGLE_VOICE_PRICING } from "../tts/google-voices";
-import { TTS_STORAGE_KEY, ttsCredentialStorageKey } from "../tts/settings";
-import { googleFamilyPricingLines } from "./google-tts-fields";
+} from "../../contributions/tts/vendor/google-preferences";
+import { googleSampleText } from "../../contributions/tts/vendor/google-samples";
+import {
+  GOOGLE_VOICE_FAMILIES,
+  GOOGLE_VOICE_PRICING,
+} from "../../contributions/tts/vendor/google-voices";
+import {
+  LANGUAGE_DETECTION_PREFERENCES_STORAGE_KEY,
+  type LanguageDetectionPreferences,
+} from "../language-detection/preferences";
+import {
+  DETECT_COLLECTION_STORAGE_KEY,
+  DETECT_CREDENTIAL_NAMESPACE,
+} from "../language-detection/store";
+import { makeChannel, makeModel, makeSeedStorage } from "../models/__tests__/fixtures";
+import { OCR_CHANNELS_STORAGE_KEY, OCR_CREDENTIAL_NAMESPACE } from "../ocr/store";
 import { LOG_LEVEL_STORAGE_KEY } from "./log-level";
 import { SELECTION_COPY_STORAGE_KEY } from "./selection-copy";
 import { SILENT_LAUNCH_STORAGE_KEY } from "./silent-launch";
 
-/** One saved v2 TTS record; Google always keeps normalized voice preferences. */
-function ttsRecord(options: {
-  googleCloud?: { enabled: boolean; credentialRef: string; preferences?: unknown } | null;
-  azure?: { enabled: boolean; credentialRef: string; region: string } | null;
-  order?: readonly string[];
-}): string {
-  const google = options.googleCloud ?? null;
-  return JSON.stringify({
-    version: 3,
-    order: options.order ?? ["google-cloud", "azure"],
-    googleCloud:
-      google === null
-        ? null
-        : {
-            enabled: google.enabled,
-            credentialRef: google.credentialRef,
-            preferences: google.preferences ?? DEFAULT_GOOGLE_VOICE_PREFERENCES,
-          },
-    azure: options.azure ?? null,
-  });
+const TTS_STORAGE_KEY = "integrations.tts.v1";
+const TTS_CREDENTIAL_NAMESPACE = "secret.tts";
+const OCR_STORAGE_KEY = OCR_CHANNELS_STORAGE_KEY;
+const LANGUAGE_DETECTION_STORAGE_KEY = DETECT_COLLECTION_STORAGE_KEY;
+
+/** Where one vault record for a TTS channel is stored. */
+function ttsCredentialStorageKey(ref: string): string {
+  return `${TTS_CREDENTIAL_NAMESPACE}.${ref}`;
+}
+
+/** Where one vault record for an OCR channel is stored. */
+function ocrCredentialStorageKey(ref: string): string {
+  return `${OCR_CREDENTIAL_NAMESPACE}.${ref}`;
+}
+
+/** Where one vault record for a detection channel is stored. */
+function detectionCredentialStorageKey(ref: string): string {
+  return `${DETECT_CREDENTIAL_NAMESPACE}.${ref}`;
+}
+
+/** One stored channel binding, as the contribution framework serializes it. */
+interface StoredChannelRecord {
+  enabled: boolean;
+  configured: boolean;
+  config: unknown;
+  credentialRef: string | null;
+}
+
+/** One version-1 channel collection record with its order and bindings. */
+function collectionRecord(
+  order: readonly string[],
+  channels: Record<string, StoredChannelRecord>,
+): string {
+  return JSON.stringify({ version: 1, order, channels });
+}
+
+/** One saved TTS record; Google always keeps normalized voice preferences. */
+function ttsRecord(
+  options: {
+    googleCloud?: { enabled: boolean; credentialRef: string; preferences?: unknown } | null;
+    azure?: { enabled: boolean; credentialRef: string; region: string } | null;
+    order?: readonly string[];
+  } = {},
+): string {
+  const order = options.order ?? ["google-cloud", "azure"];
+  const channels: Record<string, StoredChannelRecord> = {};
+  for (const id of order) {
+    if (id === "google-cloud") {
+      const google = options.googleCloud ?? null;
+      channels[id] =
+        google === null
+          ? {
+              enabled: false,
+              configured: false,
+              config: { preferences: DEFAULT_GOOGLE_VOICE_PREFERENCES },
+              credentialRef: null,
+            }
+          : {
+              enabled: google.enabled,
+              configured: true,
+              config: { preferences: google.preferences ?? DEFAULT_GOOGLE_VOICE_PREFERENCES },
+              credentialRef: google.credentialRef,
+            };
+    } else if (id === "azure") {
+      const azure = options.azure ?? null;
+      channels[id] =
+        azure === null
+          ? { enabled: false, configured: false, config: { region: "" }, credentialRef: null }
+          : {
+              enabled: azure.enabled,
+              configured: true,
+              config: { region: azure.region },
+              credentialRef: azure.credentialRef,
+            };
+    }
+  }
+  return collectionRecord(order, channels);
 }
 
 const APP_ENTRY = "../../../App.tsx";
@@ -78,55 +137,94 @@ const LANGUAGE_DETECTION_HELP = {
   },
 };
 
-/** One saved v4 language detection record; each detector keeps its own enabled state and priority. */
-function detectionRecord(options: {
-  order?: readonly ("ai" | "google" | "google-cloud")[];
-  enabled?: Partial<Record<"ai" | "google" | "google-cloud", boolean>>;
-  modelId?: string | null;
-  credentialRef?: string | null;
-  nativeLanguage?: string | null;
-  preferredTranslationLanguage?: string | null;
-}): string {
-  const ai =
-    options.modelId === undefined || options.modelId === null ? null : { modelId: options.modelId };
-  const googleCloud =
-    options.credentialRef === undefined || options.credentialRef === null
-      ? null
-      : { credentialRef: options.credentialRef };
+/** One saved v1 detection record; each detector keeps its own enabled state and priority. */
+function detectionRecord(
+  options: {
+    order?: readonly ("ai" | "google" | "google-cloud")[];
+    enabled?: Partial<Record<"ai" | "google" | "google-cloud", boolean>>;
+    modelId?: string | null;
+    credentialRef?: string | null;
+  } = {},
+): string {
+  const order = options.order ?? ["ai", "google", "google-cloud"];
+  const channels: Record<string, StoredChannelRecord> = {};
+  for (const id of order) {
+    if (id === "ai") {
+      const modelId = options.modelId ?? null;
+      channels[id] = {
+        enabled: options.enabled?.ai ?? modelId !== null,
+        configured: modelId !== null,
+        config: { modelId: modelId ?? "" },
+        credentialRef: null,
+      };
+    } else if (id === "google") {
+      channels[id] = {
+        enabled: options.enabled?.google ?? false,
+        configured: true,
+        config: {},
+        credentialRef: null,
+      };
+    } else {
+      const ref = options.credentialRef ?? null;
+      channels[id] = {
+        enabled: options.enabled?.["google-cloud"] ?? ref !== null,
+        configured: ref !== null,
+        config: {},
+        credentialRef: ref,
+      };
+    }
+  }
+  return collectionRecord(order, channels);
+}
+
+/** The Automatic-target preferences record that now lives beside detection channels. */
+function detectionPreferencesRecord(options: Partial<LanguageDetectionPreferences> = {}): string {
   return JSON.stringify({
-    version: 4,
-    order: options.order ?? ["ai", "google", "google-cloud"],
-    enabled: {
-      ai: options.enabled?.ai ?? ai !== null,
-      google: options.enabled?.google ?? false,
-      "google-cloud": options.enabled?.["google-cloud"] ?? googleCloud !== null,
-    },
-    ai,
-    googleCloud,
+    version: 1,
     nativeLanguage: options.nativeLanguage ?? null,
     preferredTranslationLanguage: options.preferredTranslationLanguage ?? null,
   });
 }
 
-/** One saved v4 OCR record; each channel keeps its own config, enabled state, and priority order. */
-function ocrRecord(options: {
-  order?: readonly ("ai" | "baidu")[];
-  enabled?: Partial<Record<"ai" | "baidu", boolean>>;
-  modelId?: string;
-  baidu?: { operation: string; credentialRef: string };
-}): string {
-  const ai = options.modelId === undefined ? null : { modelId: options.modelId };
-  const baidu = options.baidu ?? null;
-  return JSON.stringify({
-    version: 4,
-    order: options.order ?? ["ai", "baidu"],
-    enabled: {
-      ai: options.enabled?.ai ?? ai !== null,
-      baidu: options.enabled?.baidu ?? baidu !== null,
-    },
-    ai,
-    baidu,
-  });
+/** One saved v1 OCR record; each channel keeps its own config, enabled state, and priority order. */
+function ocrRecord(
+  options: {
+    order?: readonly ("ai" | "baidu")[];
+    enabled?: Partial<Record<"ai" | "baidu", boolean>>;
+    modelId?: string;
+    baidu?: { operation: string; credentialRef: string };
+  } = {},
+): string {
+  const order = options.order ?? ["ai", "baidu"];
+  const channels: Record<string, StoredChannelRecord> = {};
+  for (const id of order) {
+    if (id === "ai") {
+      const modelId = options.modelId ?? null;
+      channels[id] = {
+        enabled: options.enabled?.ai ?? modelId !== null,
+        configured: modelId !== null,
+        config: { modelId: modelId ?? "" },
+        credentialRef: null,
+      };
+    } else {
+      const baidu = options.baidu;
+      channels[id] =
+        baidu === undefined
+          ? {
+              enabled: options.enabled?.baidu ?? false,
+              configured: false,
+              config: { operation: "accurate" },
+              credentialRef: null,
+            }
+          : {
+              enabled: options.enabled?.baidu ?? true,
+              configured: true,
+              config: { operation: baidu.operation },
+              credentialRef: baidu.credentialRef,
+            };
+    }
+  }
+  return collectionRecord(order, channels);
 }
 
 test("settings ui: groups language under General and theme under Appearance in a split view", async () => {
@@ -623,7 +721,7 @@ test("language detection: starts with the header add button, adds channels via p
   expect(app.shows("id:settings-detection-detail-title")).toBe(true);
   expect(app.shows("id:settings-detection-priority-info")).toBe(false);
   expect(app.shows("id:settings-detection-add")).toBe(false);
-  expect(app.enabled("id:settings-detection-save")).toBe(false);
+  expect(app.enabled("id:settings-detection-save")).toBe(true);
 
   // Returning without saving still keeps the added AI channel in the list as Not configured.
   await app.press("id:settings-detection-breadcrumb-root");
@@ -633,7 +731,7 @@ test("language detection: starts with the header add button, adds channels via p
   expect(app.enabled("id:settings-detection-toggle-ai")).toBe(false);
   expect(app.texts()).toContain("Not configured");
   await app.hover("id:settings-detection-toggle-ai");
-  await app.waitUntil(() => app.texts().includes("Configure this detector before enabling it."));
+  await app.waitUntil(() => app.texts().includes("Configure this channel before enabling it."));
 
   // Reopen AI from the list and save a model.
   await app.press("id:settings-detection-channel-ai");
@@ -645,15 +743,22 @@ test("language detection: starts with the header add button, adds channels via p
   expect(app.enabled("id:settings-detection-save")).toBe(true);
 
   await app.press("id:settings-detection-save");
-  await app.waitUntil(() => JSON.parse(app.storage()[LANGUAGE_DETECTION_STORAGE_KEY]!).ai !== null);
+  await app.waitUntil(
+    () =>
+      JSON.parse(app.storage()[LANGUAGE_DETECTION_STORAGE_KEY]!).channels?.ai?.config?.modelId ===
+      "m-1",
+  );
   expect(JSON.parse(app.storage()[LANGUAGE_DETECTION_STORAGE_KEY]!)).toEqual({
-    version: 4,
+    version: 1,
     order: ["ai"],
-    enabled: { ai: true, google: false, "google-cloud": false },
-    ai: { modelId: "m-1" },
-    googleCloud: null,
-    nativeLanguage: null,
-    preferredTranslationLanguage: null,
+    channels: {
+      ai: {
+        enabled: true,
+        configured: true,
+        config: { modelId: "m-1" },
+        credentialRef: null,
+      },
+    },
   });
   expect(app.requests()).toHaveLength(0);
 
@@ -662,7 +767,7 @@ test("language detection: starts with the header add button, adds channels via p
   expect(app.shows("id:settings-detection-detail-card")).toBe(false);
   expect(app.shows("id:settings-detection-role-ai")).toBe(true);
   expect(app.texts()).toContain("Primary");
-  expect(app.texts()).toContain("OpenAI Main · gpt-4.1-mini");
+  expect(app.accessibility("id:settings-detection-summary-ai")?.name).toBe("m-1");
   expect(app.enabled("id:settings-detection-toggle-ai")).toBe(true);
 
   // Adding the free Google channel appends and enables it without opening a detail page.
@@ -675,25 +780,28 @@ test("language detection: starts with the header add button, adds channels via p
   await app.waitUntil(() => !app.shows("id:settings-detection-add-dialog"));
   await app.waitFor("id:settings-detection-row-google");
   expect(app.shows("id:settings-detection-detail-card")).toBe(false);
-  expect(app.shows("id:settings-detection-channel-google")).toBe(false);
+  expect(app.shows("id:settings-detection-channel-google")).toBe(true);
+  expect(app.shows("id:settings-detection-open-google")).toBe(false);
   expect(app.shows("id:settings-detection-role-google")).toBe(true);
   expect(app.texts()).toContain("Backup");
   expect(app.texts()).toContain("Free Google Translate endpoint");
   expect(app.shows("id:settings-detection-grip-ai")).toBe(true);
   expect(app.shows("id:settings-detection-grip-google")).toBe(true);
+  await app.press("id:settings-detection-channel-google");
+  expect(app.shows("id:settings-detection-detail-card")).toBe(false);
 
   await app.press("id:settings-nav-general");
   await app.waitFor("id:settings-general-card");
   expect(app.shows("id:settings-detection-card")).toBe(false);
   await app.press("id:settings-nav-language-detection");
   await app.waitFor("id:settings-detection-card");
-  expect(app.texts()).toContain("OpenAI Main · gpt-4.1-mini");
+  expect(app.accessibility("id:settings-detection-summary-ai")?.name).toBe("m-1");
 
   const reopened = await open(APP_ENTRY, { ...viewport, storage: app.storage() });
   await reopened.press("id:nav-settings");
   await reopened.press("id:settings-nav-language-detection");
   await reopened.waitFor("id:settings-detection-card");
-  expect(reopened.texts()).toContain("OpenAI Main · gpt-4.1-mini");
+  expect(reopened.accessibility("id:settings-detection-summary-ai")?.name).toBe("m-1");
   expect(reopened.shows("id:settings-detection-role-ai")).toBe(true);
   expect(reopened.shows("id:settings-detection-role-google")).toBe(true);
   expect(reopened.requests()).toHaveLength(0);
@@ -785,29 +893,34 @@ test("language detection: adds Google Cloud, hides add button when full, and rem
   expect(app.shows("id:settings-detection-breadcrumb")).toBe(true);
   expect(app.texts()).toContain("API Key");
   expect(app.value("id:settings-detection-google-cloud-api-key")).toBe("");
-  expect(app.enabled("id:settings-detection-save")).toBe(false);
+  expect(app.enabled("id:settings-detection-save")).toBe(true);
 
   await app.type("id:settings-detection-google-cloud-api-key", "synthetic-cloud-key");
-  expect(app.enabled("id:settings-detection-save")).toBe(true);
   await app.press("id:settings-detection-save");
-  await app.waitUntil(
-    () => JSON.parse(app.storage()[LANGUAGE_DETECTION_STORAGE_KEY]!).googleCloud !== null,
+  await app.waitUntil(() =>
+    Boolean(
+      JSON.parse(app.storage()[LANGUAGE_DETECTION_STORAGE_KEY]!).channels?.["google-cloud"]
+        ?.credentialRef,
+    ),
   );
 
   const saved = JSON.parse(app.storage()[LANGUAGE_DETECTION_STORAGE_KEY]!) as {
     version: number;
     order: string[];
-    enabled: Record<string, boolean>;
-    googleCloud: { credentialRef: string } | null;
+    channels: Record<
+      string,
+      { enabled: boolean; configured: boolean; config: unknown; credentialRef: string | null }
+    >;
   };
-  expect(saved.version).toBe(4);
+  expect(saved.version).toBe(1);
   expect(saved.order).toEqual(["google-cloud"]);
-  expect(saved.enabled).toEqual({ ai: false, google: false, "google-cloud": true });
-  expect(saved.googleCloud).not.toBeNull();
+  expect(saved.channels.ai).toBeUndefined();
+  expect(saved.channels.google).toBeUndefined();
+  expect(saved.channels["google-cloud"]).toMatchObject({ enabled: true, configured: true });
   expect(JSON.stringify(saved).includes("synthetic-cloud-key")).toBe(false);
-  const credentialRef = saved.googleCloud!.credentialRef;
-  expect(app.storage()[googleCloudDetectionCredentialStorageKey(credentialRef)]).toBe(
-    "synthetic-cloud-key",
+  const credentialRef = saved.channels["google-cloud"]!.credentialRef!;
+  expect(app.storage()[detectionCredentialStorageKey(credentialRef)]).toBe(
+    JSON.stringify({ apiKey: "synthetic-cloud-key" }),
   );
   expect(app.value("id:settings-detection-google-cloud-api-key")).toBe("");
   expect(app.enabled("id:settings-detection-save")).toBe(true);
@@ -836,9 +949,9 @@ test("language detection: adds Google Cloud, hides add button when full, and rem
   // Saving again without a new key keeps the stored one.
   await reopened.press("id:settings-detection-save");
   const resaved = JSON.parse(reopened.storage()[LANGUAGE_DETECTION_STORAGE_KEY]!) as {
-    googleCloud: { credentialRef: string };
+    channels: Record<string, { credentialRef: string }>;
   };
-  expect(resaved.googleCloud.credentialRef).toBe(credentialRef);
+  expect(resaved.channels["google-cloud"]!.credentialRef).toBe(credentialRef);
 
   // Add the remaining two channels; once all 3 are added, the add button hides.
   await reopened.press("id:settings-detection-breadcrumb-root");
@@ -847,6 +960,7 @@ test("language detection: adds Google Cloud, hides add button when full, and rem
   await reopened.waitFor("id:settings-detection-add-dialog");
   await reopened.press("id:settings-detection-option-google");
   await reopened.waitUntil(() => !reopened.shows("id:settings-detection-add-dialog"));
+  await reopened.waitFor("id:settings-detection-row-google");
   expect(reopened.shows("id:settings-detection-add")).toBe(true);
   expect(reopened.shows("id:settings-detection-card >> id:settings-detection-add")).toBe(false);
 
@@ -854,11 +968,12 @@ test("language detection: adds Google Cloud, hides add button when full, and rem
   await reopened.waitFor("id:settings-detection-add-dialog");
   await reopened.press("id:settings-detection-option-ai");
   await reopened.waitUntil(() => !reopened.shows("id:settings-detection-add-dialog"));
+  await reopened.waitFor("id:settings-detection-detail-card");
   await reopened.press("id:settings-detection-breadcrumb-root");
   await reopened.waitFor("id:settings-detection-card");
   expect(reopened.shows("id:settings-detection-add")).toBe(false);
 
-  // Unconfigured AI and free Google remove directly without confirmation.
+  // Unconfigured AI removes directly; the enabled free Google row confirms before removing.
   await reopened.press("id:settings-detection-remove-ai");
   await reopened.waitUntil(() => !reopened.shows("id:settings-detection-row-ai"));
   expect(reopened.shows("id:settings-detection-remove-dialog")).toBe(false);
@@ -866,8 +981,9 @@ test("language detection: adds Google Cloud, hides add button when full, and rem
   expect(reopened.shows("id:settings-detection-card >> id:settings-detection-add")).toBe(false);
 
   await reopened.press("id:settings-detection-remove-google");
+  await reopened.waitFor("id:settings-detection-remove-dialog");
+  await reopened.press("role:button[Remove]");
   await reopened.waitUntil(() => !reopened.shows("id:settings-detection-row-google"));
-  expect(reopened.shows("id:settings-detection-remove-dialog")).toBe(false);
 
   // Configured Google Cloud confirms before removing and cleans up its stored key.
   await reopened.press("id:settings-detection-remove-google-cloud");
@@ -882,9 +998,7 @@ test("language detection: adds Google Cloud, hides add button when full, and rem
   await reopened.waitUntil(() => !reopened.shows("id:settings-detection-row-google-cloud"));
   expect(reopened.shows("id:settings-detection-card")).toBe(false);
   expect(reopened.shows("id:settings-detection-add")).toBe(true);
-  expect(
-    reopened.storage()[googleCloudDetectionCredentialStorageKey(credentialRef)],
-  ).toBeUndefined();
+  expect(reopened.storage()[detectionCredentialStorageKey(credentialRef)]).toBeUndefined();
 });
 
 test("language detection: applies preference changes immediately and rejects identical languages", async () => {
@@ -901,12 +1015,15 @@ test("language detection: applies preference changes immediately and rejects ide
   await app.waitFor("id:settings-detection-preferences-card");
   expect(app.shows("id:settings-detection-save")).toBe(false);
   expect(app.storage()[LANGUAGE_DETECTION_STORAGE_KEY]).toBeUndefined();
+  expect(app.storage()[LANGUAGE_DETECTION_PREFERENCES_STORAGE_KEY]).toBeUndefined();
 
   await app.press("id:settings-detection-native-language");
   await app.waitFor("role:option[Chinese]");
   await app.press("role:option[Chinese]");
   await app.waitUntil(
-    () => JSON.parse(app.storage()[LANGUAGE_DETECTION_STORAGE_KEY]!).nativeLanguage === "zh",
+    () =>
+      JSON.parse(app.storage()[LANGUAGE_DETECTION_PREFERENCES_STORAGE_KEY]!).nativeLanguage ===
+      "zh",
   );
 
   await app.press("id:settings-detection-preferred-language");
@@ -914,11 +1031,11 @@ test("language detection: applies preference changes immediately and rejects ide
   await app.press("role:option[English]");
   await app.waitUntil(
     () =>
-      JSON.parse(app.storage()[LANGUAGE_DETECTION_STORAGE_KEY]!).preferredTranslationLanguage ===
-      "en",
+      JSON.parse(app.storage()[LANGUAGE_DETECTION_PREFERENCES_STORAGE_KEY]!)
+        .preferredTranslationLanguage === "en",
   );
-  expect(JSON.parse(app.storage()[LANGUAGE_DETECTION_STORAGE_KEY]!)).toMatchObject({
-    version: 4,
+  expect(JSON.parse(app.storage()[LANGUAGE_DETECTION_PREFERENCES_STORAGE_KEY]!)).toMatchObject({
+    version: 1,
     nativeLanguage: "zh",
     preferredTranslationLanguage: "en",
   });
@@ -930,7 +1047,8 @@ test("language detection: applies preference changes immediately and rejects ide
   expect(app.texts()).toContain("The native language and the target language must differ.");
   expect(app.texts()).toContain("English");
   expect(
-    JSON.parse(app.storage()[LANGUAGE_DETECTION_STORAGE_KEY]!).preferredTranslationLanguage,
+    JSON.parse(app.storage()[LANGUAGE_DETECTION_PREFERENCES_STORAGE_KEY]!)
+      .preferredTranslationLanguage,
   ).toBe("en");
 
   await app.press("id:settings-detection-preferred-language");
@@ -938,8 +1056,8 @@ test("language detection: applies preference changes immediately and rejects ide
   await app.press("role:option[German]");
   await app.waitUntil(
     () =>
-      JSON.parse(app.storage()[LANGUAGE_DETECTION_STORAGE_KEY]!).preferredTranslationLanguage ===
-      "de",
+      JSON.parse(app.storage()[LANGUAGE_DETECTION_PREFERENCES_STORAGE_KEY]!)
+        .preferredTranslationLanguage === "de",
   );
   expect(app.shows("id:settings-detection-error")).toBe(false);
   expect(app.requests()).toHaveLength(0);
@@ -956,21 +1074,24 @@ test("language detection: keeps unavailable saved models and offers Models recov
   const savedSettings = detectionRecord({
     enabled: { ai: true },
     modelId: "m-removed",
-    nativeLanguage: "zh",
   });
+  const savedPreferences = detectionPreferencesRecord({ nativeLanguage: "zh" });
   const seed = makeSeedStorage({
     channels: [makeChannel({ id: "ch-openai", displayName: "OpenAI Main", enabled: true })],
     models: [
       makeModel({ id: "m-1", providerId: "ch-openai", modelKey: "gpt-4.1-mini", enabled: true }),
     ],
-    extra: { [LANGUAGE_DETECTION_STORAGE_KEY]: savedSettings },
+    extra: {
+      [LANGUAGE_DETECTION_STORAGE_KEY]: savedSettings,
+      [LANGUAGE_DETECTION_PREFERENCES_STORAGE_KEY]: savedPreferences,
+    },
   });
   const app = await open(APP_ENTRY, { ...viewport, storage: seed });
 
   await app.press("id:nav-settings");
   await app.press("id:settings-nav-language-detection");
   await app.waitFor("id:settings-detection-summary-ai");
-  expect(app.texts()).toContain("Model no longer exists in Models.");
+  expect(app.accessibility("id:settings-detection-summary-ai")?.name).toBe("m-removed");
   expect(app.enabled("id:settings-detection-toggle-ai")).toBe(true);
 
   await app.press("id:settings-detection-channel-ai");
@@ -983,15 +1104,19 @@ test("language detection: keeps unavailable saved models and offers Models recov
   const emptyCatalog = await open(APP_ENTRY, {
     ...viewport,
     storage: makeSeedStorage({
-      extra: { [LANGUAGE_DETECTION_STORAGE_KEY]: savedSettings },
+      extra: {
+        [LANGUAGE_DETECTION_STORAGE_KEY]: savedSettings,
+        [LANGUAGE_DETECTION_PREFERENCES_STORAGE_KEY]: savedPreferences,
+      },
     }),
   });
   await emptyCatalog.press("id:nav-settings");
   await emptyCatalog.press("id:settings-nav-language-detection");
   await emptyCatalog.waitFor("id:settings-detection-summary-ai");
-  expect(emptyCatalog.texts()).toContain("Model no longer exists in Models.");
+  expect(emptyCatalog.accessibility("id:settings-detection-summary-ai")?.name).toBe("m-removed");
   await emptyCatalog.press("id:settings-detection-channel-ai");
-  await emptyCatalog.waitFor("id:settings-detection-models-recovery");
+  await emptyCatalog.waitFor("id:settings-detection-manage-models");
+  expect(emptyCatalog.texts()).toContain("No enabled text-capable models available.");
   await emptyCatalog.press("id:settings-detection-manage-models");
   await emptyCatalog.waitFor("id:models-page");
 });
@@ -1035,11 +1160,11 @@ test("language detection: reorders detectors and toggles enable state while pres
 
   await app.press("id:settings-detection-toggle-ai");
   await app.waitUntil(
-    () => JSON.parse(app.storage()[LANGUAGE_DETECTION_STORAGE_KEY]!).enabled.ai === false,
+    () => JSON.parse(app.storage()[LANGUAGE_DETECTION_STORAGE_KEY]!).channels.ai.enabled === false,
   );
   expect(app.shows("id:settings-detection-role-ai")).toBe(false);
   expect(app.shows("id:settings-detection-role-google")).toBe(true);
-  expect(app.texts()).toContain("OpenAI Main · gpt-4.1-mini");
+  expect(app.accessibility("id:settings-detection-summary-ai")?.name).toBe("m-1");
 
   await app.press("id:settings-detection-channel-ai");
   await app.waitFor("id:settings-detection-detail-card");
@@ -1048,9 +1173,13 @@ test("language detection: reorders detectors and toggles enable state while pres
   await app.press("role:option[OpenAI Main · gpt-4.1]");
   await app.press("id:settings-detection-save");
   await app.waitUntil(
-    () => JSON.parse(app.storage()[LANGUAGE_DETECTION_STORAGE_KEY]!).ai.modelId === "m-2",
+    () =>
+      JSON.parse(app.storage()[LANGUAGE_DETECTION_STORAGE_KEY]!).channels.ai.config.modelId ===
+      "m-2",
   );
-  expect(JSON.parse(app.storage()[LANGUAGE_DETECTION_STORAGE_KEY]!).enabled.ai).toBe(false);
+  expect(JSON.parse(app.storage()[LANGUAGE_DETECTION_STORAGE_KEY]!).channels.ai.enabled).toBe(
+    false,
+  );
 
   const reopened = await open(APP_ENTRY, { ...viewport, storage: app.storage() });
   await reopened.press("id:nav-settings");
@@ -1125,7 +1254,9 @@ test("language detection: keeps previous order and enabled state on a failed lis
 
   await failing.press("id:settings-detection-toggle-google");
   await failing.waitFor("id:settings-detection-list-error");
-  expect(JSON.parse(failing.storage()[LANGUAGE_DETECTION_STORAGE_KEY]!).enabled.google).toBe(false);
+  expect(
+    JSON.parse(failing.storage()[LANGUAGE_DETECTION_STORAGE_KEY]!).channels.google.enabled,
+  ).toBe(false);
 
   await failing.drag("id:settings-detection-row-ai", { x: 0, y: -80 });
   await failing.wait(600);
@@ -1179,6 +1310,7 @@ test("language detection: localizes detector labels and preference help in both 
   expect(app.texts()).toContain("Google Cloud");
   await app.press("id:settings-detection-option-google");
   await app.waitUntil(() => !app.shows("id:settings-detection-add-dialog"));
+  await app.waitFor("id:settings-detection-row-google");
   expect(app.texts()).toContain("Free Google Translate endpoint");
 
   expect(app.texts()).not.toContain(LANGUAGE_DETECTION_HELP.en.native);
@@ -1227,6 +1359,8 @@ test("language detection: renders detector list and detail in dark compact mode 
         [LANGUAGE_DETECTION_STORAGE_KEY]: detectionRecord({
           enabled: { ai: true },
           modelId: "m-1",
+        }),
+        [LANGUAGE_DETECTION_PREFERENCES_STORAGE_KEY]: detectionPreferencesRecord({
           nativeLanguage: "zh",
           preferredTranslationLanguage: "en",
         }),
@@ -1308,7 +1442,7 @@ test("ocr settings: starts empty, adds AI from the empty state, and configures i
   expect(app.shows("id:settings-ocr-detail-title")).toBe(true);
   expect(app.shows("id:settings-ocr-priority-info")).toBe(false);
   expect(app.shows("id:settings-ocr-add")).toBe(false);
-  expect(app.enabled("id:settings-ocr-save")).toBe(false);
+  expect(app.enabled("id:settings-ocr-save")).toBe(true);
 
   await app.press("id:settings-ocr-model");
   await app.waitFor("role:option[OpenAI Main · gpt-4.1]");
@@ -1320,12 +1454,16 @@ test("ocr settings: starts empty, adds AI from the empty state, and configures i
   await app.press("id:settings-ocr-save");
   await app.waitUntil(() => Boolean(app.storage()[OCR_STORAGE_KEY]));
   expect(JSON.parse(app.storage()[OCR_STORAGE_KEY]!)).toEqual({
-    version: 4,
+    version: 1,
     order: ["ai"],
-    enabled: { ai: true, baidu: false, "google-cloud": false },
-    ai: { modelId: "m-vision" },
-    baidu: null,
-    "google-cloud": null,
+    channels: {
+      ai: {
+        enabled: true,
+        configured: true,
+        config: { modelId: "m-vision" },
+        credentialRef: null,
+      },
+    },
   });
   expect(app.requests()).toHaveLength(0);
 
@@ -1335,7 +1473,7 @@ test("ocr settings: starts empty, adds AI from the empty state, and configures i
   expect(app.shows("id:settings-ocr-empty")).toBe(false);
   expect(app.shows("id:settings-ocr-role-ai")).toBe(true);
   expect(app.texts()).toContain("Primary");
-  expect(app.texts()).toContain("OpenAI Main · gpt-4.1");
+  expect(app.accessibility("id:settings-ocr-summary-ai")?.name).toBe("m-vision");
   expect(app.enabled("id:settings-ocr-toggle-ai")).toBe(true);
   expect(app.shows("id:settings-ocr-grip-ai")).toBe(false);
 
@@ -1345,7 +1483,7 @@ test("ocr settings: starts empty, adds AI from the empty state, and configures i
   expect(app.shows("id:settings-ocr-card")).toBe(false);
   await app.press("id:settings-nav-ocr");
   await app.waitFor("id:settings-ocr-card");
-  expect(app.texts()).toContain("OpenAI Main · gpt-4.1");
+  expect(app.accessibility("id:settings-ocr-summary-ai")?.name).toBe("m-vision");
 
   expect(app.texts()).not.toContain(OCR_PRIORITY_HINT.en);
   await app.hover("id:settings-ocr-priority-info");
@@ -1355,7 +1493,7 @@ test("ocr settings: starts empty, adds AI from the empty state, and configures i
   await reopened.press("id:nav-settings");
   await reopened.press("id:settings-nav-ocr");
   await reopened.waitFor("id:settings-ocr-card");
-  expect(reopened.texts()).toContain("OpenAI Main · gpt-4.1");
+  expect(reopened.accessibility("id:settings-ocr-summary-ai")?.name).toBe("m-vision");
   expect(reopened.shows("id:settings-ocr-role-ai")).toBe(true);
   expect(reopened.shows("id:settings-ocr-add")).toBe(true);
   expect(reopened.shows("id:settings-ocr-windows-only")).toBe(false);
@@ -1442,7 +1580,7 @@ test("ocr settings: an open priority tooltip does not swallow Escape for the rem
           enabled: { baidu: true },
           baidu: { operation: "accurate", credentialRef: ref },
         }),
-        [baiduCredentialStorageKey(ref)]: JSON.stringify({
+        [ocrCredentialStorageKey(ref)]: JSON.stringify({
           apiKey: "saved-api-key",
           secretKey: "saved-secret-key",
         }),
@@ -1490,7 +1628,7 @@ test("ocr settings: keeps an unavailable saved model and offers Models recovery"
   await app.press("id:nav-settings");
   await app.press("id:settings-nav-ocr");
   await app.waitFor("id:settings-ocr-summary-ai");
-  expect(app.texts()).toContain("Model no longer exists in Models.");
+  expect(app.accessibility("id:settings-ocr-summary-ai")?.name).toBe("m-removed");
 
   await app.press("id:settings-ocr-channel-ai");
   await app.waitFor("id:settings-ocr-model-unavailable");
@@ -1552,7 +1690,7 @@ test("ocr settings: an empty catalog or a failed write keeps the active binding"
   await app.waitFor("id:settings-ocr-models-recovery");
   expect(app.shows("id:settings-ocr-model")).toBe(true);
   expect(app.enabled("id:settings-ocr-model")).toBe(false);
-  expect(app.enabled("id:settings-ocr-save")).toBe(false);
+  expect(app.enabled("id:settings-ocr-save")).toBe(true);
   await app.press("id:settings-ocr-manage-models");
   await app.waitFor("id:models-page");
 
@@ -1598,10 +1736,12 @@ test("ocr settings: an empty catalog or a failed write keeps the active binding"
   await failingWrite.press("id:settings-ocr-save");
   await failingWrite.waitFor("id:settings-ocr-error");
   expect(failingWrite.texts()).toContain(
-    "Could not save the OCR settings. Check storage and try again.",
+    "Could not save the settings. Check storage and try again.",
   );
   expect(failingWrite.texts()).toContain("OpenAI Main · gpt-4o");
-  expect(JSON.parse(failingWrite.storage()[OCR_STORAGE_KEY]!).ai.modelId).toBe("m-vision");
+  expect(JSON.parse(failingWrite.storage()[OCR_STORAGE_KEY]!).channels.ai.config.modelId).toBe(
+    "m-vision",
+  );
 });
 
 test("ocr settings: saves Baidu keys on detail page and restores a blank form", async () => {
@@ -1620,29 +1760,33 @@ test("ocr settings: saves Baidu keys on detail page and restores a blank form", 
   expect(app.shows("id:settings-ocr-model")).toBe(false);
   expect(app.shows("id:settings-ocr-models-recovery")).toBe(false);
   expect(app.shows("id:settings-ocr-manage-models")).toBe(false);
-  expect(app.enabled("id:settings-ocr-save")).toBe(false);
-
-  await app.type("id:settings-ocr-baidu-api-key", "synthetic-api-key");
-  expect(app.enabled("id:settings-ocr-save")).toBe(false);
-  await app.type("id:settings-ocr-baidu-secret-key", "synthetic-secret-key");
   expect(app.enabled("id:settings-ocr-save")).toBe(true);
 
+  await app.type("id:settings-ocr-baidu-api-key", "synthetic-api-key");
+  await app.press("id:settings-ocr-save");
+  await app.waitFor("id:settings-ocr-error");
+  expect(app.texts()).toContain("Enter both the API Key and the Secret Key.");
+  await app.type("id:settings-ocr-baidu-secret-key", "synthetic-secret-key");
   await app.press("id:settings-ocr-save");
   await app.waitUntil(() => Boolean(app.storage()[OCR_STORAGE_KEY]));
   const saved = JSON.parse(app.storage()[OCR_STORAGE_KEY]!) as {
     version: number;
     order: string[];
-    enabled: { ai: boolean; baidu: boolean; "google-cloud": boolean };
-    ai: unknown;
-    baidu: { operation: string; credentialRef: string };
+    channels: Record<
+      string,
+      { enabled: boolean; config: { operation: string }; credentialRef: string }
+    >;
   };
-  expect(saved.version).toBe(4);
+  expect(saved.version).toBe(1);
   expect(saved.order).toEqual(["baidu"]);
-  expect(saved.enabled).toEqual({ ai: false, baidu: true, "google-cloud": false });
-  expect(saved.ai).toBeNull();
-  expect(saved.baidu.operation).toBe("accurate");
+  expect(saved.channels.ai).toBeUndefined();
+  expect(saved.channels["google-cloud"]).toBeUndefined();
+  expect(saved.channels.baidu!.enabled).toBe(true);
+  expect(saved.channels.baidu!.config.operation).toBe("accurate");
   expect(JSON.stringify(saved).includes("synthetic")).toBe(false);
-  expect(JSON.parse(app.storage()[baiduCredentialStorageKey(saved.baidu.credentialRef)]!)).toEqual({
+  expect(
+    JSON.parse(app.storage()[ocrCredentialStorageKey(saved.channels.baidu!.credentialRef)]!),
+  ).toEqual({
     apiKey: "synthetic-api-key",
     secretKey: "synthetic-secret-key",
   });
@@ -1695,26 +1839,23 @@ test("ocr settings: saves a Vision key without showing it, then keeps it through
   expect(app.shows("id:settings-ocr-baidu-api-key")).toBe(false);
   expect(app.shows("id:settings-ocr-baidu-operation")).toBe(false);
   expect(app.shows("id:settings-ocr-model")).toBe(false);
-  expect(app.enabled("id:settings-ocr-save")).toBe(false);
+  expect(app.enabled("id:settings-ocr-save")).toBe(true);
 
   await app.type("id:settings-ocr-google-api-key", "  " + visionKey + "  ");
-  expect(app.enabled("id:settings-ocr-save")).toBe(true);
   await app.press("id:settings-ocr-save");
   await app.waitUntil(() => Boolean(app.storage()[OCR_STORAGE_KEY]));
 
   const saved = JSON.parse(app.storage()[OCR_STORAGE_KEY]!) as {
     order: string[];
-    enabled: Record<string, boolean>;
-    "google-cloud": { credentialRef: string } | null;
+    channels: Record<string, { enabled: boolean; credentialRef: string }>;
   };
   expect(saved.order).toEqual(["google-cloud"]);
-  expect(saved.enabled["google-cloud"]).toBe(true);
+  expect(saved.channels["google-cloud"]!.enabled).toBe(true);
   expect(JSON.stringify(saved).includes(visionKey)).toBe(false);
   expect(app.texts().join(" ").includes(visionKey)).toBe(false);
   expect(app.value("id:settings-ocr-google-api-key")).toBe("");
-  const credentialRef = saved["google-cloud"]?.credentialRef;
-  if (!credentialRef) throw new Error("expected a Vision credential ref");
-  expect(JSON.parse(app.storage()[googleCloudCredentialStorageKey(credentialRef)]!)).toEqual({
+  const credentialRef = saved.channels["google-cloud"]!.credentialRef;
+  expect(JSON.parse(app.storage()[ocrCredentialStorageKey(credentialRef)]!)).toEqual({
     apiKey: visionKey,
   });
 
@@ -1731,9 +1872,9 @@ test("ocr settings: saves a Vision key without showing it, then keeps it through
   await app.waitUntil(() => JSON.parse(app.storage()[OCR_STORAGE_KEY]!).order[0] === "ai");
   await app.press("id:settings-ocr-toggle-google-cloud");
   await app.waitUntil(
-    () => JSON.parse(app.storage()[OCR_STORAGE_KEY]!).enabled["google-cloud"] === false,
+    () => JSON.parse(app.storage()[OCR_STORAGE_KEY]!).channels["google-cloud"].enabled === false,
   );
-  expect(app.storage()[googleCloudCredentialStorageKey(credentialRef)]).toBe(
+  expect(app.storage()[ocrCredentialStorageKey(credentialRef)]).toBe(
     JSON.stringify({ apiKey: visionKey }),
   );
   expect(app.texts().join(" ").includes(visionKey)).toBe(false);
@@ -1752,35 +1893,42 @@ test("ocr settings: an unreadable Vision key does not change the Baidu summary",
     ...viewport,
     storage: makeSeedStorage({
       extra: {
-        [OCR_STORAGE_KEY]: JSON.stringify({
-          version: 4,
-          order: ["baidu", "google-cloud"],
-          enabled: { ai: false, baidu: true, "google-cloud": true },
-          ai: null,
-          baidu: { operation: "accurate", credentialRef: baiduRef },
-          "google-cloud": { credentialRef: googleRef },
+        [OCR_STORAGE_KEY]: collectionRecord(["baidu", "google-cloud"], {
+          baidu: {
+            enabled: true,
+            configured: true,
+            config: { operation: "accurate" },
+            credentialRef: baiduRef,
+          },
+          "google-cloud": {
+            enabled: true,
+            configured: true,
+            config: {},
+            credentialRef: googleRef,
+          },
         }),
-        [baiduCredentialStorageKey(baiduRef)]: JSON.stringify({
+        [ocrCredentialStorageKey(baiduRef)]: JSON.stringify({
           apiKey: "synthetic-api-key",
           secretKey: "synthetic-secret-key",
         }),
-        [googleCloudCredentialStorageKey(googleRef)]: "not-json",
+        [ocrCredentialStorageKey(googleRef)]: "not-json",
       },
     }),
   });
   await app.press("id:nav-settings");
   await app.press("id:settings-nav-ocr");
   await app.waitFor("id:settings-ocr-summary-google-cloud");
-  expect(app.texts()).toContain("Accurate with Location");
-  expect(app.texts()).toContain(
-    "The saved Google Cloud Vision key could not be read. Enter it again.",
+  expect(app.accessibility("id:settings-ocr-summary-baidu")?.name).toBe("Accurate with Location");
+  expect(app.accessibility("id:settings-ocr-summary-google-cloud")?.name).toBe(
+    "The saved credential could not be read. Enter it again.",
   );
   expect(app.texts()).not.toContain("The saved Baidu keys could not be read. Enter both keys.");
 
   await app.press("id:settings-ocr-channel-google-cloud");
   await app.waitFor("id:settings-ocr-google-key-missing");
+  expect(app.shows("id:settings-ocr-key-missing")).toBe(true);
   expect(app.shows("id:settings-ocr-baidu-operation")).toBe(false);
-  expect(app.enabled("id:settings-ocr-save")).toBe(false);
+  expect(app.enabled("id:settings-ocr-save")).toBe(true);
 });
 
 test("ocr settings: removes channels, confirms saved configs, and re-offers the picker", async () => {
@@ -1805,7 +1953,7 @@ test("ocr settings: removes channels, confirms saved configs, and re-offers the 
           modelId: "m-vision",
           baidu: { operation: "accurate", credentialRef: ref },
         }),
-        [baiduCredentialStorageKey(ref)]: JSON.stringify({
+        [ocrCredentialStorageKey(ref)]: JSON.stringify({
           apiKey: "saved-api-key",
           secretKey: "saved-secret-key",
         }),
@@ -1830,8 +1978,8 @@ test("ocr settings: removes channels, confirms saved configs, and re-offers the 
   await app.waitUntil(() => !app.shows("id:settings-ocr-row-ai"));
   const afterAi = JSON.parse(app.storage()[OCR_STORAGE_KEY]!);
   expect(afterAi.order).toEqual(["baidu"]);
-  expect(afterAi.ai).toBeNull();
-  expect(afterAi.enabled.ai).toBe(false);
+  expect(afterAi.channels.ai).toBeUndefined();
+  expect(Object.keys(afterAi.channels)).toEqual(["baidu"]);
   expect(app.shows("id:settings-ocr-add")).toBe(true);
   expect(app.shows("id:settings-ocr-grip-baidu")).toBe(false);
 
@@ -1843,13 +1991,11 @@ test("ocr settings: removes channels, confirms saved configs, and re-offers the 
   expect(app.shows("id:settings-ocr-row-baidu")).toBe(false);
   expect(app.shows("id:settings-ocr-empty")).toBe(true);
   expect(app.texts()).toContain("No OCR channels yet");
-  expect(app.storage()[baiduCredentialStorageKey(ref)]).toBeUndefined();
+  expect(app.storage()[ocrCredentialStorageKey(ref)]).toBeUndefined();
   expect(JSON.parse(app.storage()[OCR_STORAGE_KEY]!)).toMatchObject({
-    version: 4,
+    version: 1,
     order: [],
-    enabled: { ai: false, baidu: false },
-    ai: null,
-    baidu: null,
+    channels: {},
   });
   expect(app.shows("id:settings-ocr-add")).toBe(true);
 });
@@ -1923,7 +2069,7 @@ test("ocr settings: reorders channels and toggles enable state while preserving 
         modelId: "m-vision",
         baidu: { operation: "general", credentialRef: ref },
       }),
-      [baiduCredentialStorageKey(ref)]: JSON.stringify({
+      [ocrCredentialStorageKey(ref)]: JSON.stringify({
         apiKey: "saved-api-key",
         secretKey: "saved-secret-key",
       }),
@@ -1961,12 +2107,12 @@ test("ocr settings: reorders channels and toggles enable state while preserving 
   // Disabling Baidu keeps its credentials & summary, and promotes AI to Primary.
   await reopened.press("id:settings-ocr-toggle-baidu");
   await reopened.waitUntil(
-    () => JSON.parse(reopened.storage()[OCR_STORAGE_KEY]!).enabled.baidu === false,
+    () => JSON.parse(reopened.storage()[OCR_STORAGE_KEY]!).channels.baidu.enabled === false,
   );
   expect(reopened.shows("id:settings-ocr-role-baidu")).toBe(false);
   expect(reopened.shows("id:settings-ocr-role-ai")).toBe(true);
   expect(reopened.texts()).toContain("General with Location");
-  expect(reopened.storage()[baiduCredentialStorageKey(ref)]).toBe(
+  expect(reopened.storage()[ocrCredentialStorageKey(ref)]).toBe(
     JSON.stringify({ apiKey: "saved-api-key", secretKey: "saved-secret-key" }),
   );
 
@@ -1978,9 +2124,11 @@ test("ocr settings: reorders channels and toggles enable state while preserving 
   await reopened.press("role:option[Accurate Basic]");
   await reopened.press("id:settings-ocr-save");
   await reopened.waitUntil(
-    () => JSON.parse(reopened.storage()[OCR_STORAGE_KEY]!).baidu.operation === "accurate_basic",
+    () =>
+      JSON.parse(reopened.storage()[OCR_STORAGE_KEY]!).channels.baidu.config.operation ===
+      "accurate_basic",
   );
-  expect(JSON.parse(reopened.storage()[OCR_STORAGE_KEY]!).enabled.baidu).toBe(false);
+  expect(JSON.parse(reopened.storage()[OCR_STORAGE_KEY]!).channels.baidu.enabled).toBe(false);
 });
 
 test("ocr settings: the grip reorders channels with the arrow keys and keeps the focus", async () => {
@@ -2021,7 +2169,7 @@ test("ocr settings: keeps previous order and enabled state on a failed list writ
           enabled: { ai: false, baidu: false },
           baidu: { operation: "accurate_basic", credentialRef: ref },
         }),
-        [baiduCredentialStorageKey(ref)]: JSON.stringify({
+        [ocrCredentialStorageKey(ref)]: JSON.stringify({
           apiKey: "saved-api-key",
           secretKey: "saved-secret-key",
         }),
@@ -2040,7 +2188,7 @@ test("ocr settings: keeps previous order and enabled state on a failed list writ
   await failing.waitFor("id:settings-ocr-card");
   await failing.press("id:settings-ocr-toggle-baidu");
   await failing.waitFor("id:settings-ocr-list-error");
-  expect(JSON.parse(failing.storage()[OCR_STORAGE_KEY]!).enabled.baidu).toBe(false);
+  expect(JSON.parse(failing.storage()[OCR_STORAGE_KEY]!).channels.baidu.enabled).toBe(false);
 
   await failing.drag("id:settings-ocr-row-baidu", { x: 0, y: 80 });
   await failing.wait(600);
@@ -2057,20 +2205,25 @@ test("ocr settings: unreadable Baidu keys and a failed write leave the binding",
         enabled: { ai: false, baidu: true },
         baidu: { operation: "general", credentialRef: ref },
       }),
-      [baiduCredentialStorageKey(ref)]: JSON.stringify({ apiKey: 1 }),
+      [ocrCredentialStorageKey(ref)]: JSON.stringify({ apiKey: 1 }),
     },
   });
   const app = await open(APP_ENTRY, { ...viewport, storage: broken });
   await app.press("id:nav-settings");
   await app.press("id:settings-nav-ocr");
   await app.waitFor("id:settings-ocr-summary-baidu");
-  expect(app.texts()).toContain("The saved Baidu keys could not be read. Enter both keys.");
+  expect(app.accessibility("id:settings-ocr-summary-baidu")?.name).toBe(
+    "The saved credential could not be read. Enter it again.",
+  );
 
   await app.press("id:settings-ocr-channel-baidu");
   await app.waitFor("id:settings-ocr-baidu-keys-missing");
-  expect(app.enabled("id:settings-ocr-save")).toBe(false);
+  expect(app.shows("id:settings-ocr-key-missing")).toBe(true);
+  expect(app.enabled("id:settings-ocr-save")).toBe(true);
   await app.type("id:settings-ocr-baidu-api-key", "replacement-api-key");
-  expect(app.enabled("id:settings-ocr-save")).toBe(false);
+  await app.press("id:settings-ocr-save");
+  await app.waitFor("id:settings-ocr-error");
+  expect(app.texts()).toContain("Enter both the API Key and the Secret Key.");
   await app.type("id:settings-ocr-baidu-secret-key", "replacement-secret-key");
   expect(app.enabled("id:settings-ocr-save")).toBe(true);
 
@@ -2093,7 +2246,7 @@ test("ocr settings: unreadable Baidu keys and a failed write leave the binding",
   await failing.type("id:settings-ocr-baidu-secret-key", "replacement-secret-key");
   await failing.press("id:settings-ocr-save");
   await failing.waitFor("id:settings-ocr-error");
-  expect(JSON.parse(failing.storage()[OCR_STORAGE_KEY]!).baidu.credentialRef).toBe(ref);
+  expect(JSON.parse(failing.storage()[OCR_STORAGE_KEY]!).channels.baidu.credentialRef).toBe(ref);
   expect(failing.value("id:settings-ocr-baidu-api-key")).toBe("replacement-api-key");
   expect(failing.value("id:settings-ocr-baidu-secret-key")).toBe("replacement-secret-key");
   expect(failing.requests()).toHaveLength(0);
@@ -2126,7 +2279,7 @@ test("ocr settings: renders cleanly at minimum viewport in dark mode with reduce
           modelId: "m-vision",
           baidu: { operation: "accurate", credentialRef: ref },
         }),
-        [baiduCredentialStorageKey(ref)]: JSON.stringify({
+        [ocrCredentialStorageKey(ref)]: JSON.stringify({
           apiKey: "saved-api-key",
           secretKey: "saved-secret-key",
         }),
@@ -2190,7 +2343,12 @@ test("tts settings: adds Google Cloud from the empty state and discards an unsav
   await app.press("id:settings-nav-tts");
   await app.waitFor("id:settings-tts-card");
   expect(app.value("id:settings-tts-api-key")).toBeNull();
-  expect(JSON.parse(app.storage()[TTS_STORAGE_KEY]!).googleCloud).toBeNull();
+  expect(JSON.parse(app.storage()[TTS_STORAGE_KEY]!).channels["google-cloud"]).toEqual({
+    enabled: false,
+    configured: false,
+    config: { preferences: DEFAULT_GOOGLE_VOICE_PREFERENCES },
+    credentialRef: null,
+  });
   expect(app.requests().some((request) => String(request.url).includes("texttospeech"))).toBe(
     false,
   );
@@ -2206,33 +2364,37 @@ test("tts settings: keeps a saved channel off until enabled and preserves the sw
   await app.waitFor("id:settings-tts-empty");
   await app.press("id:settings-tts-empty-channel-google-cloud");
   await app.waitFor("id:settings-tts-detail-card");
-  expect(app.enabled("id:settings-tts-save")).toBe(false);
+  expect(app.enabled("id:settings-tts-save")).toBe(true);
   expect(app.texts()).not.toContain("The key is stored on this device and is not encrypted.");
 
   await app.type("id:settings-tts-api-key", "synthetic-tts-key");
-  expect(app.enabled("id:settings-tts-save")).toBe(true);
   await app.press("id:settings-tts-save");
-  await app.waitUntil(() => Boolean(app.storage()[TTS_STORAGE_KEY]));
+  await app.waitUntil(
+    () =>
+      JSON.parse(app.storage()[TTS_STORAGE_KEY]!).channels?.["google-cloud"]?.configured === true,
+  );
   const saved = JSON.parse(app.storage()[TTS_STORAGE_KEY]!) as {
     version: number;
-    googleCloud: { enabled: boolean; credentialRef: string };
+    channels: Record<string, { enabled: boolean; credentialRef: string }>;
   };
-  expect(saved.version).toBe(3);
-  expect(saved.googleCloud.enabled).toBe(false);
+  expect(saved.version).toBe(1);
+  expect(saved.channels["google-cloud"]!.enabled).toBe(false);
   expect(JSON.stringify(saved).includes("synthetic-tts-key")).toBe(false);
   expect(
-    JSON.parse(app.storage()[ttsCredentialStorageKey(saved.googleCloud.credentialRef)]!),
+    JSON.parse(
+      app.storage()[ttsCredentialStorageKey(saved.channels["google-cloud"]!.credentialRef)]!,
+    ),
   ).toEqual({ apiKey: "synthetic-tts-key" });
   expect(app.value("id:settings-tts-api-key")).toBe("");
-  expect(app.enabled("id:settings-tts-save")).toBe(false);
+  expect(app.enabled("id:settings-tts-save")).toBe(true);
   expect(app.requests().some((request) => request.url.includes("texttospeech"))).toBe(false);
 
   await app.press("id:settings-tts-breadcrumb-root");
   await app.waitFor("id:settings-tts-card");
-  expect(app.texts()).toContain("Configured");
+  expect(app.texts()).toContain("Standard");
   await app.press("id:settings-tts-toggle-google-cloud");
   await app.waitUntil(
-    () => JSON.parse(app.storage()[TTS_STORAGE_KEY]!).googleCloud.enabled === true,
+    () => JSON.parse(app.storage()[TTS_STORAGE_KEY]!).channels["google-cloud"].enabled === true,
   );
   expect(app.shows("id:settings-tts-role-google-cloud")).toBe(true);
   expect(app.requests().some((request) => request.url.includes("texttospeech"))).toBe(false);
@@ -2244,18 +2406,24 @@ test("tts settings: keeps a saved channel off until enabled and preserves the sw
   await app.press("id:settings-tts-save");
   await app.waitUntil(() => {
     const next = JSON.parse(app.storage()[TTS_STORAGE_KEY]!) as {
-      googleCloud: { credentialRef: string; enabled: boolean };
+      channels: Record<string, { credentialRef: string; enabled: boolean }>;
     };
-    return next.googleCloud.credentialRef !== saved.googleCloud.credentialRef;
+    return (
+      next.channels["google-cloud"]!.credentialRef !== saved.channels["google-cloud"]!.credentialRef
+    );
   });
   const replaced = JSON.parse(app.storage()[TTS_STORAGE_KEY]!) as {
-    googleCloud: { enabled: boolean; credentialRef: string };
+    channels: Record<string, { enabled: boolean; credentialRef: string }>;
   };
-  expect(replaced.googleCloud.enabled).toBe(true);
+  expect(replaced.channels["google-cloud"]!.enabled).toBe(true);
   expect(
-    JSON.parse(app.storage()[ttsCredentialStorageKey(replaced.googleCloud.credentialRef)]!),
+    JSON.parse(
+      app.storage()[ttsCredentialStorageKey(replaced.channels["google-cloud"]!.credentialRef)]!,
+    ),
   ).toEqual({ apiKey: "replacement-tts-key" });
-  expect(app.storage()[ttsCredentialStorageKey(saved.googleCloud.credentialRef)]).toBeUndefined();
+  expect(
+    app.storage()[ttsCredentialStorageKey(saved.channels["google-cloud"]!.credentialRef)],
+  ).toBeUndefined();
   expect(app.value("id:settings-tts-api-key")).toBe("");
   expect(app.texts()).not.toContain("synthetic-tts-key");
   expect(app.texts()).not.toContain("replacement-tts-key");
@@ -2264,7 +2432,9 @@ test("tts settings: keeps a saved channel off until enabled and preserves the sw
   await reopened.press("id:nav-settings");
   await reopened.press("id:settings-nav-tts");
   await reopened.waitFor("id:settings-tts-card");
-  expect(JSON.parse(reopened.storage()[TTS_STORAGE_KEY]!).googleCloud.enabled).toBe(true);
+  expect(JSON.parse(reopened.storage()[TTS_STORAGE_KEY]!).channels["google-cloud"].enabled).toBe(
+    true,
+  );
   await reopened.press("id:settings-tts-open-google-cloud");
   await reopened.waitFor("id:settings-tts-api-key");
   expect(reopened.value("id:settings-tts-api-key")).toBe("");
@@ -2273,7 +2443,7 @@ test("tts settings: keeps a saved channel off until enabled and preserves the sw
   await reopened.press("id:settings-nav-tts");
   await reopened.waitFor("id:settings-tts-card");
   expect(reopened.texts()).toContain("语音合成");
-  expect(reopened.texts()).toContain("已配置");
+  expect(reopened.texts()).toContain("标准");
   expect(reopened.texts()).toContain("首选");
   await reopened.press("id:settings-tts-channel-google-cloud");
   await reopened.waitFor("id:settings-tts-detail-card");
@@ -2345,7 +2515,7 @@ test("tts settings: removes channels and clears their saved keys", async () => {
   await app.press("role:button[Remove]");
   await app.waitUntil(() => !app.shows("id:settings-tts-row-google-cloud"));
   expect(app.storage()[ttsCredentialStorageKey("google-ref")]).toBeUndefined();
-  expect(JSON.parse(app.storage()[TTS_STORAGE_KEY]!).googleCloud).toBeNull();
+  expect(JSON.parse(app.storage()[TTS_STORAGE_KEY]!).channels["google-cloud"]).toBeUndefined();
   expect(app.shows("id:settings-tts-add")).toBe(true);
 
   await app.press("id:settings-tts-remove-azure");
@@ -2406,17 +2576,17 @@ test("tts settings: a missing key can be turned off", async () => {
   await app.press("id:nav-settings");
   await app.press("id:settings-nav-tts");
   await app.waitFor("id:settings-tts-summary-google-cloud");
-  expect(app.texts()).toContain("The saved API key could not be read. Enter it again.");
+  expect(app.texts()).toContain("The saved credential could not be read. Enter it again.");
   expect(app.enabled("id:settings-tts-toggle-google-cloud")).toBe(true);
   await app.press("id:settings-tts-toggle-google-cloud");
   await app.waitUntil(
-    () => JSON.parse(app.storage()[TTS_STORAGE_KEY]!).googleCloud.enabled === false,
+    () => JSON.parse(app.storage()[TTS_STORAGE_KEY]!).channels["google-cloud"].enabled === false,
   );
 
   await app.press("id:settings-tts-toggle-google-cloud");
   await app.waitFor("id:settings-tts-list-error");
-  expect(JSON.parse(app.storage()[TTS_STORAGE_KEY]!).googleCloud.enabled).toBe(false);
-  expect(app.texts()).toContain("The saved API key could not be read. Enter it again.");
+  expect(JSON.parse(app.storage()[TTS_STORAGE_KEY]!).channels["google-cloud"].enabled).toBe(false);
+  expect(app.texts()).toContain("The saved credential could not be read. Enter it again.");
 });
 
 test("tts storage: a failed save keeps the draft", async () => {
@@ -2442,10 +2612,10 @@ test("tts storage: a failed save keeps the draft", async () => {
   await failing.press("id:settings-nav-tts");
   await failing.press("id:settings-tts-toggle-google-cloud");
   await failing.waitFor("id:settings-tts-list-error");
-  expect(JSON.parse(failing.storage()[TTS_STORAGE_KEY]!).googleCloud.enabled).toBe(false);
-  expect(failing.texts()).toContain(
-    "Could not save the text-to-speech settings. Check storage and try again.",
+  expect(JSON.parse(failing.storage()[TTS_STORAGE_KEY]!).channels["google-cloud"].enabled).toBe(
+    false,
   );
+  expect(failing.texts()).toContain("Could not save the settings. Check storage and try again.");
 
   await failing.press("id:settings-tts-open-google-cloud");
   await failing.waitFor("id:settings-tts-detail-card");
@@ -2453,7 +2623,9 @@ test("tts storage: a failed save keeps the draft", async () => {
   await failing.press("id:settings-tts-save");
   await failing.waitFor("id:settings-tts-error");
   expect(failing.value("id:settings-tts-api-key")).toBe("replacement-tts-key");
-  expect(JSON.parse(failing.storage()[TTS_STORAGE_KEY]!).googleCloud.credentialRef).toBe(ref);
+  expect(
+    JSON.parse(failing.storage()[TTS_STORAGE_KEY]!).channels["google-cloud"].credentialRef,
+  ).toBe(ref);
   expect(JSON.parse(failing.storage()[ttsCredentialStorageKey(ref)]!).apiKey).toBe("kept-tts-key");
   expect(failing.requests().some((request) => request.url.includes("texttospeech"))).toBe(false);
 });
@@ -2519,8 +2691,8 @@ test("tts preview: plays the saved sample and ignores drafts, saves, and toggles
   expect(
     app.audio().some((call) => call.command === "open" && call.src.includes("tts-playback")),
   ).toBe(true);
-  expect(app.enabled("id:settings-tts-api-key")).toBe(false);
-  expect(app.enabled("id:settings-tts-save")).toBe(false);
+  expect(app.enabled("id:settings-tts-api-key")).toBe(true);
+  expect(app.enabled("id:settings-tts-save")).toBe(true);
   await app.endAudio();
   await app.waitFor("text:Play sample");
   expect(app.audio().some((call) => call.command === "close")).toBe(true);
@@ -2529,17 +2701,17 @@ test("tts preview: plays the saved sample and ignores drafts, saves, and toggles
   await app.press("id:settings-tts-save");
   await app.waitUntil(() => {
     const saved = JSON.parse(app.storage()[TTS_STORAGE_KEY]!) as {
-      googleCloud: { credentialRef: string; enabled: boolean };
+      channels: Record<string, { credentialRef: string; enabled: boolean }>;
     };
-    return saved.googleCloud.credentialRef !== "preview-ref";
+    return saved.channels["google-cloud"]!.credentialRef !== "preview-ref";
   });
   expect(app.requests()).toHaveLength(1);
-  expect(JSON.parse(app.storage()[TTS_STORAGE_KEY]!).googleCloud.enabled).toBe(false);
+  expect(JSON.parse(app.storage()[TTS_STORAGE_KEY]!).channels["google-cloud"].enabled).toBe(false);
   await app.press("id:settings-tts-breadcrumb-root");
   await app.waitFor("id:settings-tts-card");
   await app.press("id:settings-tts-toggle-google-cloud");
   await app.waitUntil(
-    () => JSON.parse(app.storage()[TTS_STORAGE_KEY]!).googleCloud.enabled === true,
+    () => JSON.parse(app.storage()[TTS_STORAGE_KEY]!).channels["google-cloud"].enabled === true,
   );
   expect(app.requests()).toHaveLength(1);
 });
@@ -2660,10 +2832,13 @@ test("tts settings: configures Azure and enables it beside Google without a netw
     const raw = app.storage()[TTS_STORAGE_KEY];
     if (typeof raw !== "string") return false;
     const saved = JSON.parse(raw) as {
-      googleCloud: { enabled: boolean };
-      azure: { enabled: boolean; region: string } | null;
+      channels: Record<string, { enabled: boolean; config?: { region?: string } }>;
     };
-    return saved.azure?.enabled === true && saved.googleCloud.enabled === true;
+    return (
+      saved.channels.azure?.enabled === true &&
+      saved.channels.azure?.config?.region === "eastus" &&
+      saved.channels["google-cloud"]?.enabled === true
+    );
   });
   expect(app.shows("id:settings-tts-role-google-cloud")).toBe(true);
   expect(app.shows("id:settings-tts-role-azure")).toBe(true);
@@ -2705,7 +2880,7 @@ test("tts settings: shows the saved Azure region and the channel priority", asyn
   expect(app.value("id:settings-tts-api-key")).toBe("");
   expect(app.texts()).not.toContain("azure-key");
   await app.type("id:settings-tts-region", "2");
-  expect(app.enabled("id:settings-tts-save")).toBe(false);
+  expect(app.enabled("id:settings-tts-save")).toBe(true);
   await app.type("id:settings-tts-api-key", "next-azure-key");
   expect(app.enabled("id:settings-tts-save")).toBe(true);
   await app.press("id:settings-tts-save");
@@ -2761,11 +2936,12 @@ test("tts settings: reorders channels and keeps the saved key of a disabled one"
   // Disabling Google keeps its saved key and summary, and leaves Azure primary.
   await reopened.press("id:settings-tts-toggle-google-cloud");
   await reopened.waitUntil(
-    () => JSON.parse(reopened.storage()[TTS_STORAGE_KEY]!).googleCloud.enabled === false,
+    () =>
+      JSON.parse(reopened.storage()[TTS_STORAGE_KEY]!).channels["google-cloud"].enabled === false,
   );
   expect(reopened.shows("id:settings-tts-role-google-cloud")).toBe(false);
   expect(reopened.shows("id:settings-tts-role-azure")).toBe(true);
-  expect(reopened.texts()).toContain("Configured");
+  expect(reopened.texts()).toContain("Standard");
   expect(reopened.storage()[ttsCredentialStorageKey("google-ref")]).toBe(
     JSON.stringify({ apiKey: "google-key" }),
   );
@@ -2835,11 +3011,10 @@ test("tts preview: plays an Azure sample without changing the active channel", a
     app.audio().some((call) => call.command === "open" && call.src.includes("tts-playback")),
   ).toBe(true);
   const saved = JSON.parse(app.storage()[TTS_STORAGE_KEY]!) as {
-    googleCloud: { enabled: boolean };
-    azure: { enabled: boolean };
+    channels: Record<string, { enabled: boolean }>;
   };
-  expect(saved.googleCloud.enabled).toBe(true);
-  expect(saved.azure.enabled).toBe(false);
+  expect(saved.channels["google-cloud"]!.enabled).toBe(true);
+  expect(saved.channels.azure!.enabled).toBe(false);
 });
 
 test("tts preview: Azure auth and rate limits open no player", async () => {
@@ -2864,7 +3039,8 @@ test("tts preview: Azure auth and rate limits open no player", async () => {
   await auth.press("id:settings-nav-tts");
   await auth.press("id:settings-tts-open-azure");
   await auth.waitUntil(() => auth.enabled("id:settings-tts-preview"));
-  await auth.type("id:settings-tts-region", "2");
+  await auth.clear("id:settings-tts-region");
+  await auth.type("id:settings-tts-region", "invalid-region");
   expect(auth.enabled("id:settings-tts-preview")).toBe(false);
   await auth.hover("id:settings-tts-preview");
   await auth.waitUntil(() =>
@@ -2953,7 +3129,8 @@ test("tts google: previews the draft, saves it without a new key, and reopens it
   await stepGoogleRate(app, 5);
   await app.waitUntil(() => app.texts().includes("Speaking rate · 1.25×"));
 
-  const before = JSON.parse(app.storage()[TTS_STORAGE_KEY]!).googleCloud.preferences;
+  const before = JSON.parse(app.storage()[TTS_STORAGE_KEY]!).channels["google-cloud"].config
+    .preferences;
   await app.press("id:settings-tts-preview");
   await app.waitFor("text:Stop");
   expect(app.requests()).toHaveLength(1);
@@ -2961,19 +3138,22 @@ test("tts google: previews the draft, saves it without a new key, and reopens it
   const body = JSON.parse(request.body ?? "");
   expect(body.voice.name).toMatch(/^en-US-Neural2-/);
   expect(body.audioConfig).toEqual({ audioEncoding: "MP3", speakingRate: 1.25 });
-  expect(JSON.parse(app.storage()[TTS_STORAGE_KEY]!).googleCloud.preferences).toEqual(before);
+  expect(
+    JSON.parse(app.storage()[TTS_STORAGE_KEY]!).channels["google-cloud"].config.preferences,
+  ).toEqual(before);
   await app.endAudio();
   await app.waitFor("text:Play sample");
 
   await app.press("id:settings-tts-save");
   await app.waitUntil(
     () =>
-      JSON.parse(app.storage()[TTS_STORAGE_KEY]!).googleCloud.preferences.voiceTier === "neural2",
+      JSON.parse(app.storage()[TTS_STORAGE_KEY]!).channels["google-cloud"].config.preferences
+        .voiceTier === "neural2",
   );
-  const saved = JSON.parse(app.storage()[TTS_STORAGE_KEY]!).googleCloud;
+  const saved = JSON.parse(app.storage()[TTS_STORAGE_KEY]!).channels["google-cloud"];
   expect(saved.credentialRef).toBe(ref);
   expect(saved.enabled).toBe(true);
-  expect(saved.preferences.speakingRate).toBe(1.25);
+  expect(saved.config.preferences.speakingRate).toBe(1.25);
   expect(app.value("id:settings-tts-api-key")).toBe("");
 
   await app.press("id:settings-tts-breadcrumb-root");
@@ -3147,7 +3327,7 @@ test("tts google: cancelling the overrides dialog keeps the page draft", async (
   await app.press("id:settings-tts-google-override-cancel");
   await app.waitUntil(() => !app.shows("id:settings-tts-google-override-dialog"));
   expect(app.shows("id:settings-tts-google-override-fr")).toBe(false);
-  expect(app.enabled("id:settings-tts-save")).toBe(false);
+  expect(app.enabled("id:settings-tts-save")).toBe(true);
 
   await app.press("id:settings-tts-google-overrides");
   await app.waitFor("id:settings-tts-google-override-dialog");

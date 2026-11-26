@@ -32,14 +32,13 @@ import { TranslationOutput } from "../../components/ui/translation-output";
 import googleCloudIcon from "../../../assets/icons/google-cloud.svg";
 import { ProviderMark } from "../../modules/ai/ui/provider-mark";
 import { languageResolutionErrorMessage } from "../language-detection/messages";
-import { AUTO_LANGUAGE, type LanguageId, type SourceLanguageId } from "../presets/languages";
+import { AUTO_LANGUAGE, type LanguageId, type SourceLanguageId } from "../../framework/languages";
 import { presetChannelMark } from "../presets/model-choices";
 import type { TranslationPreset } from "../presets/types";
 import { synthesizeSpeech } from "../tts/channels";
-import { googlePreferencesSignature } from "../tts/google-preferences";
 import { playMp3Bytes } from "../tts/playback";
 import { prepareQuickSpeech, quickSpeechFailureMessage } from "../tts/quick-speech";
-import { ttsSettingsStore } from "../tts/settings";
+import { ttsChannels } from "../tts/store";
 import { AlignedTranslation, type SentenceSegment } from "./aligned-translation";
 import { buildAlignedMarkdownDocument, prepareMarkdownAlignment } from "./alignment-document";
 import { QuickTranslateHistoryResults } from "./history-results";
@@ -1522,15 +1521,13 @@ export function QuickTranslatePopup(props: QuickTranslatePopupProps) {
   let speechAbort: AbortController | null = null;
   let stopSpeech: (() => void) | null = null;
   let activeCredential = "";
-  const activeSpeech = () => ttsSettingsStore.activeBinding();
+  const activeSpeech = () => ttsChannels.activeChannel();
   const speakEnabled = () => activeSpeech() !== null;
   const credentialSignature = () => {
     const active = activeSpeech();
     if (active === null) return "";
-    if (active.channel === "azure") {
-      return `azure\0${active.credentialRef}\0${active.region}`;
-    }
-    return `google-cloud\0${active.credentialRef}\0${googlePreferencesSignature(active.preferences)}`;
+    const signature = ttsChannels.contribution(active.id)?.signature?.(active.binding) ?? "";
+    return `${active.id}\0${active.binding.credentialRef ?? ""}\0${signature}`;
   };
 
   const cancelSpeech = () => {
@@ -1678,12 +1675,12 @@ export function QuickTranslatePopup(props: QuickTranslatePopupProps) {
       input.report(prepared.message);
       return;
     }
-    const request = prepared.speech.request;
+    const speech = prepared.speech;
     if (!mountedSpeech(token) || credentialSignature() !== activeCredential) {
       finishSpeech(token);
       return;
     }
-    const synthesized = await synthesizeSpeech(request, { signal: controller.signal });
+    const synthesized = await synthesizeSpeech(speech, { signal: controller.signal });
     if (!mountedSpeech(token)) return;
     if (controller.signal.aborted || synthesized.status === "cancelled") {
       finishSpeech(token);
@@ -1695,7 +1692,7 @@ export function QuickTranslatePopup(props: QuickTranslatePopupProps) {
     }
     if (synthesized.status === "failed") {
       finishSpeech(token);
-      input.report(quickSpeechFailureMessage(synthesized.failure, request.credentials.channel));
+      input.report(quickSpeechFailureMessage(synthesized.failure, speech.channel));
       return;
     }
     const playback = playMp3Bytes(synthesized.audio, {

@@ -6,7 +6,7 @@ import { initializeAiModules } from "../../app/ai-setup";
 import { makeChannel, makeModel, makeSeedStorage } from "../models/__tests__/fixtures";
 import type { SavedModelRequestResolution } from "../models/store";
 import { googleCloudCredentialStorageKey, PRESETS_STORAGE_KEY } from "../presets/store";
-import { getLanguageLabel } from "../presets/languages";
+import { getLanguageLabel } from "../../framework/languages";
 import type { AiPresetEngine, TranslationPreset } from "../presets/types";
 import {
   resolvePresetTemplate,

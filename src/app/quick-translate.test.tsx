@@ -2,11 +2,10 @@ import type { HistoryResult, HistorySnapshot } from "langnext-native";
 import type { WindowRef, WindowState } from "nsh/desktop";
 import { t } from "nsh/i18n";
 import { expect, open, test, type StubRequest, type StubResponse } from "nsh/test";
+import { GOOGLE_CLOUD_TTS_URL } from "../contributions/tts/vendor/google-cloud";
+import { DEFAULT_GOOGLE_VOICE_PREFERENCES } from "../contributions/tts/vendor/google-preferences";
 import { makeChannel, makeModel, makeSeedStorage } from "../features/models/__tests__/fixtures";
-import {
-  baiduCredentialStorageKey,
-  googleCloudCredentialStorageKey,
-} from "../features/ocr/settings";
+import { OCR_CHANNELS_STORAGE_KEY, OCR_CREDENTIAL_NAMESPACE } from "../features/ocr/store";
 import { PRESETS_STORAGE_KEY } from "../features/presets/store";
 import type { TranslationPreset } from "../features/presets/types";
 import { QUICK_TRANSLATE_PREFERENCES_KEY } from "../features/quick-translate/preferences";
@@ -19,9 +18,6 @@ import {
   SCREENSHOT_TRANSLATE_SHORTCUT_STORAGE_KEY,
   SELECTION_TRANSLATE_SHORTCUT_STORAGE_KEY,
 } from "../features/settings/shortcuts";
-import { GOOGLE_CLOUD_TTS_URL } from "../features/tts/google-cloud";
-import { DEFAULT_GOOGLE_VOICE_PREFERENCES } from "../features/tts/google-preferences";
-import { TTS_STORAGE_KEY, ttsCredentialStorageKey } from "../features/tts/settings";
 import {
   createQuickTranslateController,
   POPUP_DEFAULT_SIZE,
@@ -36,6 +32,16 @@ const HARNESS_PLATFORM_OS_KEY = "__test.qt.platformOs";
 const viewport = { width: 1040, height: 720, platform: "windows" as const };
 const AUTO_TRANSLATE_DEBOUNCE_MS = 500;
 const SENTENCE_ALIGNMENT_STORAGE_KEY = "settings.quickTranslate.sentenceAlignment";
+const TTS_STORAGE_KEY = "integrations.tts.v1";
+const TTS_CREDENTIAL_NAMESPACE = "secret.tts";
+
+function ttsCredentialStorageKey(credentialRef: string): string {
+  return `${TTS_CREDENTIAL_NAMESPACE}.${credentialRef}`;
+}
+
+function ocrCredentialStorageKey(credentialRef: string): string {
+  return `${OCR_CREDENTIAL_NAMESPACE}.${credentialRef}`;
+}
 
 /** Popup selections live in the popup's own preferences; presets never supply languages. */
 function popupPreferences(overrides: Record<string, unknown> = {}): string {
@@ -2136,7 +2142,6 @@ test("quick window fits a short copied translation after closing a taller result
 });
 
 const HARNESS_OCR_CAPTURE_KEY = "__test.qt.ocrCapture";
-const OCR_STORAGE_KEY = "settings.ocr.v4";
 const OCR_TEXT = "Screen line one\n第二行";
 const OCR_CAPTION = "Drag to select · Tab switches display · Space and Enter confirm · Esc cancels";
 const OCR_BUTTON = "id:quick-translate-header >> id:quick-translate-ocr";
@@ -2174,12 +2179,23 @@ function ocrSeed(extra: Record<string, string> = {}) {
     "quickTranslate.preferences.v1": popupPreferences({
       cards: [{ id: "card-1", presetId: "preset-1", templateId: null, collapsed: false }],
     }),
-    [OCR_STORAGE_KEY]: JSON.stringify({
-      version: 4,
+    [OCR_CHANNELS_STORAGE_KEY]: JSON.stringify({
+      version: 1,
       order: ["ai", "baidu"],
-      enabled: { ai: true, baidu: false },
-      ai: { modelId: "m-vision" },
-      baidu: null,
+      channels: {
+        ai: {
+          enabled: true,
+          configured: true,
+          config: { modelId: "m-vision" },
+          credentialRef: null,
+        },
+        baidu: {
+          enabled: false,
+          configured: false,
+          config: { operation: "accurate" },
+          credentialRef: null,
+        },
+      },
     }),
     ...extra,
   };
@@ -2543,7 +2559,7 @@ test("selection screenshot recovery: only an unreadable selection offers capture
 
 test("selection screenshot recovery: missing OCR setup shows its own feedback without capture", async () => {
   const seed: Record<string, string> = { ...ocrSeed() };
-  delete seed[OCR_STORAGE_KEY];
+  delete seed[OCR_CHANNELS_STORAGE_KEY];
   const app = await open(HARNESS_ENTRY, { ...viewport, storage: seed });
   const recovery = "id:quick-translate-source-toolbar >> id:quick-translate-selection-screenshot";
 
@@ -2567,7 +2583,7 @@ test("selection screenshot recovery: missing OCR setup shows its own feedback wi
 
 test("selection screenshot recovery: the unreadable row renders in dark mode with reduced motion in Chinese", async () => {
   const seed: Record<string, string> = { ...ocrSeed() };
-  delete seed[OCR_STORAGE_KEY];
+  delete seed[OCR_CHANNELS_STORAGE_KEY];
   const app = await open(HARNESS_ENTRY, {
     ...viewport,
     colorScheme: "dark",
@@ -3232,7 +3248,7 @@ test("quick ocr: no eligible card replaces the text without a translation", asyn
 
 test("quick ocr: an unsaved service shows recovery and never captures", async () => {
   const seed: Record<string, string> = { ...ocrSeed() };
-  delete seed[OCR_STORAGE_KEY];
+  delete seed[OCR_CHANNELS_STORAGE_KEY];
   const app = await open(HARNESS_ENTRY, {
     ...viewport,
     storage: seed,
@@ -3274,14 +3290,20 @@ const BAIDU_OCR_URL =
 
 function baiduOcrSeed(extra: Record<string, string> = {}) {
   return ocrSeed({
-    [OCR_STORAGE_KEY]: JSON.stringify({
-      version: 4,
+    [OCR_CHANNELS_STORAGE_KEY]: JSON.stringify({
+      version: 1,
       order: ["baidu", "ai"],
-      enabled: { ai: false, baidu: true },
-      ai: null,
-      baidu: { operation: "accurate", credentialRef: BAIDU_REF },
+      channels: {
+        baidu: {
+          enabled: true,
+          configured: true,
+          config: { operation: "accurate" },
+          credentialRef: BAIDU_REF,
+        },
+        ai: { enabled: false, configured: false, config: { modelId: "" }, credentialRef: null },
+      },
     }),
-    [baiduCredentialStorageKey(BAIDU_REF)]: JSON.stringify({
+    [ocrCredentialStorageKey(BAIDU_REF)]: JSON.stringify({
       apiKey: "synthetic-api-key",
       secretKey: "synthetic-secret-key",
     }),
@@ -3403,12 +3425,23 @@ test("quick ocr: falls back from primary Baidu quota failure to backup AI and tr
   const app = await open(HARNESS_ENTRY, {
     ...viewport,
     storage: baiduOcrSeed({
-      [OCR_STORAGE_KEY]: JSON.stringify({
-        version: 4,
+      [OCR_CHANNELS_STORAGE_KEY]: JSON.stringify({
+        version: 1,
         order: ["baidu", "ai"],
-        enabled: { ai: true, baidu: true },
-        ai: { modelId: "m-vision" },
-        baidu: { operation: "accurate", credentialRef: BAIDU_REF },
+        channels: {
+          baidu: {
+            enabled: true,
+            configured: true,
+            config: { operation: "accurate" },
+            credentialRef: BAIDU_REF,
+          },
+          ai: {
+            enabled: true,
+            configured: true,
+            config: { modelId: "m-vision" },
+            credentialRef: null,
+          },
+        },
       }),
     }),
     network: {
@@ -3443,15 +3476,19 @@ const GOOGLE_ANNOTATE = "https://vision.googleapis.com/v1/images:annotate";
 
 function googleOcrSeed(extra: Record<string, string> = {}) {
   return ocrSeed({
-    [OCR_STORAGE_KEY]: JSON.stringify({
-      version: 4,
+    [OCR_CHANNELS_STORAGE_KEY]: JSON.stringify({
+      version: 1,
       order: ["google-cloud"],
-      enabled: { ai: false, baidu: false, "google-cloud": true },
-      ai: null,
-      baidu: null,
-      "google-cloud": { credentialRef: GOOGLE_REF },
+      channels: {
+        "google-cloud": {
+          enabled: true,
+          configured: true,
+          config: {},
+          credentialRef: GOOGLE_REF,
+        },
+      },
     }),
-    [googleCloudCredentialStorageKey(GOOGLE_REF)]: JSON.stringify({ apiKey: GOOGLE_KEY }),
+    [ocrCredentialStorageKey(GOOGLE_REF)]: JSON.stringify({ apiKey: GOOGLE_KEY }),
     ...extra,
   });
 }
@@ -3569,12 +3606,15 @@ const QUICK_TTS_AUDIO = {
 function ttsWindowStorage(extra: Record<string, string> = {}) {
   return ocrSeed({
     [TTS_STORAGE_KEY]: JSON.stringify({
-      version: 3,
+      version: 1,
       order: ["google-cloud"],
-      googleCloud: {
-        enabled: true,
-        credentialRef: "tts-ref",
-        preferences: DEFAULT_GOOGLE_VOICE_PREFERENCES,
+      channels: {
+        "google-cloud": {
+          enabled: true,
+          configured: true,
+          config: { preferences: DEFAULT_GOOGLE_VOICE_PREFERENCES },
+          credentialRef: "tts-ref",
+        },
       },
     }),
     [ttsCredentialStorageKey("tts-ref")]: JSON.stringify({ apiKey: "tts-key" }),

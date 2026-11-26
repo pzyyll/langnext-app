@@ -1,10 +1,13 @@
 import { t } from "nsh/i18n";
 import { expect, open, test } from "nsh/test";
 import { initializeAiModules } from "../../app/ai-setup";
-import { LANGUAGE_DETECTION_STORAGE_KEY } from "../language-detection/settings";
+import { GOOGLE_CLOUD_TTS_URL } from "../../contributions/tts/vendor/google-cloud";
+import { DEFAULT_GOOGLE_VOICE_PREFERENCES } from "../../contributions/tts/vendor/google-preferences";
+import { LANGUAGE_DETECTION_PREFERENCES_STORAGE_KEY } from "../language-detection/preferences";
+import { DETECT_COLLECTION_STORAGE_KEY } from "../language-detection/store";
 import { makeChannel, makeModel, makeSeedStorage } from "../models/__tests__/fixtures";
 import { credentialStorageKey, MODELS_STORAGE_KEY, PROVIDERS_STORAGE_KEY } from "../models/store";
-import { getLanguageLabel, getTargetLanguageLabel } from "../presets/languages";
+import { getLanguageLabel, getTargetLanguageLabel } from "../../framework/languages";
 import {
   deepLCredentialStorageKey,
   googleCloudCredentialStorageKey,
@@ -12,9 +15,6 @@ import {
 } from "../presets/store";
 import type { TranslationPreset } from "../presets/types";
 import { QUICK_TRANSLATE_PREFERENCES_KEY } from "./preferences";
-import { GOOGLE_CLOUD_TTS_URL } from "../tts/google-cloud";
-import { DEFAULT_GOOGLE_VOICE_PREFERENCES } from "../tts/google-preferences";
-import { TTS_STORAGE_KEY, ttsCredentialStorageKey } from "../tts/settings";
 
 initializeAiModules();
 
@@ -51,6 +51,37 @@ function makePreset(overrides: Partial<TranslationPreset> = {}): TranslationPres
 
 /** Popup selections live in the popup's own preferences, never in preset records. */
 const DEFAULT_POPUP_LANGUAGES = { sourceLanguage: "en", targetLanguage: "fr" } as const;
+const TTS_STORAGE_KEY = "integrations.tts.v1";
+const TTS_CREDENTIAL_NAMESPACE = "secret.tts";
+
+function ttsCredentialStorageKey(credentialRef: string): string {
+  return `${TTS_CREDENTIAL_NAMESPACE}.${credentialRef}`;
+}
+
+/** Saved detector channels plus the Automatic-target preferences the popup reads. */
+function detectionSeed(options: { aiEnabled: boolean }): Record<string, string> {
+  return {
+    [DETECT_COLLECTION_STORAGE_KEY]: JSON.stringify({
+      version: 1,
+      order: ["ai", "google", "google-cloud"],
+      channels: {
+        ai: {
+          enabled: options.aiEnabled,
+          configured: true,
+          config: { modelId: "det-1" },
+          credentialRef: null,
+        },
+        google: { enabled: false, configured: true, config: {}, credentialRef: null },
+        "google-cloud": { enabled: false, configured: false, config: {}, credentialRef: null },
+      },
+    }),
+    [LANGUAGE_DETECTION_PREFERENCES_STORAGE_KEY]: JSON.stringify({
+      version: 1,
+      nativeLanguage: "zh",
+      preferredTranslationLanguage: "en",
+    }),
+  };
+}
 
 function aiEngine(preset: TranslationPreset) {
   if (preset.engine.kind !== "ai") throw new Error("expected an AI preset");
@@ -1503,15 +1534,7 @@ function seedAutoPair(collapsed: readonly boolean[], mode = "live"): Record<stri
         targetLanguage: "auto",
         cards,
       }),
-      [LANGUAGE_DETECTION_STORAGE_KEY]: JSON.stringify({
-        version: 4,
-        order: ["ai", "google", "google-cloud"],
-        enabled: { ai: true, google: false, "google-cloud": false },
-        ai: { modelId: "det-1" },
-        googleCloud: null,
-        nativeLanguage: "zh",
-        preferredTranslationLanguage: "en",
-      }),
+      ...detectionSeed({ aiEnabled: true }),
     },
   });
 }
@@ -1911,19 +1934,7 @@ function seedDeepLCards(options: DeepLSeedOptions = {}): Record<string, string> 
         cards,
       }),
       [deepLCredentialStorageKey(DEEPL_KEY_REF)]: "deepl-key:fx",
-      [LANGUAGE_DETECTION_STORAGE_KEY]: JSON.stringify({
-        version: 4,
-        order: ["ai", "google", "google-cloud"],
-        enabled: {
-          ai: (options.detectionMode ?? "ai") === "ai",
-          google: false,
-          "google-cloud": false,
-        },
-        ai: { modelId: "det-1" },
-        googleCloud: null,
-        nativeLanguage: "zh",
-        preferredTranslationLanguage: "en",
-      }),
+      ...detectionSeed({ aiEnabled: (options.detectionMode ?? "ai") === "ai" }),
     },
   });
   if (options.aiModels === false) {
@@ -2252,12 +2263,15 @@ const QUICK_TTS_MP3 = {
 function enabledTtsStorage(enabled = true): Record<string, string> {
   return {
     [TTS_STORAGE_KEY]: JSON.stringify({
-      version: 3,
+      version: 1,
       order: ["google-cloud"],
-      googleCloud: {
-        enabled,
-        credentialRef: "tts-ref",
-        preferences: DEFAULT_GOOGLE_VOICE_PREFERENCES,
+      channels: {
+        "google-cloud": {
+          enabled,
+          configured: true,
+          config: { preferences: DEFAULT_GOOGLE_VOICE_PREFERENCES },
+          credentialRef: "tts-ref",
+        },
       },
     }),
     [ttsCredentialStorageKey("tts-ref")]: JSON.stringify({ apiKey: "tts-key" }),
@@ -2319,14 +2333,22 @@ const AZURE_QUICK_TTS_URL = "https://eastus.tts.speech.microsoft.com/cognitivese
 function azureActiveStorage(): Record<string, string> {
   return {
     [TTS_STORAGE_KEY]: JSON.stringify({
-      version: 3,
+      version: 1,
       order: ["google-cloud", "azure"],
-      googleCloud: {
-        enabled: false,
-        credentialRef: "google-ref",
-        preferences: DEFAULT_GOOGLE_VOICE_PREFERENCES,
+      channels: {
+        "google-cloud": {
+          enabled: false,
+          configured: true,
+          config: { preferences: DEFAULT_GOOGLE_VOICE_PREFERENCES },
+          credentialRef: "google-ref",
+        },
+        azure: {
+          enabled: true,
+          configured: true,
+          config: { region: "eastus" },
+          credentialRef: "azure-ref",
+        },
       },
-      azure: { enabled: true, credentialRef: "azure-ref", region: "eastus" },
     }),
     [ttsCredentialStorageKey("google-ref")]: JSON.stringify({ apiKey: "google-key" }),
     [ttsCredentialStorageKey("azure-ref")]: JSON.stringify({ apiKey: "azure-key" }),
@@ -2635,16 +2657,21 @@ test("quick tts: a later speaker replaces a delayed request, and Stop closes pla
 function googleTtsStorage(): Record<string, string> {
   return {
     [TTS_STORAGE_KEY]: JSON.stringify({
-      version: 3,
+      version: 1,
       order: ["google-cloud"],
-      googleCloud: {
-        enabled: true,
-        credentialRef: "tts-ref",
-        preferences: {
-          ...DEFAULT_GOOGLE_VOICE_PREFERENCES,
-          voiceOverrides: { en: "en-GB-Wavenet-A", fr: "fr-CA-Standard-A" },
-          speakingRate: 1.25,
-          pitch: -2,
+      channels: {
+        "google-cloud": {
+          enabled: true,
+          configured: true,
+          config: {
+            preferences: {
+              ...DEFAULT_GOOGLE_VOICE_PREFERENCES,
+              voiceOverrides: { en: "en-GB-Wavenet-A", fr: "fr-CA-Standard-A" },
+              speakingRate: 1.25,
+              pitch: -2,
+            },
+          },
+          credentialRef: "tts-ref",
         },
       },
     }),
@@ -2724,7 +2751,8 @@ test("quick tts: a Google preference change during synthesis drops the obsolete 
   await app.wait(900);
   expect(app.audio().some((call) => call.command === "open")).toBe(false);
   expect(app.texts()).not.toContain("Could not play the audio. Try again.");
-  const saved = JSON.parse(app.storage()[TTS_STORAGE_KEY]!).googleCloud.preferences;
+  const saved = JSON.parse(app.storage()[TTS_STORAGE_KEY]!).channels["google-cloud"].config
+    .preferences;
   expect(saved.speakingRate).toBe(1.5);
 });
 
@@ -2796,19 +2824,7 @@ function seedGoogleCards(options: GoogleCardSeedOptions = {}): Record<string, st
       }),
       [googleCloudCredentialStorageKey(GOOGLE_KEY_REF)]: "google-key-1",
       [deepLCredentialStorageKey("deepl-ref-1")]: "deepl-key:fx",
-      [LANGUAGE_DETECTION_STORAGE_KEY]: JSON.stringify({
-        version: 4,
-        order: ["ai", "google", "google-cloud"],
-        enabled: {
-          ai: (options.detectionMode ?? "ai") === "ai",
-          google: false,
-          "google-cloud": false,
-        },
-        ai: { modelId: "det-1" },
-        googleCloud: null,
-        nativeLanguage: "zh",
-        preferredTranslationLanguage: "en",
-      }),
+      ...detectionSeed({ aiEnabled: (options.detectionMode ?? "ai") === "ai" }),
       ...options.extra,
     },
   });

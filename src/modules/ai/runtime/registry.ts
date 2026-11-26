@@ -1,4 +1,5 @@
 import { t } from "nsh/i18n";
+import { getContributionRegistry } from "../../../framework/contributions/registry";
 import type { ProviderTypeId } from "../contracts/channel";
 import { ProviderProtocolError } from "../contracts/errors";
 import type { ProtocolDefinition, ProtocolId } from "../contracts/protocol";
@@ -106,5 +107,57 @@ export function createAiRegistry(): AiRegistry {
   };
 }
 
-/** The production runtime registry. `app/ai-setup.ts` is its only assembly entry. */
-export const aiRegistry = createAiRegistry();
+/**
+ * The production runtime registry. It is a thin view over the shared
+ * contribution registry, so no second module table exists.
+ */
+export const aiRegistry: AiRegistry = {
+  registerProtocol: (definition) => {
+    const registry = getContributionRegistry();
+    const id = definition.id;
+    if (isBlankId(id)) throw invalidRequest(t("ai.error.unknownProtocol", { id: String(id) }));
+    if (registry.find("protocol", id) !== null) {
+      throw invalidRequest(t("ai.error.duplicateModule", { id }));
+    }
+    registry.registerProtocol(definition);
+  },
+  registerProvider: (definition) => {
+    const registry = getContributionRegistry();
+    const id = definition.id;
+    if (isBlankId(id)) throw invalidRequest(t("ai.error.invalidProvider", { id: String(id) }));
+    if (registry.find("provider", id) !== null) {
+      throw invalidRequest(t("ai.error.duplicateModule", { id }));
+    }
+    const allowed = definition.allowedProtocolIds;
+    if (!Array.isArray(allowed) || allowed.length === 0) {
+      throw invalidRequest(t("ai.error.invalidProvider", { id }));
+    }
+    for (const protocolId of allowed) {
+      if (registry.find("protocol", protocolId) === null) {
+        throw invalidRequest(t("ai.error.unknownProtocol", { id: protocolId }));
+      }
+    }
+    if (!allowed.includes(definition.defaultProtocolId)) {
+      throw invalidRequest(t("ai.error.invalidProvider", { id }));
+    }
+    const catalogProtocolId = definition.catalogProtocolId;
+    if (catalogProtocolId != null && registry.find("protocol", catalogProtocolId) === null) {
+      throw invalidRequest(t("ai.error.unknownProtocol", { id: catalogProtocolId }));
+    }
+    registry.registerProvider(definition);
+  },
+  getProtocol: (id) => {
+    const found = getContributionRegistry().find("protocol", id);
+    if (found === null) throw invalidRequest(t("ai.error.unknownProtocol", { id }));
+    return found;
+  },
+  getProvider: (id) => {
+    const found = getContributionRegistry().find("provider", id);
+    if (found === null) throw invalidRequest(t("ai.error.unknownProvider", { id }));
+    return found;
+  },
+  listProtocols: () => getContributionRegistry().list("protocol"),
+  listProviders: () => getContributionRegistry().list("provider"),
+  isProtocolAllowed: (providerTypeId, protocolId) =>
+    aiRegistry.getProvider(providerTypeId).allowedProtocolIds.includes(protocolId),
+};

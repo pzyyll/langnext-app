@@ -1,4 +1,4 @@
-import { expect, test } from "nsh/test";
+import { beforeEach, expect, test } from "nsh/test";
 import { ProviderProtocolError } from "../../modules/ai/contracts/errors";
 import type { TextGenerationRequest } from "../../modules/ai/contracts/protocol";
 import type { AiClientInput } from "../../modules/ai/runtime/client";
@@ -8,7 +8,15 @@ import {
   type DetectLanguageOptions,
   type GoogleDetectionFetch,
 } from "./detect";
-import type { LanguageDetectorBinding } from "./settings";
+import { registerDetectContributions } from "../../contributions/detect";
+import { createContributionRegistry, setContributionRegistry } from "../../framework/contributions";
+import type { EnabledDetectionChannel } from "./preferences";
+
+beforeEach(() => {
+  const registry = createContributionRegistry();
+  registerDetectContributions(registry);
+  setContributionRegistry(registry);
+});
 
 const CONNECTION: AiClientInput = {
   providerTypeId: "openai",
@@ -17,17 +25,22 @@ const CONNECTION: AiClientInput = {
   credential: "sk-test",
 };
 
-const GOOGLE_DETECTOR: LanguageDetectorBinding = { kind: "google" };
-const GOOGLE_CLOUD_DETECTOR: LanguageDetectorBinding = {
-  kind: "google-cloud",
-  credentialRef: "ref-1",
-};
-
-function aiDetector(modelId: string): LanguageDetectorBinding {
-  return { kind: "ai", modelId };
+function detector(
+  id: string,
+  config: unknown,
+  credentialRef: string | null = null,
+): EnabledDetectionChannel {
+  return { id, binding: { enabled: true, configured: true, credentialRef, config } };
 }
 
-function aiDetectors(modelIds: readonly string[]): LanguageDetectorBinding[] {
+const GOOGLE_DETECTOR = detector("google", {});
+const GOOGLE_CLOUD_DETECTOR = detector("google-cloud", {}, "ref-1");
+
+function aiDetector(modelId: string): EnabledDetectionChannel {
+  return detector("ai", { modelId });
+}
+
+function aiDetectors(modelIds: readonly string[]): EnabledDetectionChannel[] {
   return modelIds.map(aiDetector);
 }
 
