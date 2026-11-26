@@ -10,7 +10,10 @@ use fastembed::{
 };
 use sha2::{Digest, Sha256};
 
-use super::{SemanticModelAsset, Sentence, SentenceAlignmentPair, collect_block_sentences};
+use super::{
+    SemanticModelAsset, Sentence, SentenceAlignmentPair, collect_block_sentences,
+    is_sentence_candidate,
+};
 
 const MODEL_REVISION: &str = "761b726dd34fb83930e26aab4e9ac3899aa1fa78";
 const MODEL_DIRECTORY: &str = "sentence-alignment-e5-small-int8-v1";
@@ -18,6 +21,7 @@ const MAX_CHUNK_BYTES: usize = 1024 * 1024;
 const MAX_SENTENCES_PER_SIDE: usize = 64;
 const INFERENCE_BATCH_SIZE: usize = 8;
 const INFERENCE_THREADS: usize = 2;
+const EMBEDDING_PREFIX: &str = "query: ";
 const MIN_SIMILARITY: f32 = 0.82;
 const MERGE_PENALTY: f32 = 0.035;
 const MODEL_ERROR: &str = "The semantic alignment model is unavailable.";
@@ -270,18 +274,55 @@ fn add_spans(sentences: &[Sentence<'_>], inputs: &mut Vec<String>) -> Vec<[Optio
         .enumerate()
         .map(|(i, sentence)| {
             let single = inputs.len();
-            inputs.push(format!("query: {}", sentence.text));
+            inputs.push(format!("{EMBEDDING_PREFIX}{}", sentence.text));
             let double = sentences
                 .get(i + 1)
                 .filter(|next| next.group_id == sentence.group_id)
                 .map(|next| {
                     let index = inputs.len();
-                    inputs.push(format!("query: {} {}", sentence.text, next.text));
+                    inputs.push(format!("{EMBEDDING_PREFIX}{} {}", sentence.text, next.text));
                     index
                 });
             [Some(single), double]
         })
         .collect()
+}
+
+fn similarity(a: &[f32], b: &[f32]) -> Option<f32> {
+    let score = a.iter().zip(b).map(|(a, b)| a * b).sum::<f32>();
+    score.is_finite().then_some(score)
+}
+
+fn unmatched_target_tail_clauses<'a>(
+    sources: &[Sentence<'a>],
+    targets: &[Sentence<'_>],
+    step: Match,
+    next_match: Option<&Match>,
+) -> Option<[&'a str; 2]> {
+    if step.source_len != 1 || step.target_len != 1 {
+        return None;
+    }
+    let source = sources[step.source];
+    let target = targets[step.target];
+    let tail_index = step.target + 1;
+    let tail = targets.get(tail_index)?;
+    if sources
+        .get(step.source + 1)
+        .is_some_and(|next| next.group_id == source.group_id)
+        || tail.group_id != target.group_id
+        || targets
+            .get(tail_index + 1)
+            .is_some_and(|next| next.group_id == target.group_id)
+        || next_match.is_some_and(|next| next.target == tail_index)
+    {
+        return None;
+    }
+    let (head, tail) = source.text.rsplit_once([',', ';', '，', '；'])?;
+    let clauses = [head.trim_end(), tail.trim_start()];
+    clauses
+        .into_iter()
+        .all(is_sentence_candidate)
+        .then_some(clauses)
 }
 
 pub(super) fn align(
@@ -315,18 +356,41 @@ pub(super) fn align(
     let embeddings = model
         .embed(&inputs, Some(INFERENCE_BATCH_SIZE))
         .map_err(|_| MODEL_ERROR)?;
-    drop(runtime);
-    let steps = align_scores(sources.len(), targets.len(), |step| {
+    let score = |step: Match| {
         let a = source_spans[step.source][step.source_len - 1]?;
         let b = target_spans[step.target][step.target_len - 1]?;
-        let score = embeddings
-            .get(a)?
-            .iter()
-            .zip(embeddings.get(b)?)
-            .map(|(a, b)| a * b)
-            .sum::<f32>();
-        score.is_finite().then_some(score)
-    });
+        similarity(embeddings.get(a)?, embeddings.get(b)?)
+    };
+    let mut steps = align_scores(sources.len(), targets.len(), score);
+    let mut clause_inputs = Vec::new();
+    let mut candidates = Vec::new();
+    for (index, &step) in steps.iter().enumerate() {
+        if let Some(clauses) =
+            unmatched_target_tail_clauses(&sources, &targets, step, steps.get(index + 1))
+        {
+            candidates.push(index);
+            clause_inputs.extend(clauses.map(|text| format!("{EMBEDDING_PREFIX}{text}")));
+        }
+    }
+    if !clause_inputs.is_empty()
+        && let Ok(clause_embeddings) = model.embed(&clause_inputs, Some(INFERENCE_BATCH_SIZE))
+    {
+        let clause_gain = |clause: &[f32], target: usize| {
+            let score = similarity(clause, embeddings.get(target_spans[target][0]?)?)?;
+            (score > MIN_SIMILARITY).then_some(score - MIN_SIMILARITY)
+        };
+        let (clause_pairs, _) = clause_embeddings.as_chunks::<2>();
+        for (index, [head, tail]) in candidates.into_iter().zip(clause_pairs) {
+            let step = &mut steps[index];
+            if let Some(head_gain) = clause_gain(head, step.target)
+                && let Some(tail_gain) = clause_gain(tail, step.target + 1)
+                && score(*step).is_some_and(|base| head_gain + tail_gain > base - MIN_SIMILARITY)
+            {
+                step.target_len = 2;
+            }
+        }
+    }
+    drop(runtime);
     Ok(Some(
         steps
             .into_iter()
@@ -437,6 +501,60 @@ mod tests {
                 &[Some(target.into())],
                 &[source],
                 &[target],
+            );
+        }
+    }
+
+    const FOOTER_SOURCE: &str = concat!(
+        "DeepL 折叠行：中性灰「已折叠」徽章与淡灰箭头维持极简克制感，不抢夺已展开引擎的视线焦点；\n",
+        "底栏键盘流：底部 + 添加翻译预设 配合快捷键胶囊（↵ 翻译 / Esc 隐藏）微边框与明晰中性灰字色，",
+        "界面通透干练、高级耐看。",
+    );
+    const FOOTER_FIRST: &str = concat!(
+        "DeepL Collapsed Row: A neutral gray “Collapsed” badge and a light gray arrow maintain a ",
+        "minimalist, understated look without distracting from the expanded translation engine; ",
+        "Bottom Bar Keyboard Flow: The “+” button at the bottom for adding translation presets, ",
+        "paired with shortcut capsules (↵ to translate / Esc to hide), features subtle borders ",
+        "and clear, neutral-gray text.",
+    );
+    const FOOTER_TAIL: &str =
+        "The interface is transparent, streamlined, sophisticated, and visually appealing.";
+
+    #[test]
+    #[ignore = "requires the pinned model in LANGNEXT_ALIGNMENT_MODEL_DIR"]
+    fn aligns_a_separately_translated_tail_clause_with_the_real_model() {
+        let directory = PathBuf::from(std::env::var_os("LANGNEXT_ALIGNMENT_MODEL_DIR").unwrap());
+        let target = format!("{FOOTER_FIRST} {FOOTER_TAIL}");
+        assert_matches(
+            &directory,
+            FOOTER_SOURCE,
+            &[Some(target.clone())],
+            &[FOOTER_SOURCE],
+            &[&target],
+        );
+    }
+
+    #[test]
+    #[ignore = "requires the pinned model in LANGNEXT_ALIGNMENT_MODEL_DIR"]
+    fn leaves_unsupported_tail_sentences_unmatched_with_the_real_model() {
+        let directory = PathBuf::from(std::env::var_os("LANGNEXT_ALIGNMENT_MODEL_DIR").unwrap());
+        let cases = [
+            vec![Some(format!(
+                "{FOOTER_FIRST} The app can also export your translation history."
+            ))],
+            vec![Some(format!(
+                "{FOOTER_FIRST} The interface looks cluttered, feels busy, and is visually distracting."
+            ))],
+            vec![Some(format!("{FOOTER_FIRST}\n\n{FOOTER_TAIL}"))],
+            vec![Some(FOOTER_FIRST.into()), Some(FOOTER_TAIL.into())],
+        ];
+        for blocks in cases {
+            assert_matches(
+                &directory,
+                FOOTER_SOURCE,
+                &blocks,
+                &[FOOTER_SOURCE],
+                &[FOOTER_FIRST],
             );
         }
     }
