@@ -1,6 +1,7 @@
 import { cleanup, effect, signal, Text, View, type Accessor, type Point } from "nsh";
 import { displays, Window, type DisplayId, type WindowRef } from "nsh/desktop";
 import { t } from "nsh/i18n";
+import { appFontStyle } from "../features/settings/font";
 import { Button } from "../components/ui/button";
 import { Icon } from "../components/ui/icon";
 import {
@@ -99,7 +100,10 @@ export function SelectionHintWindow(props: SelectionHintWindowProps) {
       }}
       ref={(node) => attached.set(node)}
     >
-      <View class="flex-1 flex-row items-center rounded-xl border border-border bg-background p-0.5 shadow-lg">
+      <View
+        class="flex-1 flex-row items-center rounded-xl border border-border bg-background p-0.5 shadow-lg"
+        style={appFontStyle()}
+      >
         <Button
           testID="selection-hint-translate"
           size="sm"

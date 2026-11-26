@@ -125,3 +125,16 @@ While OCR recognizes a captured region, an empty source field displays two stagg
 | Source OCR status row | Recognition mark (`mdi:text-recognition`) active     | Opacity pulses (`0.45` ↔ `1`, `1300ms` `easeInOut`); text stays steady                        | Static mark at `1` opacity   |
 | Header OCR button     | Enters and leaves `"recognizing"` phase              | Shared `brand-ghost` selected fill and brand icon tone swap                                   | Immediate color swap         |
 | Recognition completes | Text arrives, errors, or returns to idle             | Skeleton and status row unmount immediately in place; recognized text replaces cleanly        | Same                         |
+
+## Font Setting
+
+Settings → Application → General → Font picks the family every window draws in: the system font, a font the app ships, or one this system has installed. Windows lists its installed families under **Installed fonts**; other platforms offer the app's own faces only. A saved family the system no longer has returns to the system font at the next launch, and every choice falls back to the Windows Chinese UI font for characters the family lacks.
+
+### Motion Inventory
+
+| Surface              | Change                  | Motion                                                  | Reduced Motion          |
+| -------------------- | ----------------------- | ------------------------------------------------------- | ----------------------- |
+| Font select          | Open and close          | Shared `popup` and `popupHidden` tokens                 | No transition or travel |
+| Font select trigger  | Hover, focus, press     | Shared `navigationFeedback`, focus ring                 | Immediate color change  |
+| Every window's texts | Choosing a font         | Relayout in the chosen family at once; nothing animates | Same                    |
+| Save failure alert   | Appears below the field | Replaces in place; no pulse or travel                   | Same                    |

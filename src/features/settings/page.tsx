@@ -9,7 +9,7 @@ import { Button } from "../../components/ui/button";
 import { Card, SectionHeading } from "../../components/ui/card";
 import { ConfirmDialog } from "../../components/ui/dialog";
 import { Icon } from "../../components/ui/icon";
-import { Select } from "../../components/ui/select";
+import { Select, type SelectItem } from "../../components/ui/select";
 import { Switch } from "../../components/ui/switch";
 import { buildTooltip } from "../../components/ui/tooltip";
 import { canOpenLogsFolder, openLogsFolder } from "../../platform/logs";
@@ -22,11 +22,13 @@ import {
 import { detectChannels } from "../language-detection/store";
 import { ocrChannels } from "../ocr/store";
 import { ttsChannels } from "../tts/store";
+import { BUNDLED_FONTS } from "../../fonts";
 import { appearance, appearanceError, selectAppearance, type Appearance } from "./appearance";
 import { language, languageError, selectLanguage, type LanguagePreference } from "./language";
 import { CapabilitySection } from "./capability-section";
 import { modelHostServices, ttsAudioHost } from "./capability-host-services";
 import { DetectionPreferencesCard } from "./detection-preferences-card";
+import { fontError, fontPreference, installedFonts, selectFont, SYSTEM_FONT } from "./font";
 import { logLevelError, selectLogLevel } from "./log-level";
 import { QuickTranslateSection } from "./quick-translate-section";
 import { ShortcutsSection } from "./shortcuts-section";
@@ -202,6 +204,22 @@ function LanguageOption(props: { value: LanguagePreference; label: string }) {
   );
 }
 
+/** The font choices: the system font, the app's fonts, then the ones this system has. */
+function fontItems(): SelectItem[] {
+  const items: SelectItem[] = [{ value: SYSTEM_FONT, title: t("settings.font.system") }];
+  for (const font of BUNDLED_FONTS) {
+    items.push({
+      value: font.family,
+      title: t(font.labelKey),
+      group: t("settings.font.bundled"),
+    });
+  }
+  for (const family of installedFonts()) {
+    items.push({ value: family, title: family, group: t("settings.font.installed") });
+  }
+  return items;
+}
+
 function GeneralSection(props: { compact: boolean; os: string }) {
   const logsError = signal(false);
   const openLogs = async () => logsError.set(!(await openLogsFolder()));
@@ -218,6 +236,26 @@ function GeneralSection(props: { compact: boolean; os: string }) {
         <If when={languageError() !== null}>
           <Text role="alert" class="text-sm text-destructive">
             {languageError()}
+          </Text>
+        </If>
+      </Card>
+
+      <Card testID="settings-font-card" class={props.compact ? "gap-4 p-4" : "gap-5 p-6"}>
+        <SectionHeading title={t("settings.font.title")} />
+        <Select
+          testID="settings-font"
+          items={fontItems()}
+          value={fontPreference()}
+          class="w-full"
+          triggerClass="w-full"
+          accessibilityLabel={t("settings.font.title")}
+          onChange={(value) => {
+            if (value !== null) void selectFont(value);
+          }}
+        />
+        <If when={fontError() !== null}>
+          <Text testID="settings-font-error" role="alert" class="text-sm text-destructive">
+            {fontError()}
           </Text>
         </If>
       </Card>
