@@ -1,11 +1,11 @@
 import { t } from "nsh/i18n";
-import { getContributionRegistry } from "../../../framework/contributions/registry";
+import { getIntegrationRegistry } from "../../../framework/integrations/registry";
 import type { ProviderTypeId } from "../contracts/channel";
 import { ProviderProtocolError } from "../contracts/errors";
 import type { ProtocolDefinition, ProtocolId } from "../contracts/protocol";
 import type { ProviderDefinition } from "../contracts/provider";
 
-/** Explicit module lookup and validation over registered AI contributions. */
+/** Explicit module lookup and validation over registered AI integrations. */
 export interface AiRegistry {
   registerProtocol(definition: ProtocolDefinition): void;
   registerProvider(definition: ProviderDefinition): void;
@@ -25,7 +25,7 @@ function isBlankId(value: unknown): boolean {
 }
 
 /**
- * Creates an isolated registry. Callers register contributions explicitly;
+ * Creates an isolated registry. Callers register definitions explicitly;
  * factories never import or register built-in modules themselves.
  */
 export function createAiRegistry(): AiRegistry {
@@ -109,11 +109,11 @@ export function createAiRegistry(): AiRegistry {
 
 /**
  * The production runtime registry. It is a thin view over the shared
- * contribution registry, so no second module table exists.
+ * integration registry, so no second module table exists.
  */
 export const aiRegistry: AiRegistry = {
   registerProtocol: (definition) => {
-    const registry = getContributionRegistry();
+    const registry = getIntegrationRegistry();
     const id = definition.id;
     if (isBlankId(id)) throw invalidRequest(t("ai.error.unknownProtocol", { id: String(id) }));
     if (registry.find("protocol", id) !== null) {
@@ -122,7 +122,7 @@ export const aiRegistry: AiRegistry = {
     registry.registerProtocol(definition);
   },
   registerProvider: (definition) => {
-    const registry = getContributionRegistry();
+    const registry = getIntegrationRegistry();
     const id = definition.id;
     if (isBlankId(id)) throw invalidRequest(t("ai.error.invalidProvider", { id: String(id) }));
     if (registry.find("provider", id) !== null) {
@@ -147,17 +147,17 @@ export const aiRegistry: AiRegistry = {
     registry.registerProvider(definition);
   },
   getProtocol: (id) => {
-    const found = getContributionRegistry().find("protocol", id);
+    const found = getIntegrationRegistry().find("protocol", id);
     if (found === null) throw invalidRequest(t("ai.error.unknownProtocol", { id }));
     return found;
   },
   getProvider: (id) => {
-    const found = getContributionRegistry().find("provider", id);
+    const found = getIntegrationRegistry().find("provider", id);
     if (found === null) throw invalidRequest(t("ai.error.unknownProvider", { id }));
     return found;
   },
-  listProtocols: () => getContributionRegistry().list("protocol"),
-  listProviders: () => getContributionRegistry().list("provider"),
+  listProtocols: () => getIntegrationRegistry().list("protocol"),
+  listProviders: () => getIntegrationRegistry().list("provider"),
   isProtocolAllowed: (providerTypeId, protocolId) =>
     aiRegistry.getProvider(providerTypeId).allowedProtocolIds.includes(protocolId),
 };

@@ -1,5 +1,5 @@
 import { mount, platform } from "nsh";
-import { initializeContributions } from "./src/app/contributions-setup";
+import { initializeIntegrations } from "./src/app/integrations-setup";
 import { AppShell } from "./src/app/shell";
 import { StartupError, startupFailureMessage } from "./src/app/startup-error";
 import { loadSplitRailWidths } from "./src/components/layout/split-rail";
@@ -29,7 +29,7 @@ async function startApp() {
   try {
     await loadLogLevel();
     log.info(`Started on ${platform.os}; logs go to ${logFile() ?? "the platform's log"}`);
-    initializeContributions();
+    initializeIntegrations();
     try {
       await cleanupTtsPlaybackFiles();
     } catch {

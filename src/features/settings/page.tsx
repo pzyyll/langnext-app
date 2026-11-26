@@ -15,10 +15,10 @@ import { buildTooltip } from "../../components/ui/tooltip";
 import { canOpenLogsFolder, openLogsFolder } from "../../platform/logs";
 import { logLevel, type LogLevel } from "../../services/log";
 import {
-  getContributionRegistry,
+  getIntegrationRegistry,
   type CapabilityId,
   type ChannelCollection,
-} from "../../framework/contributions";
+} from "../../framework/integrations";
 import { detectChannels } from "../language-detection/store";
 import { ocrChannels } from "../ocr/store";
 import { ttsChannels } from "../tts/store";
@@ -419,21 +419,21 @@ export function SettingsPage(props: {
     return isCapabilitySection(section) ? CAPABILITY_SECTIONS[section] : null;
   };
 
-  const selectedContribution = () => {
+  const selectedDefinition = () => {
     const meta = activeCapabilitySection();
     const id = selectedChannel();
     if (meta === null || id === null) return null;
     return (
-      getContributionRegistry()
+      getIntegrationRegistry()
         .capabilities(meta.capability)
-        .find((contribution) => contribution.id === id) ?? null
+        .find((definition) => definition.id === id) ?? null
     );
   };
 
   const headerBreadcrumb = (): HeaderBreadcrumb | null => {
     const meta = activeCapabilitySection();
-    const contribution = selectedContribution();
-    if (meta === null || contribution === null) return null;
+    const definition = selectedDefinition();
+    if (meta === null || definition === null) return null;
     return {
       testID: `${meta.testIdPrefix}-breadcrumb`,
       accessibilityLabel: t(meta.breadcrumbLabelKey),
@@ -444,7 +444,7 @@ export function SettingsPage(props: {
           onPress: () => selectedChannel.set(null),
         },
         {
-          label: t(contribution.labelKey),
+          label: t(definition.labelKey),
           testID: `${meta.testIdPrefix}-detail-title`,
         },
       ],
@@ -668,7 +668,7 @@ export function SettingsPage(props: {
                   <CapabilitySection
                     capability="detect"
                     testIdPrefix="settings-detection"
-                    registry={getContributionRegistry()}
+                    registry={getIntegrationRegistry()}
                     collection={detectChannels}
                     labels={capabilityLabels("language-detection")}
                     compact={compact()}
@@ -691,7 +691,7 @@ export function SettingsPage(props: {
                   <CapabilitySection
                     capability="ocr"
                     testIdPrefix="settings-ocr"
-                    registry={getContributionRegistry()}
+                    registry={getIntegrationRegistry()}
                     collection={ocrChannels}
                     labels={capabilityLabels("ocr")}
                     compact={compact()}
@@ -723,7 +723,7 @@ export function SettingsPage(props: {
                   <CapabilitySection
                     capability="tts"
                     testIdPrefix="settings-tts"
-                    registry={getContributionRegistry()}
+                    registry={getIntegrationRegistry()}
                     collection={ttsChannels}
                     labels={capabilityLabels("tts")}
                     compact={compact()}

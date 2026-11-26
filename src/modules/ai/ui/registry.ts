@@ -1,5 +1,5 @@
 import { t } from "nsh/i18n";
-import { getContributionRegistry } from "../../../framework/contributions/registry";
+import { getIntegrationRegistry } from "../../../framework/integrations/registry";
 import type { ProviderTypeId } from "../contracts/channel";
 import { ProviderProtocolError } from "../contracts/errors";
 import type { AiRegistry } from "../runtime/registry";
@@ -55,11 +55,11 @@ export function createProviderSettingsRegistry(
 
 /**
  * The production presentation registry. It is a thin view over the shared
- * contribution registry, so presentations live beside the other axes.
+ * integration registry, so presentations live beside the other axes.
  */
 export const providerSettingsRegistry: ProviderSettingsRegistry = {
   register: (presentation) => {
-    const registry = getContributionRegistry();
+    const registry = getIntegrationRegistry();
     const providerTypeId = presentation.providerTypeId;
     if (typeof providerTypeId !== "string" || providerTypeId.trim().length === 0) {
       throw invalidRequest(t("ai.error.unknownProvider", { id: String(providerTypeId) }));
@@ -74,11 +74,11 @@ export const providerSettingsRegistry: ProviderSettingsRegistry = {
     registry.registerPresentation(presentation);
   },
   get: (providerTypeId) => {
-    const found = getContributionRegistry().find("provider-presentation", providerTypeId);
+    const found = getIntegrationRegistry().find("provider-presentation", providerTypeId);
     if (found === null)
       throw invalidRequest(t("ai.error.unknownPresentation", { id: providerTypeId }));
     return found;
   },
-  find: (providerTypeId) => getContributionRegistry().find("provider-presentation", providerTypeId),
-  list: () => getContributionRegistry().list("provider-presentation"),
+  find: (providerTypeId) => getIntegrationRegistry().find("provider-presentation", providerTypeId),
+  list: () => getIntegrationRegistry().list("provider-presentation"),
 };

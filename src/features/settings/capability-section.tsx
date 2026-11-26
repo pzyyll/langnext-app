@@ -1,5 +1,5 @@
 // ABOUTME: One settings host for capability channels: list, add, enable, reorder, detail, save, remove.
-// ABOUTME: Capability-specific UI arrives only through the contribution's controlled Settings component.
+// ABOUTME: Capability-specific UI arrives only through the definition's controlled Settings component.
 import {
   cleanup,
   createAnimatedValue,
@@ -29,23 +29,23 @@ import { Icon, type IconName } from "../../components/ui/icon";
 import { Switch } from "../../components/ui/switch";
 import { toast } from "../../components/ui/toast";
 import type {
-  CapabilityChannelContribution,
+  CapabilityChannelDefinition,
   CapabilityId,
   ChannelAudioHost,
   ChannelBinding,
   ChannelCollection,
   ChannelSaveDraft,
   ChannelSettingsHost,
-  ContributionRegistry,
+  IntegrationRegistry,
   CredentialInput,
   CredentialRecord,
   ModelBindingStatus,
   ModelChoiceOption,
   ModelPurpose,
-} from "../../framework/contributions";
+} from "../../framework/integrations";
 import { CapabilitySectionAddDialog } from "./capability-section-add-dialog";
 
-type ErasedContribution = CapabilityChannelContribution<unknown, unknown, unknown>;
+type ErasedChannelDefinition = CapabilityChannelDefinition<unknown, unknown, unknown>;
 type CredentialState = "unknown" | "readable" | "missing";
 
 /** Time a reordered row takes to settle into its new slot. */
@@ -57,7 +57,7 @@ const EMPTY_ICONS: Record<CapabilityId, IconName> = {
   detect: "mdi:translate",
 };
 
-/** Domain titles and copy the shared host cannot infer from a contribution. */
+/** Domain titles and copy the shared host cannot infer from a definition. */
 export interface CapabilitySectionLabels {
   titleKey: string;
   addKey: string;
@@ -65,7 +65,7 @@ export interface CapabilitySectionLabels {
   priorityHintKey?: string;
 }
 
-/** Feature-owned services a contribution's Settings or runtime hook can use. */
+/** Feature-owned services a definition's Settings or runtime hook can use. */
 export interface CapabilitySectionHostServices {
   audio?: ChannelAudioHost;
   modelChoices?: () => readonly ModelChoiceOption[];
@@ -76,7 +76,7 @@ export interface CapabilitySectionHostServices {
 export interface CapabilitySectionProps {
   capability: CapabilityId;
   testIdPrefix: string;
-  registry: ContributionRegistry;
+  registry: IntegrationRegistry;
   collection: ChannelCollection;
   labels: CapabilitySectionLabels;
   compact: boolean;
@@ -97,14 +97,14 @@ function focusTarget(node: ViewRef | null | undefined) {
   setAccessibilityFocus(node);
 }
 
-function ContributionAvatar(props: { contribution: ErasedContribution; size?: AvatarSize }) {
+function ChannelAvatar(props: { definition: ErasedChannelDefinition; size?: AvatarSize }) {
   return (
     <Avatar
       size={props.size ?? "md"}
       accessibilityLabel=""
       fallback={
         <Image
-          src={props.contribution.icon}
+          src={props.definition.icon}
           accessibilityElementsHidden={true}
           class="size-4 overflow-hidden"
         />
@@ -116,14 +116,14 @@ function ContributionAvatar(props: { contribution: ErasedContribution; size?: Av
 function ChannelIdentity(props: {
   testIdPrefix: string;
   channelId: string;
-  contribution: ErasedContribution;
+  definition: ErasedChannelDefinition;
   name: string;
   role: "primary" | "backup" | null;
   summary: { text: string; toneClass: string };
 }) {
   return (
     <>
-      <ContributionAvatar contribution={props.contribution} />
+      <ChannelAvatar definition={props.definition} />
       <View class="min-w-0 flex-1 gap-0.5">
         <View class="flex-row items-center gap-2">
           <Text class="min-w-0 shrink truncate text-sm font-medium text-card-foreground">
@@ -156,7 +156,7 @@ interface CapabilityListProps {
   testIdPrefix: string;
   compact: boolean;
   collection: ChannelCollection;
-  contributions: ReadonlyMap<string, ErasedContribution>;
+  definitions: ReadonlyMap<string, ErasedChannelDefinition>;
   describeChannel: (id: string) => string;
   credentialStates: Record<string, CredentialState>;
   busy: boolean;
@@ -215,7 +215,7 @@ function CapabilityList(props: CapabilityListProps) {
   });
 
   const order = () => props.collection.order();
-  const name = (id: string) => t(props.contributions.get(id)?.labelKey ?? id);
+  const name = (id: string) => t(props.definitions.get(id)?.labelKey ?? id);
   const enabledOrder = () => order().filter((id) => props.collection.isEnabled(id));
   const canReorder = () => order().length > 1;
   const isBusy = () => props.busy || mutating() || animating();
@@ -425,8 +425,8 @@ function CapabilityList(props: CapabilityListProps) {
     if (props.collection.loadError() !== null) return [];
     return props.collection
       .available()
-      .map((id) => props.contributions.get(id))
-      .filter((contribution): contribution is ErasedContribution => contribution !== undefined);
+      .map((id) => props.definitions.get(id))
+      .filter((definition): definition is ErasedChannelDefinition => definition !== undefined);
   };
 
   return (
@@ -463,15 +463,15 @@ function CapabilityList(props: CapabilityListProps) {
             choicesLabel={t("settings.capabilities.emptyChannels")}
             busy={props.busy}
             compact={props.compact}
-            choices={available().map((contribution) => ({
-              id: contribution.id,
-              label: t(contribution.labelKey),
+            choices={available().map((definition) => ({
+              id: definition.id,
+              label: t(definition.labelKey),
               accessibilityLabel: t("settings.capabilities.emptyAdd", {
-                name: t(contribution.labelKey),
+                name: t(definition.labelKey),
               }),
-              testID: `${props.testIdPrefix}-empty-channel-${contribution.id}`,
-              leading: <ContributionAvatar contribution={contribution} size="sm" />,
-              onPress: () => props.onAddAvailableChannel(contribution.id),
+              testID: `${props.testIdPrefix}-empty-channel-${definition.id}`,
+              leading: <ChannelAvatar definition={definition} size="sm" />,
+              onPress: () => props.onAddAvailableChannel(definition.id),
             }))}
           />
         }
@@ -493,7 +493,7 @@ function CapabilityList(props: CapabilityListProps) {
                 props.onRowFocusRef(id(), null);
               });
               const configured = () => props.collection.binding(id())?.configured === true;
-              const configurable = () => props.contributions.get(id())?.configurable === true;
+              const configurable = () => props.definitions.get(id())?.configurable === true;
               const enabled = () => props.collection.isEnabled(id());
               const role = () => channelRole(id());
               const summary = () => channelSummary(id());
@@ -535,12 +535,12 @@ function CapabilityList(props: CapabilityListProps) {
                       when={configurable()}
                       else={
                         <View class="min-w-0 flex-1 flex-row items-center gap-2.5 rounded-xl py-2.5 pl-3 pr-2">
-                          <If when={props.contributions.get(id())}>
-                            {(contribution) => (
+                          <If when={props.definitions.get(id())}>
+                            {(definition) => (
                               <ChannelIdentity
                                 testIdPrefix={props.testIdPrefix}
                                 channelId={id()}
-                                contribution={contribution()}
+                                definition={definition()}
                                 name={nameOf()}
                                 role={role()}
                                 summary={summary()}
@@ -562,12 +562,12 @@ function CapabilityList(props: CapabilityListProps) {
                         }}
                         class="min-w-0 flex-1 py-2.5 pl-3 pr-2 hover:bg-transparent active:bg-transparent"
                       >
-                        <If when={props.contributions.get(id())}>
-                          {(contribution) => (
+                        <If when={props.definitions.get(id())}>
+                          {(definition) => (
                             <ChannelIdentity
                               testIdPrefix={props.testIdPrefix}
                               channelId={id()}
-                              contribution={contribution()}
+                              definition={definition()}
                               name={nameOf()}
                               role={role()}
                               summary={summary()}
@@ -725,7 +725,7 @@ function CapabilityList(props: CapabilityListProps) {
 
 interface CapabilityDetailProps {
   channelId: string;
-  contribution: ErasedContribution;
+  definition: ErasedChannelDefinition;
   collection: ChannelCollection;
   testIdPrefix: string;
   compact: boolean;
@@ -736,7 +736,7 @@ interface CapabilityDetailProps {
 function CapabilityDetail(props: CapabilityDetailProps) {
   const entrance = createMotion({ enter: motion.pageEnter });
   const initial = props.collection.binding(props.channelId);
-  const configDraft = signal<unknown>(initial?.config ?? props.contribution.config.defaults());
+  const configDraft = signal<unknown>(initial?.config ?? props.definition.config.defaults());
   const credentialDraft = signal<CredentialRecord>({});
   const credentialAction = signal<"keep" | "clear">("keep");
   const credentialState = signal<CredentialState>("unknown");
@@ -767,8 +767,8 @@ function CapabilityDetail(props: CapabilityDetailProps) {
   });
 
   const validate = () => {
-    if (!props.contribution.validate) return { ok: true as const };
-    return props.contribution.validate({
+    if (!props.definition.validate) return { ok: true as const };
+    return props.definition.validate({
       config: configDraft() as never,
       credentialDraft: credentialDraft(),
       savedCredential: savedCredential(),
@@ -783,7 +783,7 @@ function CapabilityDetail(props: CapabilityDetailProps) {
     resolveModelBinding: props.hostServices.resolveModelBinding,
   });
 
-  const saveAvailable = () => props.contribution.saveAvailable?.(saveDraftValues()) ?? true;
+  const saveAvailable = () => props.definition.saveAvailable?.(saveDraftValues()) ?? true;
 
   const save = async () => {
     if (saving() || previewBusy() || !saveAvailable()) return;
@@ -821,7 +821,7 @@ function CapabilityDetail(props: CapabilityDetailProps) {
     return {
       enabled: false,
       configured: false,
-      config: props.contribution.config.defaults(),
+      config: props.definition.config.defaults(),
       credentialRef: null,
     };
   };
@@ -868,8 +868,8 @@ function CapabilityDetail(props: CapabilityDetailProps) {
         class={props.compact ? "gap-4 p-4" : "gap-5 p-6"}
       >
         <View class="min-w-0 flex-row items-center gap-3">
-          <ContributionAvatar contribution={props.contribution} />
-          <SectionHeading title={t(props.contribution.labelKey)} />
+          <ChannelAvatar definition={props.definition} />
+          <SectionHeading title={t(props.definition.labelKey)} />
         </View>
 
         <If when={credentialState() === "missing"}>
@@ -879,15 +879,15 @@ function CapabilityDetail(props: CapabilityDetailProps) {
             class="text-sm text-destructive"
           >
             {t(
-              props.contribution.credentialUnreadableKey ??
+              props.definition.credentialUnreadableKey ??
                 "settings.capabilities.error.credentialUnreadable",
             )}
           </Text>
         </If>
 
-        <If when={props.contribution.Settings !== undefined}>
+        <If when={props.definition.Settings !== undefined}>
           {() => {
-            const Settings = props.contribution.Settings!;
+            const Settings = props.definition.Settings!;
             // NSH snapshots spread props; pass each attribute so the controlled
             // binding and credential draft stay live while the user edits.
             return (
@@ -908,7 +908,7 @@ function CapabilityDetail(props: CapabilityDetailProps) {
           }}
         </If>
 
-        <If when={props.contribution.credential !== null}>
+        <If when={props.definition.credential !== null}>
           <Text testID={`${props.testIdPrefix}-plaintext`} class="text-xs text-muted-foreground">
             {t("settings.capabilities.plaintextCredential")}
           </Text>
@@ -957,7 +957,7 @@ export function CapabilitySection(props: CapabilitySectionProps) {
   let restoreFocusOnList = false;
 
   const selected = () => props.selected;
-  const contributions = () =>
+  const definitions = () =>
     new Map(props.registry.capabilities(props.capability).map((entry) => [entry.id, entry]));
 
   const focusAddButton = () => focusTarget(props.getAddButtonRef?.() ?? null);
@@ -1037,7 +1037,7 @@ export function CapabilitySection(props: CapabilitySectionProps) {
   };
 
   const openAfterAdd = (id: string) => {
-    if (contributions().get(id)?.configurable === true) {
+    if (definitions().get(id)?.configurable === true) {
       props.onSelect(id);
       return;
     }
@@ -1060,37 +1060,37 @@ export function CapabilitySection(props: CapabilitySectionProps) {
     openAfterAdd(id);
   };
 
-  const availableContributions = () => {
+  const availableDefinitions = () => {
     if (props.collection.loadError() !== null) return [];
-    const map = contributions();
+    const map = definitions();
     return props.collection
       .available()
       .map((id) => map.get(id))
-      .filter((contribution): contribution is ErasedContribution => contribution !== undefined);
+      .filter((definition): definition is ErasedChannelDefinition => definition !== undefined);
   };
 
   /** Summaries may resolve a saved model to its display label through host services. */
   const describeChannel = (id: string): string => {
-    const contribution = contributions().get(id);
+    const definition = definitions().get(id);
     const binding = props.collection.binding(id);
-    if (contribution === undefined || binding === null) return "";
-    return contribution.describe(binding, {
+    if (definition === undefined || binding === null) return "";
+    return definition.describe(binding, {
       resolveModelBinding: props.hostServices?.resolveModelBinding,
     });
   };
 
-  const selectedContribution = () => {
+  const selectedDefinition = () => {
     const id = selected();
     if (id === null) return null;
-    return contributions().get(id) ?? null;
+    return definitions().get(id) ?? null;
   };
 
   /** Only a configurable channel with a saved binding gets a detail pane. */
   const selectedDetail = () => {
-    const contribution = selectedContribution();
+    const definition = selectedDefinition();
     const id = selected();
-    if (contribution === null || !contribution.configurable || id === null) return null;
-    return props.collection.binding(id) === null ? null : contribution;
+    if (definition === null || !definition.configurable || id === null) return null;
+    return props.collection.binding(id) === null ? null : definition;
   };
 
   return (
@@ -1100,7 +1100,7 @@ export function CapabilitySection(props: CapabilitySectionProps) {
           testIdPrefix={props.testIdPrefix}
           compact={props.compact}
           collection={props.collection}
-          contributions={contributions()}
+          definitions={definitions()}
           describeChannel={describeChannel}
           credentialStates={credentialStates()}
           busy={adding()}
@@ -1141,7 +1141,7 @@ export function CapabilitySection(props: CapabilitySectionProps) {
       <CapabilitySectionAddDialog
         testIdPrefix={props.testIdPrefix}
         open={addDialogOpen()}
-        available={availableContributions()}
+        available={availableDefinitions()}
         busy={adding()}
         onOpenChange={(open) => addDialogOpen.set(open)}
         onSelect={(id) => void handleSelectAddKind(id)}
@@ -1153,11 +1153,11 @@ export function CapabilitySection(props: CapabilitySectionProps) {
       />
 
       <If when={selectedDetail()}>
-        {(contribution) =>
+        {(definition) =>
           selected() !== null && props.collection.binding(selected()!) !== null ? (
             <CapabilityDetail
               channelId={selected()!}
-              contribution={contribution()}
+              definition={definition()}
               collection={props.collection}
               testIdPrefix={props.testIdPrefix}
               compact={props.compact}

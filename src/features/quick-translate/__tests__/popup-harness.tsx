@@ -32,7 +32,7 @@ import { loadModelsState } from "../../models/store";
 import { createPresetsStore } from "../../presets/store";
 import { loadAppearance } from "../../settings/appearance";
 import { loadLanguage } from "../../settings/language";
-import { googleCloudTtsConfig } from "../../../contributions/tts";
+import { googleCloudTtsConfig } from "../../../integrations/tts";
 import { ttsChannels } from "../../tts/store";
 import {
   createQuickTranslatePreferencesStore,

@@ -4,11 +4,11 @@ import { Storage } from "nsh";
 import {
   createChannelCollection,
   createCredentialVault,
-  getContributionRegistry,
+  getIntegrationRegistry,
   type ChannelCollection,
   type ChannelCollectionPolicy,
-} from "../../framework/contributions";
-import type { VaultStorage } from "../../framework/contributions/credential-vault";
+} from "../../framework/integrations";
+import type { VaultStorage } from "../../framework/integrations/credential-vault";
 
 export const DETECT_COLLECTION_STORAGE_KEY = "integrations.detect.v1";
 export const DETECT_CREDENTIAL_NAMESPACE = "secret.detect";
@@ -25,7 +25,7 @@ export function createDetectChannels(storage: VaultStorage): ChannelCollection {
     storage,
     storageKey: DETECT_COLLECTION_STORAGE_KEY,
     vault: createCredentialVault({ storage, namespace: DETECT_CREDENTIAL_NAMESPACE }),
-    contributions: () => getContributionRegistry().capabilities("detect"),
+    definitions: () => getIntegrationRegistry().capabilities("detect"),
     policy: DETECT_COLLECTION_POLICY,
   });
 }

@@ -4,10 +4,10 @@ import { Storage } from "nsh";
 import {
   createChannelCollection,
   createCredentialVault,
-  getContributionRegistry,
+  getIntegrationRegistry,
   type ChannelCollection,
   type VaultStorage,
-} from "../../framework/contributions";
+} from "../../framework/integrations";
 
 /** Where the OCR channel order and bindings live. */
 export const OCR_CHANNELS_STORAGE_KEY = "integrations.ocr.v1";
@@ -22,7 +22,7 @@ export function createOcrChannelCollection(storage: VaultStorage): ChannelCollec
     storage,
     storageKey: OCR_CHANNELS_STORAGE_KEY,
     vault: createCredentialVault({ storage, namespace: OCR_CREDENTIAL_NAMESPACE }),
-    contributions: () => getContributionRegistry().capabilities("ocr"),
+    definitions: () => getIntegrationRegistry().capabilities("ocr"),
     // A configured OCR channel runs until the user turns it off; a broken key never enables.
     policy: { enableOnFirstSave: true, requireReadableCredentialOnEnable: true },
   });

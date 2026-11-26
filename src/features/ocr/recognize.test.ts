@@ -1,7 +1,7 @@
-// ABOUTME: Headless tests for screenshot recognition over the OCR channel contributions.
+// ABOUTME: Headless tests for screenshot recognition over the OCR channel definitions.
 import { t } from "nsh/i18n";
 import { expect, open, test } from "nsh/test";
-import type { BaiduOcrOperation } from "../../contributions/ocr/vendor/baidu";
+import type { BaiduOcrOperation } from "../../integrations/ocr/vendor/baidu";
 import { makeChannel, makeModel, makeSeedStorage } from "../models/__tests__/fixtures";
 import { OCR_MAX_IMAGE_BYTES, recognizeScreenshot, type OcrChannelEntry } from "./recognize";
 import { OCR_CHANNELS_STORAGE_KEY, OCR_CREDENTIAL_NAMESPACE } from "./store";

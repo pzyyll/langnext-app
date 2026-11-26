@@ -633,10 +633,10 @@ protocol:
     outputTruncated: Provider stopped before the text was complete.
     streamInterrupted: Provider stopped the stream before the text was complete.
 framework:
-  contribution:
-    duplicate: 'A %{axis} contribution with the ID "%{id}" is already registered.'
-    invalidId: 'A %{axis} contribution with the ID "%{id}" is invalid.'
-    unknown: 'No %{axis} contribution is registered with the ID "%{id}".'
+  integration:
+    duplicate: 'A %{axis} entry with the ID "%{id}" is already registered.'
+    invalidId: 'A %{axis} entry with the ID "%{id}" is invalid.'
+    unknown: 'No %{axis} entry is registered with the ID "%{id}".'
     invalidProvider: 'Provider "%{id}" has an invalid definition.'
     unknownProtocol: 'Provider "%{id}" references an unregistered protocol "%{protocol}".'
     missingPresentation: 'Provider "%{id}" has no provider presentation.'

@@ -2,7 +2,7 @@
 // ABOUTME: Preferences load independently; snapshot() reads the saved preferences and enabled channels.
 import { signal, Storage } from "nsh";
 import { t } from "nsh/i18n";
-import type { ChannelBinding, Result } from "../../framework/contributions";
+import type { ChannelBinding, Result } from "../../framework/integrations";
 import { isLanguageId, type LanguageId } from "../../framework/languages";
 import { detectChannels } from "./store";
 
@@ -16,7 +16,7 @@ export interface LanguageDetectionPreferences {
   preferredTranslationLanguage: LanguageId | null;
 }
 
-/** One enabled detection channel with the binding its contribution runs against. */
+/** One enabled detection channel with the binding its definition runs against. */
 export interface EnabledDetectionChannel {
   id: string;
   binding: ChannelBinding;

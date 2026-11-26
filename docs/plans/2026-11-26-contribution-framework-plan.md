@@ -1,5 +1,12 @@
 # Implementation Plan
 
+> **Current names:** The implementation now uses `src/integrations/`,
+> `src/framework/integrations/`, and `src/app/integrations-setup.ts`.
+> `IntegrationRegistry`, `initializeIntegrations()`, and `CapabilityChannelDefinition`
+> replace `ContributionRegistry`, `initializeContributions()`, and
+> `CapabilityChannelContribution`. The storage keys did not change. The paths,
+> names, and commands below describe the original implementation.
+
 **Goal:** Build the contribution framework (`src/framework/contributions/`) and migrate the capability domains (TTS, OCR, and language detection) plus the existing AI setup onto shared contracts and one settings host (`CapabilitySection`), so a later runtime loader or future extension axis can register contributions without feature changes.
 
 **Inputs:** The 2026-11-26 research document [功能插件化与模块化架构调研](../analysis/2026-11-26-feature-plugin-architecture.md) and the user's review decisions on 2026-11-26: narrow this plan to M0–M2, apply Demo-stage breaking storage switches with no legacy data migration, and preserve current interaction behavior without adding new leave guards on capability sections.

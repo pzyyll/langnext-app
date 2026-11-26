@@ -4,14 +4,14 @@ import { t } from "nsh/i18n";
 import cubeIcon from "../../../../assets/icons/cube-outline.svg";
 import { Button } from "../../../components/ui/button";
 import { Input } from "../../../components/ui/input";
-import { createChannelCollection } from "../../../framework/contributions/channel-collection";
-import { createCredentialVault } from "../../../framework/contributions/credential-vault";
-import { createContributionRegistry } from "../../../framework/contributions/registry";
+import { createChannelCollection } from "../../../framework/integrations/channel-collection";
+import { createCredentialVault } from "../../../framework/integrations/credential-vault";
+import { createIntegrationRegistry } from "../../../framework/integrations/registry";
 import type {
-  CapabilityChannelContribution,
+  CapabilityChannelDefinition,
   ChannelSettingsProps,
   ConfigSchema,
-} from "../../../framework/contributions/contracts";
+} from "../../../framework/integrations/contracts";
 import { FormField } from "../../../modules/ai/ui/form-field";
 import { CapabilitySection } from "../capability-section";
 import { loadLanguage } from "../language";
@@ -64,7 +64,7 @@ function testChannel(
   id: string,
   labelKey: string,
   configurable: boolean,
-): CapabilityChannelContribution<TestConfig, { text: string }, { text: string }> {
+): CapabilityChannelDefinition<TestConfig, { text: string }, { text: string }> {
   return {
     id,
     capability: "tts",
@@ -96,8 +96,8 @@ const CHANNELS = [
   testChannel("free", "settings.ocr.google-cloud", false),
 ];
 
-const registry = createContributionRegistry();
-for (const contribution of CHANNELS) registry.registerCapability(contribution);
+const registry = createIntegrationRegistry();
+for (const definition of CHANNELS) registry.registerCapability(definition);
 
 const collection = createChannelCollection({
   capability: "tts",
@@ -107,8 +107,8 @@ const collection = createChannelCollection({
     storage: Storage,
     namespace: CAPABILITY_TEST_VAULT_NAMESPACE,
   }),
-  contributions: () =>
-    CHANNELS as unknown as readonly CapabilityChannelContribution<unknown, unknown, unknown>[],
+  definitions: () =>
+    CHANNELS as unknown as readonly CapabilityChannelDefinition<unknown, unknown, unknown>[],
   policy: { enableOnFirstSave: false, requireReadableCredentialOnEnable: true },
 });
 

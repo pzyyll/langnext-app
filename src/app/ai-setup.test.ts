@@ -1,13 +1,13 @@
 import { expect, test } from "nsh/test";
-import { registerAiContributions } from "../contributions/ai";
-import { detectChannelContributions } from "../contributions/detect";
-import { ocrChannelContributions } from "../contributions/ocr";
+import { registerAiIntegrations } from "../integrations/ai";
+import { detectChannelDefinitions } from "../integrations/detect";
+import { ocrChannelDefinitions } from "../integrations/ocr";
 import {
-  createContributionRegistry,
-  getContributionRegistry,
-  setContributionRegistry,
-} from "../framework/contributions";
-import { initializeContributions } from "./contributions-setup";
+  createIntegrationRegistry,
+  getIntegrationRegistry,
+  setIntegrationRegistry,
+} from "../framework/integrations";
+import { initializeIntegrations } from "./integrations-setup";
 import { aiRegistry } from "../modules/ai/runtime/registry";
 import { providerSettingsRegistry } from "../modules/ai/ui/registry";
 import { initializeAiModules } from "./ai-setup";
@@ -37,9 +37,9 @@ test("ai setup: initializing twice keeps one ordered built-in set", () => {
 });
 
 test("ai setup: registers built-in protocols, providers, and presentations in a fresh registry", () => {
-  const fresh = createContributionRegistry();
+  const fresh = createIntegrationRegistry();
 
-  registerAiContributions(fresh);
+  registerAiIntegrations(fresh);
 
   expect(fresh.list("protocol").map((protocol) => protocol.id)).toEqual([
     "openai-compatible",
@@ -59,22 +59,22 @@ test("ai setup: registers built-in protocols, providers, and presentations in a 
   ).toEqual(["openai", "gemini", "anthropic", "deepseek", "custom"]);
   expect(fresh.diagnostics()).toEqual([]);
 });
-function expectStartupRejectsDuplicate(contribution: unknown) {
-  const duplicate = createContributionRegistry();
-  duplicate.registerCapability(contribution as never);
-  const previous = getContributionRegistry();
-  setContributionRegistry(duplicate);
+function expectStartupRejectsDuplicate(definition: unknown) {
+  const duplicate = createIntegrationRegistry();
+  duplicate.registerCapability(definition as never);
+  const previous = getIntegrationRegistry();
+  setIntegrationRegistry(duplicate);
   try {
-    expect(() => initializeContributions()).toThrow("already registered");
+    expect(() => initializeIntegrations()).toThrow("already registered");
   } finally {
-    setContributionRegistry(previous);
+    setIntegrationRegistry(previous);
   }
 }
 
 test("pre-acceptance: startup rejects a duplicate OCR channel", () => {
-  expectStartupRejectsDuplicate(ocrChannelContributions[0]);
+  expectStartupRejectsDuplicate(ocrChannelDefinitions[0]);
 });
 
 test("pre-acceptance: startup rejects a duplicate detection channel", () => {
-  expectStartupRejectsDuplicate(detectChannelContributions[0]);
+  expectStartupRejectsDuplicate(detectChannelDefinitions[0]);
 });

@@ -1,16 +1,16 @@
-// ABOUTME: One screenshot recognition over the enabled OCR channel contributions.
+// ABOUTME: One screenshot recognition over the enabled OCR channel definitions.
 // ABOUTME: The PNG is validated once, then channels run in priority order through the shared chain.
 import { t } from "nsh/i18n";
-import type { OcrChannelOutcome, OcrRecognizeInput } from "../../contributions/ocr/recognition";
+import type { OcrChannelOutcome, OcrRecognizeInput } from "../../integrations/ocr/recognition";
 import {
   runChain,
-  type CapabilityChannelContribution,
+  type CapabilityChannelDefinition,
   type ChannelBinding,
   type ChainStepOutcome,
   type CredentialRecord,
   type HostModels,
   type HostServices,
-} from "../../framework/contributions";
+} from "../../framework/integrations";
 import { aiClient } from "../../modules/ai/runtime/client";
 import { createLogger } from "../../services/log";
 import { resolveSavedModelRequest } from "../models/store";
@@ -44,7 +44,11 @@ export interface OcrChannelEntry {
   binding: ChannelBinding<unknown>;
 }
 
-type OcrContribution = CapabilityChannelContribution<unknown, OcrRecognizeInput, OcrChannelOutcome>;
+type OcrChannelDefinition = CapabilityChannelDefinition<
+  unknown,
+  OcrRecognizeInput,
+  OcrChannelOutcome
+>;
 
 const log = createLogger("ocr/recognize");
 
@@ -83,9 +87,9 @@ function rawPngFailure(bytes: Uint8Array): OcrRecognitionOutcome | null {
   return null;
 }
 
-function contributionOf(id: string): OcrContribution | null {
-  const contribution = ocrChannels.contribution(id);
-  return contribution === null ? null : (contribution as unknown as OcrContribution);
+function definitionOf(id: string): OcrChannelDefinition | null {
+  const definition = ocrChannels.definition(id);
+  return definition === null ? null : (definition as unknown as OcrChannelDefinition);
 }
 
 /** Enabled OCR channels in priority order. */
@@ -113,12 +117,12 @@ export async function checkOcrReadiness(
   const outcome = await runChain<true, string, OcrChannelEntry>(
     entries,
     async (entry) => {
-      const contribution = contributionOf(entry.id);
-      if (contribution === null) {
+      const definition = definitionOf(entry.id);
+      if (definition === null) {
         return { kind: "unavailable", reason: t("ocr.failure.unconfigured") };
       }
       const credential = await ocrChannels.readCredential(entry.binding.credentialRef);
-      const readiness = await contribution.readiness(entry.binding, hostServices(credential));
+      const readiness = await definition.readiness(entry.binding, hostServices(credential));
       return readiness.ready
         ? { kind: "done", value: true }
         : { kind: "unavailable", reason: readiness.reason };
@@ -137,15 +141,15 @@ async function runEntry(
   entry: OcrChannelEntry,
   input: OcrRecognizeInput,
 ): Promise<ChainStepOutcome<OcrRecognitionOutcome, string>> {
-  const contribution = contributionOf(entry.id);
-  if (contribution === null) {
+  const definition = definitionOf(entry.id);
+  if (definition === null) {
     return { kind: "unavailable", reason: t("ocr.failure.unconfigured") };
   }
 
   const credential = await ocrChannels.readCredential(entry.binding.credentialRef);
   let result: OcrChannelOutcome;
   try {
-    result = await contribution.execute(entry.binding, input, hostServices(credential));
+    result = await definition.execute(entry.binding, input, hostServices(credential));
   } catch {
     log.warn("An OCR channel failed unexpectedly.");
     return { kind: "failed", failure: "ocr.failure.failed" };
@@ -163,7 +167,7 @@ async function runEntry(
     case "failed":
       return {
         kind: "failed",
-        failure: contribution.failureKey(result.failure) ?? "ocr.failure.failed",
+        failure: definition.failureKey(result.failure) ?? "ocr.failure.failed",
       };
   }
 }

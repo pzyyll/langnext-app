@@ -1,17 +1,17 @@
 import { expect, open, test, type StubRequest, type StubResponse } from "nsh/test";
 import { t } from "nsh/i18n";
 import { SPLIT_RAIL_STORAGE_KEYS } from "../../components/layout/split-rail";
-import { googleFamilyPricingLines } from "../../contributions/tts";
-import { GOOGLE_CLOUD_TTS_URL, TTS_SAMPLE_TEXT } from "../../contributions/tts/vendor/google-cloud";
+import { googleFamilyPricingLines } from "../../integrations/tts";
+import { GOOGLE_CLOUD_TTS_URL, TTS_SAMPLE_TEXT } from "../../integrations/tts/vendor/google-cloud";
 import {
   DEFAULT_GOOGLE_VOICE_PREFERENCES,
   type GoogleVoicePreferences,
-} from "../../contributions/tts/vendor/google-preferences";
-import { googleSampleText } from "../../contributions/tts/vendor/google-samples";
+} from "../../integrations/tts/vendor/google-preferences";
+import { googleSampleText } from "../../integrations/tts/vendor/google-samples";
 import {
   GOOGLE_VOICE_FAMILIES,
   GOOGLE_VOICE_PRICING,
-} from "../../contributions/tts/vendor/google-voices";
+} from "../../integrations/tts/vendor/google-voices";
 import {
   LANGUAGE_DETECTION_PREFERENCES_STORAGE_KEY,
   type LanguageDetectionPreferences,
@@ -46,7 +46,7 @@ function detectionCredentialStorageKey(ref: string): string {
   return `${DETECT_CREDENTIAL_NAMESPACE}.${ref}`;
 }
 
-/** One stored channel binding, as the contribution framework serializes it. */
+/** One stored channel binding, as the integration framework serializes it. */
 interface StoredChannelRecord {
   enabled: boolean;
   configured: boolean;

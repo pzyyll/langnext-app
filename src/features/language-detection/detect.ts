@@ -1,5 +1,5 @@
 // ABOUTME: Language detection: one bounded sample through enabled channels in priority order.
-// ABOUTME: Channel readiness and execution live in the detect contributions; failures fall through.
+// ABOUTME: Channel readiness and execution live in the detect definitions; failures fall through.
 import type { TextGenerationRequest } from "../../modules/ai/contracts/protocol";
 import {
   aiClient,
@@ -9,9 +9,9 @@ import {
 import type { FetchLike } from "../../services/http";
 import { createLogger } from "../../services/log";
 import {
-  getContributionRegistry,
+  getIntegrationRegistry,
   runChain,
-  type CapabilityChannelContribution,
+  type CapabilityChannelDefinition,
   type ChainStepOutcome,
   type ChannelBinding,
   type CredentialRecord,
@@ -19,14 +19,14 @@ import {
   type HostServices,
   type ModelConnectionRoute,
   type ResolvedModelRoute,
-} from "../../framework/contributions";
+} from "../../framework/integrations";
 import type { LanguageId } from "../../framework/languages";
 import {
   DetectionChannelError,
   isDetectionChannelFailure,
   type DetectionChannelFailure,
   type DetectionRequest,
-} from "../../contributions/detect";
+} from "../../integrations/detect";
 import { resolveSavedModelRequest, type SavedModelRequestResolution } from "../models/store";
 import { detectChannels } from "./store";
 import type { EnabledDetectionChannel } from "./preferences";
@@ -64,11 +64,15 @@ export interface DetectLanguageOptions {
   readCredential?: (credentialRef: string) => Promise<CredentialRecord | null>;
 }
 
-type DetectionContribution = CapabilityChannelContribution<unknown, DetectionRequest, LanguageId>;
+type DetectionChannelDefinition = CapabilityChannelDefinition<
+  unknown,
+  DetectionRequest,
+  LanguageId
+>;
 
 interface DetectionAttempt {
   detector: EnabledDetectionChannel;
-  contribution: DetectionContribution;
+  definition: DetectionChannelDefinition;
 }
 
 function failure(code: LanguageDetectionFailureCode): LanguageDetectionResult {
@@ -145,11 +149,11 @@ function detectionModels(
 
 /** Reads one channel's credential record for this attempt; never logs a value. */
 async function detectionCredential(
-  contribution: DetectionContribution,
+  definition: DetectionChannelDefinition,
   binding: ChannelBinding,
   options: DetectLanguageOptions,
 ): Promise<CredentialRecord | null> {
-  const fields = contribution.credential;
+  const fields = definition.credential;
   if (fields === null || fields.length === 0) return null;
   const credentialRef = binding.credentialRef;
   if (credentialRef === null) return null;
@@ -186,9 +190,9 @@ async function runDetector(
   options: DetectLanguageOptions,
   models: HostModels,
 ): Promise<ChainStepOutcome<LanguageId, DetectionChannelFailure>> {
-  const { detector, contribution } = attempt;
+  const { detector, definition } = attempt;
   const binding = detector.binding;
-  const credential = await detectionCredential(contribution, binding, options);
+  const credential = await detectionCredential(definition, binding, options);
   const host: HostServices = {
     credential,
     models,
@@ -196,9 +200,9 @@ async function runDetector(
     log,
   };
 
-  let readiness: Awaited<ReturnType<DetectionContribution["readiness"]>>;
+  let readiness: Awaited<ReturnType<DetectionChannelDefinition["readiness"]>>;
   try {
-    readiness = await contribution.readiness(binding, host);
+    readiness = await definition.readiness(binding, host);
   } catch {
     return { kind: "failed", failure: "failed" };
   }
@@ -206,7 +210,7 @@ async function runDetector(
   if (!readiness.ready) return unavailableOutcome(readiness.reason);
 
   try {
-    const language = await contribution.execute(binding, request, host);
+    const language = await definition.execute(binding, request, host);
     return { kind: "done", value: language };
   } catch (error) {
     if (options.signal?.aborted) return { kind: "cancelled" };
@@ -220,7 +224,7 @@ async function runDetector(
 /**
  * Detects the dominant language with the enabled detectors in priority order.
  *
- * Each detector runs one bounded sample through its contribution's readiness and execute hooks:
+ * Each detector runs one bounded sample through its definition's readiness and execute hooks:
  * AI resolves its saved model and accepts one supported ID, the free Google endpoint asks Google
  * Translate once, and Google Cloud posts the same sample to Cloud Translation v2 with the
  * detector's stored key. A failure, an ineligible model, an unreadable key, or `und` falls
@@ -238,18 +242,18 @@ export async function detectLanguage(
   if (sample.length === 0) return failure("blank_input");
   if (detectors.length === 0) return failure("unconfigured");
 
-  const registry = getContributionRegistry();
+  const registry = getIntegrationRegistry();
   const attempts: DetectionAttempt[] = [];
   for (const detector of detectors) {
-    const contribution = registry.findCapability(
+    const definition = registry.findCapability(
       "detect",
       detector.id,
-    ) as DetectionContribution | null;
-    if (contribution === null) {
-      log.warn("A stored language detector has no registered contribution", detector.id);
+    ) as DetectionChannelDefinition | null;
+    if (definition === null) {
+      log.warn("A stored language detector has no registered definition", detector.id);
       continue;
     }
-    attempts.push({ detector, contribution });
+    attempts.push({ detector, definition });
   }
   if (attempts.length === 0) return failure("failed");
 

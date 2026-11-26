@@ -1,16 +1,16 @@
 // ABOUTME: Store tests for the OCR channel collection: storage key, vault namespace, and enable policy.
 import { expect, test } from "nsh/test";
-import { registerOcrContributions } from "../../contributions/ocr";
-import { createContributionRegistry, setContributionRegistry } from "../../framework/contributions";
+import { registerOcrIntegrations } from "../../integrations/ocr";
+import { createIntegrationRegistry, setIntegrationRegistry } from "../../framework/integrations";
 import {
   createOcrChannelCollection,
   OCR_CHANNELS_STORAGE_KEY,
   OCR_CREDENTIAL_NAMESPACE,
 } from "./store";
 
-const registry = createContributionRegistry();
-registerOcrContributions(registry);
-setContributionRegistry(registry);
+const registry = createIntegrationRegistry();
+registerOcrIntegrations(registry);
+setIntegrationRegistry(registry);
 
 interface StoredChannel {
   enabled: boolean;

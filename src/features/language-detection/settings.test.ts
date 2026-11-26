@@ -1,11 +1,11 @@
 import { beforeEach, expect, test } from "nsh/test";
 import type { LanguageId } from "../../framework/languages";
 import {
-  createContributionRegistry,
+  createIntegrationRegistry,
   credentialStorageKey,
-  setContributionRegistry,
-} from "../../framework/contributions";
-import { registerDetectContributions } from "../../contributions/detect";
+  setIntegrationRegistry,
+} from "../../framework/integrations";
+import { registerDetectIntegrations } from "../../integrations/detect";
 import {
   createLanguageDetectionPreferencesStore,
   LANGUAGE_DETECTION_PREFERENCES_STORAGE_KEY,
@@ -85,9 +85,9 @@ function storedCollection(
 }
 
 beforeEach(() => {
-  const registry = createContributionRegistry();
-  registerDetectContributions(registry);
-  setContributionRegistry(registry);
+  const registry = createIntegrationRegistry();
+  registerDetectIntegrations(registry);
+  setIntegrationRegistry(registry);
 });
 
 test("detection settings: starts with no added detectors and every detector available", async () => {

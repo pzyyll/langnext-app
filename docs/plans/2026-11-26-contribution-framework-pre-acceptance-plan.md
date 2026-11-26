@@ -1,5 +1,8 @@
 # Implementation Plan
 
+> This plan records the work before the integration rename. See the
+> [current names](./2026-11-26-contribution-framework-plan.md) for the corresponding code paths and APIs.
+
 **Goal:** Close the M0–M2 review findings and verify the contribution framework before acceptance.
 
 **Inputs:** [Contribution framework implementation plan](./2026-11-26-contribution-framework-plan.md), the review of `f075d5a...ba1d2ed`, and the pre-migration settings behavior at `f075d5a`.

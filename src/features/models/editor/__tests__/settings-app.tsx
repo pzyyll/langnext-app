@@ -7,7 +7,7 @@ import type { ProviderSettingsProps } from "../../../../modules/ai/ui/contracts"
 import { providerSettingsRegistry } from "../../../../modules/ai/ui/registry";
 import { ProviderSettingsHost } from "../provider-settings";
 
-// A real settings host fixture: built-ins plus one test-only contribution.
+// A real settings host fixture: built-ins plus one test-only definition.
 initializeAiModules();
 
 aiRegistry.registerProvider({

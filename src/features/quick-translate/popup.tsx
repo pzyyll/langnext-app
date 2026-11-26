@@ -1526,7 +1526,7 @@ export function QuickTranslatePopup(props: QuickTranslatePopupProps) {
   const credentialSignature = () => {
     const active = activeSpeech();
     if (active === null) return "";
-    const signature = ttsChannels.contribution(active.id)?.signature?.(active.binding) ?? "";
+    const signature = ttsChannels.definition(active.id)?.signature?.(active.binding) ?? "";
     return `${active.id}\0${active.binding.credentialRef ?? ""}\0${signature}`;
   };
 

@@ -4,14 +4,14 @@ import { t } from "nsh/i18n";
 import { Avatar } from "../../components/ui/avatar";
 import { Button } from "../../components/ui/button";
 import { AppDialog } from "../../components/ui/dialog";
-import type { CapabilityChannelContribution } from "../../framework/contributions";
+import type { CapabilityChannelDefinition } from "../../framework/integrations";
 
-type ErasedContribution = CapabilityChannelContribution<unknown, unknown, unknown>;
+type ErasedChannelDefinition = CapabilityChannelDefinition<unknown, unknown, unknown>;
 
 export interface CapabilitySectionAddDialogProps {
   testIdPrefix: string;
   open: boolean;
-  available: readonly ErasedContribution[];
+  available: readonly ErasedChannelDefinition[];
   busy: boolean;
   onOpenChange: (open: boolean) => void;
   onSelect: (id: string) => void;
@@ -58,18 +58,18 @@ export function CapabilitySectionAddDialog(props: CapabilitySectionAddDialogProp
       }
     >
       <View class="grid grid-cols-2 gap-3">
-        <Each of={props.available} key={(contribution) => contribution.id}>
-          {(contribution) => (
+        <Each of={props.available} key={(definition) => definition.id}>
+          {(definition) => (
             <Button
-              testID={`${props.testIdPrefix}-option-${contribution().id}`}
+              testID={`${props.testIdPrefix}-option-${definition().id}`}
               ref={(node) => {
-                cardRefs[contribution().id] = node;
+                cardRefs[definition().id] = node;
               }}
               variant="outline"
               size="card"
               disabled={props.busy}
-              accessibilityLabel={t(contribution().labelKey)}
-              onPress={() => props.onSelect(contribution().id)}
+              accessibilityLabel={t(definition().labelKey)}
+              onPress={() => props.onSelect(definition().id)}
               class="w-full"
             >
               <Avatar
@@ -77,14 +77,14 @@ export function CapabilitySectionAddDialog(props: CapabilitySectionAddDialogProp
                 accessibilityLabel=""
                 fallback={
                   <Image
-                    src={contribution().icon}
+                    src={definition().icon}
                     accessibilityElementsHidden={true}
                     class="size-4 overflow-hidden"
                   />
                 }
               />
               <Text class="min-w-0 flex-1 truncate text-sm font-medium text-foreground">
-                {t(contribution().labelKey)}
+                {t(definition().labelKey)}
               </Text>
             </Button>
           )}

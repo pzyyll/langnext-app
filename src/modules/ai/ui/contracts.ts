@@ -5,12 +5,12 @@ import type { ProviderDefinition } from "../contracts/provider";
 
 export type ProviderSettingsMode = "draft" | "saved";
 
-/** Credential edit intent kept by the controller, never by a contribution. */
+/** Credential edit intent kept by the controller, not the provider settings view. */
 export type ProviderCredentialMode = "keep" | "replace" | "clear";
 
 /**
  * Controlled connection fields a provider Settings component renders. The host
- * owns these values; the contribution reports edits through the callbacks.
+ * owns these values; the view reports edits through the callbacks.
  */
 export interface ProviderSettingsProps {
   provider: ProviderDefinition;

@@ -3,6 +3,8 @@
 调研范围：LLM 请求协议、LLM 渠道及其配置页、预设类型及配置页、语音合成 / OCR / 语言检测渠道及配置页、生词本类型及配置页。
 调研基线：工作区 `F:\workspace\labs\langnext`（2026-11-26），NSH 0.6 桌面端，项目处于 Demo 阶段，允许破坏性变更。
 
+> 本文保留调研时的命名。当前代码使用 `integrations`，见[实现计划中的命名说明](../plans/2026-11-26-contribution-framework-plan.md)。
+
 ## 1. 结论
 
 1. 五条轴里只有 **LLM 协议** 和 **LLM 渠道** 已经是插件式结构：契约 + 注册表 + 宿主页面下放配置 UI（`src/modules/ai/contracts/*`、`runtime/registry.ts`、`ui/registry.ts`、`src/app/ai-setup.ts`）。

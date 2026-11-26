@@ -1,16 +1,16 @@
 import { expect, test } from "nsh/test";
-import { ttsChannelContributions } from "../../contributions/tts";
-import { DEFAULT_GOOGLE_VOICE_PREFERENCES } from "../../contributions/tts/vendor/google-preferences";
+import { ttsChannelDefinitions } from "../../integrations/tts";
+import { DEFAULT_GOOGLE_VOICE_PREFERENCES } from "../../integrations/tts/vendor/google-preferences";
 import {
   createChannelCollection,
   type ChannelCollection,
-} from "../../framework/contributions/channel-collection";
-import { createCredentialVault } from "../../framework/contributions/credential-vault";
+} from "../../framework/integrations/channel-collection";
+import { createCredentialVault } from "../../framework/integrations/credential-vault";
 import {
-  createContributionRegistry,
-  getContributionRegistry,
-  setContributionRegistry,
-} from "../../framework/contributions/registry";
+  createIntegrationRegistry,
+  getIntegrationRegistry,
+  setIntegrationRegistry,
+} from "../../framework/integrations/registry";
 
 const STORAGE_KEY = "integrations.tts.v1";
 const VAULT_NAMESPACE = "secret.tts";
@@ -31,15 +31,15 @@ function memoryStorage(initial: Record<string, string> = {}) {
 
 function makeStore(initial: Record<string, string> = {}) {
   const memory = memoryStorage(initial);
-  const registry = createContributionRegistry();
-  for (const contribution of ttsChannelContributions) registry.registerCapability(contribution);
-  setContributionRegistry(registry);
+  const registry = createIntegrationRegistry();
+  for (const definition of ttsChannelDefinitions) registry.registerCapability(definition);
+  setIntegrationRegistry(registry);
   const collection: ChannelCollection = createChannelCollection({
     capability: "tts",
     storage: memory.storage,
     storageKey: STORAGE_KEY,
     vault: createCredentialVault({ storage: memory.storage, namespace: VAULT_NAMESPACE }),
-    contributions: () => getContributionRegistry().capabilities("tts"),
+    definitions: () => getIntegrationRegistry().capabilities("tts"),
     policy: { enableOnFirstSave: false, requireReadableCredentialOnEnable: true },
   });
   return { ...memory, collection };

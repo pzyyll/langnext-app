@@ -1,18 +1,18 @@
 import { expect, test } from "nsh/test";
 import { t } from "nsh/i18n";
-import { ttsChannelContributions } from "../../contributions/tts";
+import { ttsChannelDefinitions } from "../../integrations/tts";
 import {
   DEFAULT_GOOGLE_VOICE_PREFERENCES,
   type GoogleVoicePreferences,
-} from "../../contributions/tts/vendor/google-preferences";
-import type { ChannelCollection } from "../../framework/contributions/channel-collection";
-import { createChannelCollection } from "../../framework/contributions/channel-collection";
-import { createCredentialVault } from "../../framework/contributions/credential-vault";
+} from "../../integrations/tts/vendor/google-preferences";
+import type { ChannelCollection } from "../../framework/integrations/channel-collection";
+import { createChannelCollection } from "../../framework/integrations/channel-collection";
+import { createCredentialVault } from "../../framework/integrations/credential-vault";
 import {
-  createContributionRegistry,
-  getContributionRegistry,
-  setContributionRegistry,
-} from "../../framework/contributions/registry";
+  createIntegrationRegistry,
+  getIntegrationRegistry,
+  setIntegrationRegistry,
+} from "../../framework/integrations/registry";
 import { prepareQuickSpeech, type QuickSpeechChannels } from "./quick-speech";
 
 const STORAGE_KEY = "integrations.tts.v1";
@@ -39,15 +39,15 @@ interface Seeded {
 
 function makeCollection(): Seeded {
   const memory = memoryStorage();
-  const registry = createContributionRegistry();
-  for (const contribution of ttsChannelContributions) registry.registerCapability(contribution);
-  setContributionRegistry(registry);
+  const registry = createIntegrationRegistry();
+  for (const definition of ttsChannelDefinitions) registry.registerCapability(definition);
+  setIntegrationRegistry(registry);
   const collection = createChannelCollection({
     capability: "tts",
     storage: memory.storage,
     storageKey: STORAGE_KEY,
     vault: createCredentialVault({ storage: memory.storage, namespace: VAULT_NAMESPACE }),
-    contributions: () => getContributionRegistry().capabilities("tts"),
+    definitions: () => getIntegrationRegistry().capabilities("tts"),
     policy: { enableOnFirstSave: false, requireReadableCredentialOnEnable: true },
   });
   return { backing: memory.backing, collection };
@@ -96,7 +96,7 @@ async function seedAzure(options: { region?: string; key?: string } = {}): Promi
 function channelAccess(collection: ChannelCollection, reads: string[]): QuickSpeechChannels {
   return {
     activeChannel: () => collection.activeChannel(),
-    contribution: (id) => collection.contribution(id),
+    definition: (id) => collection.definition(id),
     readCredential: async (ref) => {
       reads.push(ref ?? "");
       return collection.readCredential(ref);
@@ -111,7 +111,7 @@ function gatedAccess(
 ): QuickSpeechChannels {
   return {
     activeChannel: () => collection.activeChannel(),
-    contribution: (id) => collection.contribution(id),
+    definition: (id) => collection.definition(id),
     readCredential: async (ref) => {
       reads.push(ref ?? "");
       const pending = collection.readCredential(ref);
@@ -261,11 +261,11 @@ test("quick speech: Azure refuses illegal text and the app byte limit before a k
   expect(reads).toEqual([]);
 });
 
-test("quick speech: the active contribution signature follows saved preferences", async () => {
+test("quick speech: the active definition signature follows saved preferences", async () => {
   const { collection } = await seedGoogle();
   const before = collection.activeChannel()!;
-  const beforeContribution = collection.contribution(before.id)!;
-  const beforeSignature = beforeContribution.signature!(before.binding);
+  const beforeDefinition = collection.definition(before.id)!;
+  const beforeSignature = beforeDefinition.signature!(before.binding);
   const beforeResult = await prepareQuickSpeech({ text: "Hello", language: "en" }, collection);
   expect(beforeResult.ok).toBe(true);
 
@@ -275,7 +275,7 @@ test("quick speech: the active contribution signature follows saved preferences"
     { mode: "keep" },
   );
   const after = collection.activeChannel()!;
-  const afterSignature = collection.contribution(after.id)!.signature!(after.binding);
+  const afterSignature = collection.definition(after.id)!.signature!(after.binding);
   expect(afterSignature).not.toBe(beforeSignature);
   const afterResult = await prepareQuickSpeech({ text: "Hello", language: "en" }, collection);
   expect(afterResult.ok).toBe(true);

@@ -633,10 +633,10 @@ protocol:
     outputTruncated: 服务商在文本完整前停止了输出。
     streamInterrupted: 服务商在文本生成完成前中断了流式响应。
 framework:
-  contribution:
-    duplicate: "ID 为“%{id}”的 %{axis} 贡献已注册。"
-    invalidId: "ID 为“%{id}”的 %{axis} 贡献无效。"
-    unknown: "未注册 ID 为“%{id}”的 %{axis} 贡献。"
+  integration:
+    duplicate: "ID 为“%{id}”的 %{axis} 注册项已注册。"
+    invalidId: "ID 为“%{id}”的 %{axis} 注册项无效。"
+    unknown: "未注册 ID 为“%{id}”的 %{axis} 注册项。"
     invalidProvider: "提供方“%{id}”的定义无效。"
     unknownProtocol: "提供方“%{id}”引用了未注册的协议“%{protocol}”。"
     missingPresentation: "提供方“%{id}”缺少提供方展示。"

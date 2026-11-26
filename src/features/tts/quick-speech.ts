@@ -1,11 +1,11 @@
-// ABOUTME: Prepares the active TTS channel through its contribution before any network call.
-// ABOUTME: The contribution owns voice resolution, text limits, and failure messages.
+// ABOUTME: Prepares the active TTS channel through its definition before any network call.
+// ABOUTME: The definition owns voice resolution, text limits, and failure messages.
 import { t } from "nsh/i18n";
 import type {
   ChannelBinding,
   ChannelCollection,
   PrepareResult,
-} from "../../framework/contributions";
+} from "../../framework/integrations";
 import type { LanguageId } from "../../framework/languages";
 import { ttsChannels } from "./store";
 import type { TtsChannelInput, TtsFailure } from "./synthesis";
@@ -13,7 +13,7 @@ import type { TtsChannelInput, TtsFailure } from "./synthesis";
 /** The collection methods quick speech needs; isolated tests override the credential read. */
 export type QuickSpeechChannels = Pick<
   ChannelCollection,
-  "activeChannel" | "contribution" | "readCredential"
+  "activeChannel" | "definition" | "readCredential"
 >;
 
 export interface PreparedQuickSpeech {
@@ -29,7 +29,7 @@ function signatureOf(
   channels: QuickSpeechChannels,
   active: { id: string; binding: ChannelBinding },
 ): string {
-  return channels.contribution(active.id)?.signature?.(active.binding) ?? "";
+  return channels.definition(active.id)?.signature?.(active.binding) ?? "";
 }
 
 /** Resolves a local refusal or the prepared request. It does not call a speech service. */
@@ -39,11 +39,11 @@ export async function prepareQuickSpeech(
 ): Promise<QuickSpeechPreparation> {
   const active = channels.activeChannel();
   if (active === null) return { ok: false, message: t("quickTranslate.speakOff") };
-  const contribution = channels.contribution(active.id);
-  if (contribution === null || contribution.prepare === undefined) {
+  const definition = channels.definition(active.id);
+  if (definition === null || definition.prepare === undefined) {
     return { ok: false, message: t("quickTranslate.speakOff") };
   }
-  const prepared = contribution.prepare(active.binding, {
+  const prepared = definition.prepare(active.binding, {
     text: input.text,
     language: input.language,
   }) as PrepareResult<TtsChannelInput>;
@@ -64,8 +64,8 @@ export async function prepareQuickSpeech(
 
 /** A stable message for a synthesis or playback failure. Provider text stays out. */
 export function quickSpeechFailureMessage(failure: TtsFailure, channelId?: string): string {
-  const contribution = channelId === undefined ? null : ttsChannels.contribution(channelId);
-  const key = contribution?.failureKey(failure) ?? null;
+  const definition = channelId === undefined ? null : ttsChannels.definition(channelId);
+  const key = definition?.failureKey(failure) ?? null;
   // The settings surface owns the sample message; Quick Translate keeps its own playback line.
   if (key === null || key === "settings.tts.failure.playback") {
     return t("quickTranslate.speakPlayback");

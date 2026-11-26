@@ -3,15 +3,15 @@ import { ProviderProtocolError } from "../../modules/ai/contracts/errors";
 import type { TextGenerationRequest } from "../../modules/ai/contracts/protocol";
 import type { AiClientInput } from "../../modules/ai/runtime/client";
 import { detectLanguage, type DetectLanguageOptions } from "./detect";
-import { GOOGLE_DETECTION_URL, registerDetectContributions } from "../../contributions/detect";
+import { GOOGLE_DETECTION_URL, registerDetectIntegrations } from "../../integrations/detect";
 import type { FetchLike } from "../../services/http";
-import { createContributionRegistry, setContributionRegistry } from "../../framework/contributions";
+import { createIntegrationRegistry, setIntegrationRegistry } from "../../framework/integrations";
 import type { EnabledDetectionChannel } from "./preferences";
 
 beforeEach(() => {
-  const registry = createContributionRegistry();
-  registerDetectContributions(registry);
-  setContributionRegistry(registry);
+  const registry = createIntegrationRegistry();
+  registerDetectIntegrations(registry);
+  setIntegrationRegistry(registry);
 });
 
 const CONNECTION: AiClientInput = {

@@ -4,6 +4,9 @@
 **Tested commit:** `ff69cfe` (`fix(contributions): close pre-acceptance review findings`)
 **Date:** 2026-11-26
 
+The commands below use the paths in the tested commit. See the
+[current names](./2026-11-26-contribution-framework-plan.md) for the renamed paths.
+
 ## Automated results
 
 | Command | Result |

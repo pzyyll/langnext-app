@@ -1,8 +1,8 @@
 import { t } from "nsh/i18n";
 import { expect, open, test } from "nsh/test";
 import { initializeAiModules } from "../../app/ai-setup";
-import { GOOGLE_CLOUD_TTS_URL } from "../../contributions/tts/vendor/google-cloud";
-import { DEFAULT_GOOGLE_VOICE_PREFERENCES } from "../../contributions/tts/vendor/google-preferences";
+import { GOOGLE_CLOUD_TTS_URL } from "../../integrations/tts/vendor/google-cloud";
+import { DEFAULT_GOOGLE_VOICE_PREFERENCES } from "../../integrations/tts/vendor/google-preferences";
 import { LANGUAGE_DETECTION_PREFERENCES_STORAGE_KEY } from "../language-detection/preferences";
 import { DETECT_COLLECTION_STORAGE_KEY } from "../language-detection/store";
 import { makeChannel, makeModel, makeSeedStorage } from "../models/__tests__/fixtures";
