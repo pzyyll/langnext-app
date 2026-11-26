@@ -1,4 +1,4 @@
-import { Scroll, Text, View, windowSize, type InputRef, type ViewRef } from "nsh";
+import { Scroll, signal, Text, View, windowSize, type InputRef, type ViewRef } from "nsh";
 import { t } from "nsh/i18n";
 import { Badge } from "../../components/ui/badge";
 import { Button } from "../../components/ui/button";
@@ -6,6 +6,7 @@ import { Card } from "../../components/ui/card";
 import { Icon } from "../../components/ui/icon";
 import { Input } from "../../components/ui/input";
 import { Switch } from "../../components/ui/switch";
+import { toast } from "../../components/ui/toast";
 import { FormField } from "../../modules/ai/ui/form-field";
 import { DeepLUsageSection } from "./deepl-usage-section";
 import type { PresetDraft } from "./draft";
@@ -31,12 +32,14 @@ interface PresetEditorProps {
   errorTemplateId: string | null;
   autoFocusName: boolean;
   onChange: (patch: Partial<PresetDraft>) => void;
+  onRename: (name: string) => Promise<void>;
   onSelectTemplate: (templateId: string) => void;
   onSave: () => void;
   onCancel: () => void;
   onDelete: () => void;
   onManageModels: () => void;
   onNameRef: (node: InputRef) => void;
+  onRenameButtonRef: (node: ViewRef) => void;
   onDeepLKeyRef: (node: InputRef) => void;
   onGoogleCloudKeyRef: (node: InputRef) => void;
   onPrimaryModelRef: (node: ViewRef) => void;
@@ -72,10 +75,36 @@ export function PresetEditor(props: PresetEditorProps) {
   const isDeepL = () => props.draft.engineKind === "deepl";
   const isGoogleCloud = () => props.draft.engineKind === "google-cloud";
   const isCredentialEngine = () => isDeepL() || isGoogleCloud();
+  const isNew = () => props.draft.sourceId === null;
 
   const canCancel = () => {
     if (props.saving) return false;
     return props.draft.sourceId === null || props.dirty;
+  };
+
+  // The title renames in place and persists on its own, as a channel's does.
+  const renaming = signal(false);
+  const renameDraft = signal("");
+  const renameSaving = signal(false);
+
+  const startRename = () => {
+    if (isNew()) return;
+    renameDraft.set(props.draft.name);
+    renaming.set(true);
+  };
+
+  const submitRename = async () => {
+    const next = renameDraft().trim();
+    if (!next || renameSaving() || props.saving) return;
+    renameSaving.set(true);
+    try {
+      await props.onRename(next);
+      renaming.set(false);
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : t("presets.error.rename"));
+    } finally {
+      renameSaving.set(false);
+    }
   };
 
   const addFallback = () => {
@@ -153,15 +182,72 @@ export function PresetEditor(props: PresetEditorProps) {
           class={`mx-auto h-14 w-full max-w-4xl flex-row items-center justify-between gap-3 ${compact() ? "px-4" : "px-6"}`}
         >
           <View class="min-w-0 flex-1 flex-row items-center gap-2.5">
-            <Text role="header" class="min-w-0 truncate text-lg font-semibold text-foreground">
-              {props.draft.name.trim() || t("presets.editor.untitled")}
-            </Text>
-            <If when={props.dirty || props.draft.sourceId === null}>
-              <Badge tone="warning" label={t("presets.editor.unsaved")} />
+            <If
+              when={!isNew() && renaming()}
+              else={
+                <>
+                  <Text
+                    testID="preset-title"
+                    role="header"
+                    class="min-w-0 truncate text-lg font-semibold text-foreground"
+                  >
+                    {props.draft.name.trim() || t("presets.editor.untitled")}
+                  </Text>
+                  <If when={props.dirty || isNew()}>
+                    <Badge tone="warning" label={t("presets.editor.unsaved")} />
+                  </If>
+                  <If when={!isNew()}>
+                    <Button
+                      testID="rename-preset-button"
+                      ref={(node) => props.onRenameButtonRef(node)}
+                      size="icon-sm"
+                      variant="ghost"
+                      tooltip={t("presets.editor.rename")}
+                      accessibilityLabel={t("presets.editor.renameLabel")}
+                      disabled={props.saving}
+                      onPress={() => startRename()}
+                    >
+                      <Icon name="edit" tone="muted-foreground" class="size-3.5" />
+                    </Button>
+                  </If>
+                </>
+              }
+            >
+              <View class="min-w-0 flex-1 flex-row items-center gap-1.5">
+                <Input
+                  testID="rename-preset-input"
+                  size="sm"
+                  autoFocus
+                  accessibilityLabel={t("presets.field.name")}
+                  value={renameDraft()}
+                  onChange={(name) => renameDraft.set(name)}
+                  onSubmit={() => void submitRename()}
+                  onKeyPress={(key) => {
+                    if (key === "Escape") renaming.set(false);
+                  }}
+                  class="min-w-0 max-w-52 flex-1"
+                />
+                <Button
+                  testID="confirm-rename-preset"
+                  variant="primary"
+                  size="sm"
+                  label={renameSaving() ? t("common.saving") : t("common.save")}
+                  disabled={renameDraft().trim().length === 0 || renameSaving() || props.saving}
+                  onPress={() => void submitRename()}
+                />
+                <Button
+                  testID="cancel-rename-preset"
+                  variant="outline"
+                  size="sm"
+                  label={t("common.cancel")}
+                  disabled={renameSaving()}
+                  onPress={() => renaming.set(false)}
+                />
+              </View>
             </If>
           </View>
 
-          <View class="shrink-0 flex-row items-center gap-2">
+          <View class="shrink-0 flex-row items-center gap-2.5">
             <Switch
               testID="preset-enabled"
               variant="inline"
@@ -171,36 +257,40 @@ export function PresetEditor(props: PresetEditorProps) {
               disabled={props.saving}
               onChange={(checked) => props.onChange({ enabled: checked })}
             />
-            <Button
-              testID="preset-cancel"
-              variant="outline"
-              size="sm"
-              label={t("common.cancel")}
-              disabled={!canCancel()}
-              onPress={() => props.onCancel()}
-            />
-            <Button
-              testID="preset-save"
-              variant="primary"
-              size="sm"
-              label={props.saving ? t("common.saving") : t("common.save")}
-              disabled={!canSave()}
-              onPress={() => props.onSave()}
-            />
-            <If when={props.draft.sourceId !== null}>
-              <View class="h-4 w-px bg-border" />
+            <View class="h-4 w-px bg-border" />
+            <If
+              when={isNew() || props.dirty}
+              else={
+                <Button
+                  testID="preset-delete"
+                  ref={(node) => props.onDeleteRef(node)}
+                  variant="destructive-ghost"
+                  size="icon-sm"
+                  tooltip={t("presets.action.delete")}
+                  accessibilityLabel={t("presets.action.delete")}
+                  disabled={props.saving}
+                  onPress={() => props.onDelete()}
+                >
+                  <Icon name="delete" tone="muted-foreground" class="size-3.5" />
+                </Button>
+              }
+            >
               <Button
-                testID="preset-delete"
-                ref={(node) => props.onDeleteRef(node)}
-                variant="destructive-ghost"
-                size="icon-sm"
-                tooltip={t("presets.action.delete")}
-                accessibilityLabel={t("presets.action.delete")}
-                disabled={props.saving}
-                onPress={() => props.onDelete()}
-              >
-                <Icon name="delete" tone="muted-foreground" class="size-3.5" />
-              </Button>
+                testID="preset-cancel"
+                variant="ghost"
+                size="sm"
+                label={t("common.cancel")}
+                disabled={!canCancel()}
+                onPress={() => props.onCancel()}
+              />
+              <Button
+                testID="preset-save"
+                variant="primary"
+                size="sm"
+                label={props.saving ? t("common.saving") : t("common.save")}
+                disabled={!canSave()}
+                onPress={() => props.onSave()}
+              />
             </If>
           </View>
         </View>
@@ -219,21 +309,23 @@ export function PresetEditor(props: PresetEditorProps) {
             </View>
           </If>
 
-          <Card class={cardClass()}>
-            <FormField label={t("presets.field.name")} error={fieldError("name")}>
-              <Input
-                testID="preset-name"
-                ref={(node) => props.onNameRef(node)}
-                value={props.draft.name}
-                placeholder={t("presets.field.namePlaceholder")}
-                accessibilityLabel={t("presets.field.name")}
-                autoFocus={props.autoFocusName}
-                disabled={props.saving}
-                onFocus={() => props.onFieldFocus({ kind: "name" })}
-                onChange={(name) => props.onChange({ name })}
-              />
-            </FormField>
-          </Card>
+          <If when={isNew()}>
+            <Card class={cardClass()}>
+              <FormField label={t("presets.field.name")} error={fieldError("name")}>
+                <Input
+                  testID="preset-name"
+                  ref={(node) => props.onNameRef(node)}
+                  value={props.draft.name}
+                  placeholder={t("presets.field.namePlaceholder")}
+                  accessibilityLabel={t("presets.field.name")}
+                  autoFocus={props.autoFocusName}
+                  disabled={props.saving}
+                  onFocus={() => props.onFieldFocus({ kind: "name" })}
+                  onChange={(name) => props.onChange({ name })}
+                />
+              </FormField>
+            </Card>
+          </If>
 
           <If when={!isCredentialEngine()}>
             <ModelsSection

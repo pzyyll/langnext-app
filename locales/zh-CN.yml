@@ -666,6 +666,7 @@ presets:
     mutationInProgress: 正在保存另一项预设更改。
     notFound: 翻译预设已不存在。
     nameRequired: 预设名称为必填项。
+    rename: 无法重命名预设。
     engineUnsupported: 不支持该预设引擎类型。
     engineTypeLocked: 已保存的预设不能更换引擎类型。
     deeplKeyRequired: 请输入 DeepL API 密钥。
@@ -711,6 +712,8 @@ presets:
     unsaved: 未保存
     enabled: 启用
     enabledLabel: 预设启用状态
+    rename: 重命名
+    renameLabel: 重命名预设
     saved: 预设已保存
     deleted: 已删除预设 %{name}
   field:

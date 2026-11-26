@@ -196,6 +196,52 @@ test("presets store: keeps saved data on write failure", async () => {
   expect(mem.getSetCalls()).toBe(setCallsBeforeFailure + 2);
 });
 
+test("presets store: renames a saved preset without touching its engine or key", async () => {
+  const mem = createMemoryStorage();
+  const choices = (): ModelChoiceId[] => [{ id: "m-1" }];
+  const store = createPresetsStore(mem.storage, choices);
+  await store.load();
+
+  const saved = await store.save(makeDeepLInput({ name: "  DeepL Free  " }));
+  const ref = deeplRef(saved);
+  const setCallsBeforeRename = mem.getSetCalls();
+
+  // The title trims, persists on its own, and keeps the engine's key reference.
+  const renamed = await store.rename(saved.id, "  DeepL Paid  ");
+  expect(renamed.name).toBe("DeepL Paid");
+  expect(renamed.engine).toEqual(saved.engine);
+  expect(renamed.createdAt).toBe(saved.createdAt);
+  expect(store.records()).toEqual([renamed]);
+  expect(mem.getSetCalls()).toBe(setCallsBeforeRename + 1);
+  const reloaded = createPresetsStore(mem.storage, choices);
+  await reloaded.load();
+  expect(reloaded.records()[0]!.name).toBe("DeepL Paid");
+  expect(mem.backing[deepLCredentialStorageKey(ref)]).toBe("deepl-key:fx");
+
+  // Renaming to the stored title writes nothing.
+  expect(await store.rename(saved.id, "DeepL Paid")).toEqual(renamed);
+  expect(mem.getSetCalls()).toBe(setCallsBeforeRename + 1);
+
+  // An empty title and an unknown preset are refused.
+  await expect(store.rename(saved.id, "   ")).rejects.toMatchObject({ key: "name_required" });
+  await expect(store.rename("missing-id", "Next")).rejects.toMatchObject({ key: "not_found" });
+  expect(store.records()).toEqual([renamed]);
+
+  // A failed write keeps the stored title.
+  mem.setSetError(new Error("DISK_FULL"));
+  await expect(store.rename(saved.id, "Lost Name")).rejects.toMatchObject({
+    key: "storage_write_failed",
+  });
+  expect(store.records()[0]!.name).toBe("DeepL Paid");
+  expect(mem.getSetCalls()).toBe(setCallsBeforeRename + 2);
+
+  // Renaming before the store loaded is refused, as every other write is.
+  const unloaded = createPresetsStore(mem.storage, choices);
+  await expect(unloaded.rename(saved.id, "Early")).rejects.toMatchObject({
+    key: "storage_unreadable",
+  });
+});
+
 test("presets store: keeps unreadable storage for malformed data", async () => {
   const malformedRaw = "{not valid json";
   const mem = createMemoryStorage({ [PRESETS_STORAGE_KEY]: malformedRaw });

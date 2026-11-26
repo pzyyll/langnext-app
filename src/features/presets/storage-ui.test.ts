@@ -125,8 +125,8 @@ test("preset recovery UI: can add a preset when all saved entries were skipped",
 
   const reopened = await open(APP_ENTRY, { ...viewport, storage: saved });
   await reopened.press("id:nav-presets");
-  await reopened.waitFor("id:preset-name");
-  expect(reopened.value("id:preset-name")).toBe("Replacement Preset");
+  await reopened.waitFor("id:preset-title");
+  expect(reopened.accessibility("id:preset-title")?.name).toBe("Replacement Preset");
   expect(reopened.shows("id:presets-skipped-notice")).toBe(true);
   expect(reopened.shows("id:preset-item-preset-1")).toBe(false);
 });
@@ -190,28 +190,27 @@ test("presets storage UI: preserves edits after a failed write", async () => {
   });
 
   await app.press("id:nav-presets");
-  await app.waitFor("id:preset-name");
-  expect(app.value("id:preset-name")).toBe("Saved Preset");
+  await app.waitFor("id:preset-title");
+  expect(app.accessibility("id:preset-title")?.name).toBe("Saved Preset");
 
   // Failed save keeps draft edits and lets the user retry cleanly.
-  await app.clear("id:preset-name");
-  await app.type("id:preset-name", "Edited Name");
+  await app.press("id:preset-enabled");
   await app.press("id:preset-save");
 
   await app.waitFor("id:preset-error-banner");
   expect(app.texts()).toContain("Could not save translation presets (DISK_FULL).");
-  expect(app.value("id:preset-name")).toBe("Edited Name");
+  expect(app.accessibility("id:preset-enabled")?.checked).toBe("false");
   expect(app.enabled("id:preset-save")).toBe(true);
   expect(
-    (JSON.parse(backing[PRESETS_STORAGE_KEY]!) as { items: TranslationPreset[] }).items[0]!.name,
-  ).toBe("Saved Preset");
+    (JSON.parse(backing[PRESETS_STORAGE_KEY]!) as { items: TranslationPreset[] }).items[0]!.enabled,
+  ).toBe(true);
 
   writeError = null;
   await app.press("id:preset-save");
   await app.waitUntil(() => !app.shows("id:preset-error-banner"));
   expect(
-    (JSON.parse(backing[PRESETS_STORAGE_KEY]!) as { items: TranslationPreset[] }).items[0]!.name,
-  ).toBe("Edited Name");
+    (JSON.parse(backing[PRESETS_STORAGE_KEY]!) as { items: TranslationPreset[] }).items[0]!.enabled,
+  ).toBe(false);
 
   // Failed delete keeps record, keeps confirmation open with error, and succeeds on retry.
   writeError = new Error("DISK_LOCKED");
@@ -276,15 +275,17 @@ test("presets storage UI: retains bindings on Models load error", async () => {
   });
 
   await errApp.press("id:nav-presets");
-  await errApp.waitFor("id:preset-name");
+  await errApp.waitFor("id:preset-title");
   expect(errApp.texts()).toContain("Models could not be loaded. Existing bindings are preserved.");
   expect(errApp.texts()).not.toContain("Model no longer exists in Models.");
   expect(errApp.texts().join("\n")).not.toContain("m-ch-off");
   expect(errApp.shows("id:preset-manage-models")).toBe(true);
 
-  await errApp.clear("id:preset-name");
-  await errApp.type("id:preset-name", "Renamed Under Models Error");
-  await errApp.press("id:preset-save");
+  await errApp.press("id:rename-preset-button");
+  await errApp.waitFor("id:rename-preset-input");
+  await errApp.clear("id:rename-preset-input");
+  await errApp.type("id:rename-preset-input", "Renamed Under Models Error");
+  await errApp.press("id:confirm-rename-preset");
   await errApp.waitUntil(() => {
     const raw = seededOnError[PRESETS_STORAGE_KEY];
     if (!raw) return false;
@@ -337,8 +338,8 @@ test("presets storage UI: blocks leaving during a pending write", async () => {
   });
 
   await slowApp.press("id:nav-presets");
-  await slowApp.waitFor("id:preset-name");
-  await slowApp.type("id:preset-name", " Saving");
+  await slowApp.waitFor("id:preset-title");
+  await slowApp.press("id:preset-enabled");
   const saveOp = slowApp.press("id:preset-save");
   await slowApp.waitUntil(() => presetWrites === 1);
 

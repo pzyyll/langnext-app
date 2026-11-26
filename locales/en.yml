@@ -666,6 +666,7 @@ presets:
     mutationInProgress: Another preset update is already in progress.
     notFound: Translation preset no longer exists.
     nameRequired: Preset name is required.
+    rename: Could not rename the preset.
     engineUnsupported: Preset engine type is unsupported.
     engineTypeLocked: A saved preset keeps its engine type.
     deeplKeyRequired: Enter a DeepL API key.
@@ -711,6 +712,8 @@ presets:
     unsaved: Unsaved
     enabled: Enabled
     enabledLabel: Preset enabled
+    rename: Rename
+    renameLabel: Rename preset
     saved: Preset saved
     deleted: Deleted preset %{name}
   field:

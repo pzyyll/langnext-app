@@ -81,6 +81,7 @@ export function PresetsPage(props: PresetsPageProps) {
   const deleteErrorSignal = signal<string | null>(null);
 
   let nameInputRef: InputRef | null = null;
+  let renameButtonRef: ViewRef | null = null;
   let deeplKeyInputRef: InputRef | null = null;
   let googleCloudKeyInputRef: InputRef | null = null;
   let primaryModelRef: ViewRef | null = null;
@@ -125,7 +126,7 @@ export function PresetsPage(props: PresetsPageProps) {
     queueMicrotask(() => {
       switch (target.kind) {
         case "name":
-          focusNode(nameInputRef);
+          focusNode(nameInputRef ?? renameButtonRef);
           break;
         case "temperature":
           focusNode(temperatureInputRef);
@@ -397,6 +398,23 @@ export function PresetsPage(props: PresetsPageProps) {
       errorFallbackIndexSignal.set(null);
       errorTemplateIdSignal.set(null);
     }
+  };
+
+  // The title persists on its own, so a rename never waits for the form's save.
+  const renamePreset = async (name: string) => {
+    const current = draftSignal();
+    if (!current || current.sourceId === null) return;
+    const updated = await presetsStore.rename(current.sourceId, name);
+    batch(() => {
+      const latest = draftSignal();
+      const baseline = baselineSignal();
+      if (latest && latest.sourceId === updated.id) {
+        draftSignal.set({ ...latest, name: updated.name });
+      }
+      if (baseline && baseline.sourceId === updated.id) {
+        baselineSignal.set({ ...baseline, name: updated.name });
+      }
+    });
   };
 
   const handleCancel = () => {
@@ -773,6 +791,7 @@ export function PresetsPage(props: PresetsPageProps) {
                   errorTemplateId={errorTemplateIdSignal()}
                   autoFocusName={autoFocusNameSignal()}
                   onChange={(patch) => updateDraft(patch)}
+                  onRename={(name) => renamePreset(name)}
                   onSelectTemplate={(templateId) => selectedTemplateIdSignal.set(templateId)}
                   onSave={() => void handleSave()}
                   onCancel={() => handleCancel()}
@@ -780,6 +799,9 @@ export function PresetsPage(props: PresetsPageProps) {
                   onManageModels={() => handleManageModels()}
                   onNameRef={(node) => {
                     nameInputRef = node;
+                  }}
+                  onRenameButtonRef={(node) => {
+                    renameButtonRef = node;
                   }}
                   onDeepLKeyRef={(node) => {
                     deeplKeyInputRef = node;

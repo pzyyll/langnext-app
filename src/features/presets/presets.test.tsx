@@ -45,6 +45,26 @@ async function choosePresetType(app: App, kind: "ai" | "deepl" | "google-cloud")
   await app.waitUntil(() => !app.shows("id:add-preset-dialog"));
 }
 
+/** Waits for the preset editor detail pane. */
+async function waitForPresetEditor(app: App) {
+  await app.waitFor("id:preset-title");
+}
+
+/** The selected preset's title, as the editor header shows it. */
+function presetTitle(app: App): string {
+  return app.accessibility("id:preset-title")?.name ?? "";
+}
+
+/** Renames the selected preset in the header, which persists at once. */
+async function renamePreset(app: App, name: string) {
+  await app.press("id:rename-preset-button");
+  await app.waitFor("id:rename-preset-input");
+  await app.clear("id:rename-preset-input");
+  await app.type("id:rename-preset-input", name);
+  await app.press("id:confirm-rename-preset");
+  await app.waitUntil(() => !app.shows("id:rename-preset-input"));
+}
+
 function aiEngine(preset: TranslationPreset): AiPresetEngine {
   if (preset.engine.kind !== "ai") throw new Error("expected an AI preset");
   return preset.engine;
@@ -122,8 +142,8 @@ test("presets ui: saves a new preset", async () => {
     storage: persisted,
   });
   await reopened.press("id:nav-presets");
-  await reopened.waitFor("id:preset-name");
-  expect(reopened.value("id:preset-name")).toBe("Technical EN to ZH");
+  await waitForPresetEditor(reopened);
+  expect(presetTitle(reopened)).toBe("Technical EN to ZH");
   expect(reopened.texts()).toContain("OpenAI Main · gpt-4.1-mini");
 
   // With zero eligible models, Save is blocked on a new draft and Manage Models offers recovery.
@@ -164,10 +184,10 @@ test("presets ui: no languages", async () => {
   });
 
   await app.press("id:nav-presets");
-  await app.waitFor("id:preset-name");
+  await waitForPresetEditor(app);
 
   // A saved AI preset shows its engine configuration only.
-  expect(app.value("id:preset-name")).toBe("Language Free");
+  expect(presetTitle(app)).toBe("Language Free");
   expect(app.shows("id:preset-source-language")).toBe(false);
   expect(app.shows("id:preset-target-language")).toBe(false);
   expect(app.texts()).not.toContain("Languages");
@@ -210,25 +230,27 @@ test("presets ui: preset type", async () => {
   });
 
   await app.press("id:nav-presets");
-  await app.waitFor("id:preset-name");
-  expect(app.value("id:preset-name")).toBe("Type Preset");
+  await waitForPresetEditor(app);
+  expect(presetTitle(app)).toBe("Type Preset");
+  expect(app.shows("id:preset-name")).toBe(false);
 
   // The rail entry point opens the picker before any draft exists.
   await app.press("id:add-preset-button");
   await app.waitFor("id:add-preset-dialog");
-  expect(app.value("id:preset-name")).toBe("Type Preset");
+  expect(presetTitle(app)).toBe("Type Preset");
   expect(app.shows("id:preset-draft-item")).toBe(false);
   await app.keyboard.press("escape");
   await app.waitUntil(() => !app.shows("id:add-preset-dialog"));
-  expect(app.value("id:preset-name")).toBe("Type Preset");
+  expect(presetTitle(app)).toBe("Type Preset");
 
   // Dismissing the picker with a dirty draft changes nothing and asks no confirmation.
-  await app.type("id:preset-name", " Edited");
+  await app.press("id:preset-enabled");
   await app.press("id:add-preset-button");
   await app.waitFor("id:add-preset-dialog");
   await app.press("id:preset-type-cancel");
   await app.waitUntil(() => !app.shows("id:add-preset-dialog"));
-  expect(app.value("id:preset-name")).toBe("Type Preset Edited");
+  expect(presetTitle(app)).toBe("Type Preset");
+  expect(app.accessibility("id:preset-enabled")?.checked).toBe("false");
   expect(app.shows("id:preset-discard-dialog")).toBe(false);
 
   // Choosing a type closes the picker first, then runs the dirty-draft guard.
@@ -239,7 +261,8 @@ test("presets ui: preset type", async () => {
   await app.waitFor("id:preset-discard-dialog");
   await app.press("id:preset-discard-keep-editing");
   await app.waitUntil(() => !app.shows("id:preset-discard-dialog"));
-  expect(app.value("id:preset-name")).toBe("Type Preset Edited");
+  expect(presetTitle(app)).toBe("Type Preset");
+  expect(app.accessibility("id:preset-enabled")?.checked).toBe("false");
 
   // Discarding opens the AI editor with the name focused and no language controls.
   await app.press("id:add-preset-button");
@@ -251,6 +274,8 @@ test("presets ui: preset type", async () => {
   await app.waitFor("id:preset-name");
   expect(app.shows("id:preset-draft-item")).toBe(true);
   expect(app.value("id:preset-name")).toBe("");
+  // A new draft types its title in the body; only a saved preset renames in the header.
+  expect(app.shows("id:rename-preset-button")).toBe(false);
   expect(app.shows("id:preset-source-language")).toBe(false);
   expect(app.shows("id:preset-target-language")).toBe(false);
   await app.keyboard.press("a");
@@ -268,6 +293,60 @@ test("presets ui: preset type", async () => {
   await emptyApp.press("id:preset-type-cancel");
   await emptyApp.waitUntil(() => !emptyApp.shows("id:add-preset-dialog"));
   expect(emptyApp.shows("id:empty-add-preset-button")).toBe(true);
+});
+
+test("presets ui: renames a preset in the header and saves at once", async () => {
+  const preset = makePresetRecord("p-rename", "Original Name", ["m-1"]);
+  const app = await open(APP_ENTRY, {
+    ...viewport,
+    locale: "en-US",
+    storage: makeSeedStorage({
+      channels: [makeChannel({ id: "ch-openai", displayName: "OpenAI Main", enabled: true })],
+      models: [
+        makeModel({ id: "m-1", providerId: "ch-openai", modelKey: "gpt-4.1", enabled: true }),
+      ],
+      extra: { [PRESETS_STORAGE_KEY]: JSON.stringify({ version: 1, items: [preset] }) },
+    }),
+  });
+
+  await app.press("id:nav-presets");
+  await waitForPresetEditor(app);
+  expect(presetTitle(app)).toBe("Original Name");
+
+  // Cancel leaves the stored title untouched.
+  await app.press("id:rename-preset-button");
+  await app.waitFor("id:rename-preset-input");
+  expect(app.value("id:rename-preset-input")).toBe("Original Name");
+  await app.clear("id:rename-preset-input");
+  await app.type("id:rename-preset-input", "Discarded Name");
+  await app.press("id:cancel-rename-preset");
+  await app.waitUntil(() => !app.shows("id:rename-preset-input"));
+  expect(presetTitle(app)).toBe("Original Name");
+
+  // An empty title cannot be saved.
+  await app.press("id:rename-preset-button");
+  await app.waitFor("id:rename-preset-input");
+  await app.clear("id:rename-preset-input");
+  expect(app.enabled("id:confirm-rename-preset")).toBe(false);
+  await app.press("id:cancel-rename-preset");
+  await app.waitUntil(() => !app.shows("id:rename-preset-input"));
+
+  // Saving the title writes at once: no form save follows, and the editor stays clean.
+  await renamePreset(app, "Renamed Preset");
+  expect(presetTitle(app)).toBe("Renamed Preset");
+  expect(app.shows("id:preset-save")).toBe(false);
+  expect(app.shows("id:preset-delete")).toBe(true);
+  expect(app.shows("id:preset-item-p-rename >> text:Renamed Preset")).toBe(true);
+  const stored = JSON.parse(app.storage()[PRESETS_STORAGE_KEY]!) as {
+    items: TranslationPreset[];
+  };
+  expect(stored.items[0]!.name).toBe("Renamed Preset");
+
+  // A rename survives a restart.
+  const reopened = await open(APP_ENTRY, { ...viewport, storage: app.storage() });
+  await reopened.press("id:nav-presets");
+  await waitForPresetEditor(reopened);
+  expect(presetTitle(reopened)).toBe("Renamed Preset");
 });
 
 test("presets ui: DeepL editor", async () => {
@@ -333,7 +412,7 @@ test("presets ui: DeepL editor", async () => {
   await reopened.press("id:nav-presets");
   await reopened.waitFor("id:preset-deepl-api-key");
   expect(reopened.value("id:preset-deepl-api-key")).toBe("");
-  expect(reopened.enabled("id:preset-save")).toBe(false);
+  expect(reopened.shows("id:preset-save")).toBe(false);
   expect(reopened.texts()).toContain("DeepL API");
   await reopened.waitUntil(() => reopened.shows("id:preset-deepl-usage-count"));
   expect(reopened.requests()).toHaveLength(1);
@@ -832,7 +911,7 @@ test("presets ui: retains unavailable bindings", async () => {
   });
 
   await app.press("id:nav-presets");
-  await app.waitFor("id:preset-name");
+  await waitForPresetEditor(app);
 
   // 1. Disabled channel primary + deleted fallback without exposing raw missing ID.
   expect(app.shows("id:preset-manage-models")).toBe(true);
@@ -844,23 +923,21 @@ test("presets ui: retains unavailable bindings", async () => {
 
   // 2. Disabled model, missing model, unsupported protocol each show exact reasons.
   await app.press("id:preset-item-p-disabled");
-  await app.waitUntil(() => app.value("id:preset-name") === "Disabled Model Preset");
+  await app.waitUntil(() => presetTitle(app) === "Disabled Model Preset");
   expect(app.texts()).toContain("Model is disabled.");
 
   await app.press("id:preset-item-p-missing");
-  await app.waitUntil(() => app.value("id:preset-name") === "Missing Model Preset");
+  await app.waitUntil(() => presetTitle(app) === "Missing Model Preset");
   expect(app.texts()).toContain("Model was missing in the last channel sync.");
 
   await app.press("id:preset-item-p-unsupported");
-  await app.waitUntil(() => app.value("id:preset-name") === "Unsupported Proto Preset");
+  await app.waitUntil(() => presetTitle(app) === "Unsupported Proto Preset");
   expect(app.texts()).toContain("Provider or API protocol is unsupported in this build.");
 
-  // 3. Returning to p-ch-off: renaming while keeping unavailable bindings saves cleanly.
+  // 3. Returning to p-ch-off: renaming keeps the unavailable bindings intact.
   await app.press("id:preset-item-p-ch-off");
-  await app.waitUntil(() => app.value("id:preset-name") === "Disabled Channel Preset");
-  await app.clear("id:preset-name");
-  await app.type("id:preset-name", "Renamed Stale Preset");
-  await app.press("id:preset-save");
+  await app.waitUntil(() => presetTitle(app) === "Disabled Channel Preset");
+  await renamePreset(app, "Renamed Stale Preset");
   await app.waitUntil(() => {
     const raw = app.storage()[PRESETS_STORAGE_KEY];
     if (!raw) return false;
@@ -1111,64 +1188,64 @@ test("presets ui: guards dirty navigation", async () => {
   });
 
   await app.press("id:nav-presets");
-  await app.waitFor("id:preset-name");
+  await waitForPresetEditor(app);
 
   // Clean saved editor switches/navigates with no confirmation prompt.
   await app.press("id:preset-item-p-2");
-  await app.waitUntil(() => app.value("id:preset-name") === "Preset Two");
+  await app.waitUntil(() => presetTitle(app) === "Preset Two");
   expect(app.shows("id:preset-discard-dialog")).toBe(false);
 
   await app.press("id:preset-item-p-1");
-  await app.waitUntil(() => app.value("id:preset-name") === "Preset One");
+  await app.waitUntil(() => presetTitle(app) === "Preset One");
 
   await app.press("id:nav-settings");
   await app.waitFor("text:Appearance");
   expect(app.shows("id:preset-discard-dialog")).toBe(false);
 
   await app.press("id:nav-presets");
-  await app.waitFor("id:preset-name");
+  await waitForPresetEditor(app);
   await app.press("id:preset-manage-models");
   await app.waitFor("id:models-page");
   expect(app.shows("id:preset-discard-dialog")).toBe(false);
 
   await app.press("id:nav-presets");
-  await app.waitFor("id:preset-name");
+  await waitForPresetEditor(app);
 
-  // 1. Cancel guard: Escape keeps edits and restores focus; Discard reverts edits.
-  await app.type("id:preset-name", " Edited");
+  // 1. Cancel guard: Escape keeps the edits; Discard reverts them.
+  await app.press("id:preset-enabled");
+  expect(app.enabled("id:preset-save")).toBe(true);
   await app.press("id:preset-cancel");
   await app.waitFor("id:preset-discard-dialog");
   await app.keyboard.press("escape");
   await app.waitUntil(() => !app.shows("id:preset-discard-dialog"));
-  expect(app.value("id:preset-name")).toBe("Preset One Edited");
-  await app.keyboard.press("x");
-  expect(app.value("id:preset-name")).toBe("Preset One Editedx");
+  expect(presetTitle(app)).toBe("Preset One");
+  expect(app.accessibility("id:preset-enabled")?.checked).toBe("false");
 
   await app.press("id:preset-cancel");
   await app.waitFor("id:preset-discard-dialog");
   await app.press("id:preset-discard-confirm");
   await app.waitUntil(() => !app.shows("id:preset-discard-dialog"));
-  expect(app.value("id:preset-name")).toBe("Preset One");
+  expect(app.accessibility("id:preset-enabled")?.checked).toBe("true");
+  expect(app.shows("id:preset-save")).toBe(false);
 
-  // 2. Switch preset guard: Keep Editing keeps edits and restores focus; Discard switches.
-  await app.type("id:preset-name", " SwitchDirty");
+  // 2. Switch preset guard: Keep Editing keeps the edits; Discard switches.
+  await app.press("id:preset-enabled");
   await app.press("id:preset-item-p-2");
   await app.waitFor("id:preset-discard-dialog");
   await app.press("id:preset-discard-keep-editing");
   await app.waitUntil(() => !app.shows("id:preset-discard-dialog"));
-  expect(app.value("id:preset-name")).toBe("Preset One SwitchDirty");
-  await app.keyboard.press("y");
-  expect(app.value("id:preset-name")).toBe("Preset One SwitchDirtyy");
+  expect(presetTitle(app)).toBe("Preset One");
+  expect(app.accessibility("id:preset-enabled")?.checked).toBe("false");
 
   await app.press("id:preset-item-p-2");
   await app.waitFor("id:preset-discard-dialog");
   await app.press("id:preset-discard-confirm");
-  await app.waitUntil(() => app.value("id:preset-name") === "Preset Two");
+  await app.waitUntil(() => presetTitle(app) === "Preset Two");
 
-  // 3. Add Preset guard: Discard opens fresh draft; clean draft Cancel closes without prompt.
+  // 3. Add Preset guard: Discard opens a fresh draft; a clean draft cancels without a prompt.
   await app.press("id:preset-item-p-1");
-  await app.waitUntil(() => app.value("id:preset-name") === "Preset One");
-  await app.type("id:preset-name", " AddDirty");
+  await app.waitUntil(() => presetTitle(app) === "Preset One");
+  await app.press("id:preset-enabled");
   await app.press("id:add-preset-button");
   await choosePresetType(app, "ai");
   await app.waitFor("id:preset-discard-dialog");
@@ -1182,8 +1259,8 @@ test("presets ui: guards dirty navigation", async () => {
 
   // 4. Sidebar nav guard.
   await app.press("id:preset-item-p-1");
-  await app.waitUntil(() => app.value("id:preset-name") === "Preset One");
-  await app.type("id:preset-name", " NavDirty");
+  await app.waitUntil(() => presetTitle(app) === "Preset One");
+  await app.press("id:preset-enabled");
   await app.press("id:nav-settings");
   await app.waitFor("id:preset-discard-dialog");
   await app.press("id:preset-discard-keep-editing");
@@ -1196,9 +1273,9 @@ test("presets ui: guards dirty navigation", async () => {
 
   // 5. Manage Models guard.
   await app.press("id:nav-presets");
-  await app.waitFor("id:preset-name");
-  expect(app.value("id:preset-name")).toBe("Preset One");
-  await app.type("id:preset-name", " ManageDirty");
+  await waitForPresetEditor(app);
+  expect(presetTitle(app)).toBe("Preset One");
+  await app.press("id:preset-enabled");
   await app.press("id:preset-manage-models");
   await app.waitFor("id:preset-discard-dialog");
   await app.press("id:preset-discard-confirm");
@@ -1224,17 +1301,25 @@ test("presets ui: confirms delete and selects the next preset", async () => {
   });
 
   await app.press("id:nav-presets");
-  await app.waitFor("id:preset-name");
-  expect(app.value("id:preset-name")).toBe("Alpha");
+  await waitForPresetEditor(app);
+  expect(presetTitle(app)).toBe("Alpha");
 
-  // Cancelling Delete keeps both the saved preset and unsaved edits intact.
-  await app.clear("id:preset-name");
-  await app.type("id:preset-name", "Alpha Unsaved");
+  // A dirty preset swaps Delete for Cancel/Save, as a channel does.
+  await app.press("id:preset-enabled");
+  expect(app.shows("id:preset-delete")).toBe(false);
+  expect(app.enabled("id:preset-save")).toBe(true);
+  await app.press("id:preset-cancel");
+  await app.waitFor("id:preset-discard-dialog");
+  await app.press("id:preset-discard-confirm");
+  await app.waitUntil(() => !app.shows("id:preset-discard-dialog"));
+  expect(app.shows("id:preset-delete")).toBe(true);
+
+  // Cancelling Delete keeps the saved preset.
   await app.press("id:preset-delete");
   await app.waitFor("id:preset-delete-dialog");
   await app.press("id:preset-delete-cancel");
   await app.waitUntil(() => !app.shows("id:preset-delete-dialog"));
-  expect(app.value("id:preset-name")).toBe("Alpha Unsaved");
+  expect(presetTitle(app)).toBe("Alpha");
   expect(app.shows("id:preset-item-p-1")).toBe(true);
 
   // Confirming deletion of first row selects the next row (Beta).
@@ -1242,17 +1327,17 @@ test("presets ui: confirms delete and selects the next preset", async () => {
   await app.waitFor("id:preset-delete-dialog");
   await app.press("id:preset-delete-confirm");
   await app.waitUntil(() => !app.shows("id:preset-delete-dialog"));
-  await app.waitUntil(() => app.value("id:preset-name") === "Beta");
+  await app.waitUntil(() => presetTitle(app) === "Beta");
   expect(app.shows("id:preset-item-p-1")).toBe(false);
 
   // Confirming deletion of the last row (Gamma) selects the previous row (Beta).
   await app.press("id:preset-item-p-3");
-  await app.waitUntil(() => app.value("id:preset-name") === "Gamma");
+  await app.waitUntil(() => presetTitle(app) === "Gamma");
   await app.press("id:preset-delete");
   await app.waitFor("id:preset-delete-dialog");
   await app.press("id:preset-delete-confirm");
   await app.waitUntil(() => !app.shows("id:preset-delete-dialog"));
-  await app.waitUntil(() => app.value("id:preset-name") === "Beta");
+  await app.waitUntil(() => presetTitle(app) === "Beta");
   expect(app.shows("id:preset-item-p-3")).toBe(false);
 
   // Reopen app to verify remaining preset persists, then delete last preset to empty state.
@@ -1265,8 +1350,8 @@ test("presets ui: confirms delete and selects the next preset", async () => {
     storage: persisted,
   });
   await reopened.press("id:nav-presets");
-  await reopened.waitFor("id:preset-name");
-  expect(reopened.value("id:preset-name")).toBe("Beta");
+  await waitForPresetEditor(reopened);
+  expect(presetTitle(reopened)).toBe("Beta");
 
   await reopened.press("id:preset-delete");
   await reopened.waitFor("id:preset-delete-dialog");
@@ -1380,7 +1465,7 @@ test("presets ui: Google Cloud", async () => {
   await reopened.press("id:nav-presets");
   await reopened.waitFor("id:preset-google-cloud-api-key");
   expect(reopened.value("id:preset-google-cloud-api-key")).toBe("");
-  expect(reopened.enabled("id:preset-save")).toBe(false);
+  expect(reopened.shows("id:preset-save")).toBe(false);
   expect(reopened.texts()).toContain("Google Cloud Translation");
   expect(reopened.requests()).toHaveLength(0);
 });
@@ -1426,7 +1511,7 @@ test("presets ui: rail summaries lead with the channel mark", async () => {
   });
 
   await app.press("id:nav-presets");
-  await app.waitFor("id:preset-name");
+  await waitForPresetEditor(app);
 
   // An AI preset leads with its primary model channel; DeepL and Google Cloud with their service.
   expect(app.shows("id:preset-item-p-ai >> id:preset-item-mark")).toBe(true);

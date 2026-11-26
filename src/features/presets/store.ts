@@ -376,6 +376,39 @@ export function createPresetsStore(
         mutatingSignal.set(false);
       }
     },
+    rename: async (id: string, name: string) => {
+      assertReadyForMutation();
+
+      const trimmed = name.trim();
+      if (!trimmed) {
+        throw new PresetsStoreError("name_required", t("presets.error.nameRequired"), {
+          field: "name",
+        });
+      }
+      const existing = records().find((item) => item.id === id);
+      if (!existing) {
+        throw new PresetsStoreError("not_found", t("presets.error.notFound"));
+      }
+      if (existing.name === trimmed) {
+        return existing;
+      }
+
+      const record: TranslationPreset = {
+        ...existing,
+        name: trimmed,
+        updatedAt: new Date().toISOString(),
+      };
+      const next = replaceItems(existing, record);
+
+      mutatingSignal.set(true);
+      try {
+        await writePresets(storage, next);
+        itemsSignal.set(next);
+        return record;
+      } finally {
+        mutatingSignal.set(false);
+      }
+    },
     remove: async (id: string) => {
       assertReadyForMutation();
 

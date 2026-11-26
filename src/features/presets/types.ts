@@ -175,6 +175,8 @@ export interface PresetsStore {
   status(): PresetsStoreStatus;
   mutating(): boolean;
   save(input: SavePresetInput): Promise<TranslationPreset>;
+  /** Renames one saved preset and persists it immediately. */
+  rename(id: string, name: string): Promise<TranslationPreset>;
   remove(id: string): Promise<void>;
   /** Reads a DeepL preset's stored key; returns null for other engines or a missing key. */
   readDeepLCredential(presetId: string): Promise<string | null>;
