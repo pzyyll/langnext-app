@@ -129,6 +129,11 @@ export const aiDetectionContribution: CapabilityChannelContribution<
     config.modelId.trim().length > 0
       ? { ok: true }
       : { ok: false, key: "settings.languageDetection.error.modelIdBlank", field: "modelId" },
+  saveAvailable: ({ config, resolveModelBinding }) => {
+    const modelId = config.modelId.trim();
+    if (modelId.length === 0) return false;
+    return resolveModelBinding?.(modelId, "text")?.ok === true;
+  },
   readiness: async (binding, host) => {
     const modelId = binding.config.modelId.trim();
     if (modelId.length === 0) return { ready: false, reason: "failed" };

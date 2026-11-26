@@ -1,8 +1,6 @@
 // ABOUTME: Test app for screenshot recognition over the OCR channel collection.
 import { host, mount, signal, Text, View } from "nsh";
 import { initializeAiModules } from "../../../app/ai-setup";
-import { registerOcrContributions } from "../../../contributions/ocr";
-import { getContributionRegistry } from "../../../framework/contributions";
 import { loadModelsState } from "../../models/store";
 import { loadLanguage } from "../../settings/language";
 import {
@@ -15,7 +13,6 @@ import {
 import { ocrChannels } from "../store";
 
 initializeAiModules();
-registerOcrContributions(getContributionRegistry());
 
 interface HarnessParams {
   /** PNG bytes as Base64: what the OS capture boundary would return. */

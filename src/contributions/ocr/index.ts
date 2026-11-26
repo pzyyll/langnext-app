@@ -17,10 +17,9 @@ export const ocrChannelContributions = [
   googleCloudOcrChannel,
 ] as const;
 
-/** Registers every OCR channel the registry does not have yet. */
+/** Registers every OCR channel; a duplicate id stops assembly. */
 export function registerOcrContributions(registry: ContributionRegistry): void {
   for (const contribution of ocrChannelContributions) {
-    if (registry.findCapability("ocr", contribution.id) !== null) continue;
     registry.registerCapability(contribution as unknown as ErasedChannel);
   }
 }

@@ -120,6 +120,8 @@ export interface ChannelAudioHost {
 
 /** Host-owned controls a contribution's Settings component may use. */
 export interface ChannelSettingsHost {
+  /** Reports whether a sample preview holds playback; the host locks editing and Save. */
+  onPreviewBusyChange?: (busy: boolean) => void;
   modelChoices?: () => readonly ModelChoiceOption[];
   resolveModelBinding?: (modelId: string, purpose: ModelPurpose) => ModelBindingStatus;
   onManageModels?: () => void;
@@ -130,7 +132,10 @@ export interface ChannelSettingsHost {
 
 /** Controlled values a contribution's Settings component renders and reports. */
 export interface ChannelSettingsProps<C = unknown> {
+  /** The draft the user is editing. */
   binding: ChannelBinding<C>;
+  /** The saved binding, for rules that compare a draft with what is stored. */
+  savedBinding: ChannelBinding<C>;
   compact: boolean;
   disabled: boolean;
   savedCredential: boolean;
@@ -144,6 +149,16 @@ export interface ChannelSettingsProps<C = unknown> {
 
 /** Resolvers a list summary may use without importing feature state. */
 export interface ChannelDescribeHost {
+  resolveModelBinding?: (modelId: string, purpose: ModelPurpose) => ModelBindingStatus;
+}
+
+/** Values one Save-availability check sees before the host writes anything. */
+export interface ChannelSaveDraft<C = unknown> {
+  config: C;
+  credentialDraft: CredentialRecord;
+  savedBinding: ChannelBinding<C>;
+  /** Whether the saved credential record can be read; false when there is no saved reference. */
+  credentialReadable: boolean;
   resolveModelBinding?: (modelId: string, purpose: ModelPurpose) => ModelBindingStatus;
 }
 
@@ -184,6 +199,8 @@ export interface CapabilityChannelContribution<
   configurable: boolean;
   config: ConfigSchema<C>;
   credential: readonly CredentialField[] | null;
+  /** Existing recovery message for an unreadable saved credential; the host renders it once. */
+  credentialUnreadableKey?: string;
   describe(binding: ChannelBinding<C>, host?: ChannelDescribeHost): string;
   signature?(binding: ChannelBinding<C>): string;
   validate?(draft: {
@@ -191,6 +208,8 @@ export interface CapabilityChannelContribution<
     credentialDraft: CredentialRecord;
     savedCredential: boolean;
   }): ValidationResult;
+  /** Whether the current draft may be submitted; the host disables Save and guards the write. */
+  saveAvailable?(draft: ChannelSaveDraft<C>): boolean;
   prepare?(binding: ChannelBinding<C>, input: In): PrepareResult<In>;
   readiness(binding: ChannelBinding<C>, host: HostServices): Promise<Readiness>;
   execute(binding: ChannelBinding<C>, input: In, host: HostServices): Promise<Out>;

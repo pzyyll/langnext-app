@@ -2,8 +2,11 @@ import type { HistoryResult, HistorySnapshot } from "langnext-native";
 import type { WindowRef, WindowState } from "nsh/desktop";
 import { t } from "nsh/i18n";
 import { expect, open, test, type StubRequest, type StubResponse } from "nsh/test";
+import { GOOGLE_DETECTION_URL } from "../contributions/detect/vendor/google-free";
 import { GOOGLE_CLOUD_TTS_URL } from "../contributions/tts/vendor/google-cloud";
 import { DEFAULT_GOOGLE_VOICE_PREFERENCES } from "../contributions/tts/vendor/google-preferences";
+import { LANGUAGE_DETECTION_PREFERENCES_STORAGE_KEY } from "../features/language-detection/preferences";
+import { DETECT_COLLECTION_STORAGE_KEY } from "../features/language-detection/store";
 import { makeChannel, makeModel, makeSeedStorage } from "../features/models/__tests__/fixtures";
 import { OCR_CHANNELS_STORAGE_KEY, OCR_CREDENTIAL_NAMESPACE } from "../features/ocr/store";
 import { PRESETS_STORAGE_KEY } from "../features/presets/store";
@@ -4056,3 +4059,218 @@ test("quick anki: a duplicate write is not marked added", async () => {
   expect(app.shows("text:Added to Anki")).toBe(false);
   expect(app.texts()).toContain("Alpha");
 });
+
+/** Baidu first with a readable saved pair, AI Vision second and eligible, for the desktop fallback case. */
+function failingBaiduOcrSeed(): Record<string, string> {
+  return baiduOcrSeed({
+    [OCR_CHANNELS_STORAGE_KEY]: JSON.stringify({
+      version: 1,
+      order: ["baidu", "ai"],
+      channels: {
+        baidu: {
+          enabled: true,
+          configured: true,
+          config: { operation: "accurate" },
+          credentialRef: BAIDU_REF,
+        },
+        ai: {
+          enabled: true,
+          configured: true,
+          config: { modelId: "m-vision" },
+          credentialRef: null,
+        },
+      },
+    }),
+  });
+}
+
+/** The Baidu upload rejects an expired token; the AI route answers with the same screen text. */
+function failingBaiduOcrRoutes(): Record<string, StubResponse> {
+  return {
+    ...baiduOcrRoutes(),
+    [BAIDU_OCR_URL]: { status: 401, body: { error: "invalid_access_token" } },
+    ...ocrRoutes(JSON.stringify({ text: OCR_TEXT })),
+  };
+}
+
+test("capability desktop: a failed Baidu OCR falls back to AI Vision and delivers the text", async () => {
+  const app = await open(HARNESS_ENTRY, {
+    ...viewport,
+    storage: failingBaiduOcrSeed(),
+    network: failingBaiduOcrRoutes(),
+  });
+
+  await app.press("id:harness-tray-quick-translate");
+  await app.waitFor("id:quick-translate-source");
+  await app.press("id:quick-translate-pin");
+  await app.type("id:quick-translate-source", "old draft");
+  await app.press(OCR_BUTTON);
+  await app.waitUntil(() => hasQuickSource(app, OCR_TEXT), { timeout: 20_000 });
+  await app.waitUntil(
+    () => app.requests().some((request) => request.url.includes("api.openai.com")),
+    { timeout: 20_000 },
+  );
+
+  const used = app
+    .requests()
+    .filter(
+      (request) =>
+        request.url.includes("aip.baidubce.com") ||
+        request.url.includes("vision.example.com") ||
+        request.url.includes("api.openai.com"),
+    );
+  expect(used.map((request) => request.url)).toEqual([
+    "https://aip.baidubce.com/oauth/2.0/token",
+    "https://aip.baidubce.com/rest/2.0/ocr/v1/accurate?access_token=fixture-token",
+    "https://vision.example.com/v1/responses",
+    "https://api.openai.com/v1/chat/completions",
+  ]);
+  const upload = used[1]!.body ?? "";
+  expect(upload.includes("synthetic-api-key")).toBe(false);
+  expect(upload.includes("synthetic-secret-key")).toBe(false);
+  const translation = used[3]!.body ?? "";
+  expect(JSON.parse(translation).messages[1].content).toBe(OCR_TEXT);
+  expect(translation.includes("synthetic-api-key")).toBe(false);
+  await app.waitFor("text:翻译结果", { timeout: 20_000 });
+}, 90_000);
+
+const DESKTOP_DETECTION_SAMPLE = "Bonjour le monde";
+const DESKTOP_DETECTION_URL = "POST " + GOOGLE_DETECTION_URL;
+const DESKTOP_TRANSLATED_TEXT = "Bonjour le monde, traduit";
+
+test("capability desktop: Automatic language detection uses the saved detector and delivers the translation", async () => {
+  const app = await open(HARNESS_ENTRY, {
+    ...viewport,
+    storage: {
+      ...makeSeedStorage({
+        channels: [makeChannel({ adapterId: "openai-compatible", enabled: true })],
+        models: [makeModel({ enabled: true })],
+        credentials: { "ch-1": "sk-test" },
+      }),
+      [PRESETS_STORAGE_KEY]: JSON.stringify({ version: 1, items: [quickPreset] }),
+      "settings.language": "en",
+      [QUICK_TRANSLATE_PREFERENCES_KEY]: popupPreferences({
+        sourceLanguage: "auto",
+        targetLanguage: "auto",
+        cards: [{ id: "card-1", presetId: quickPreset.id, templateId: null, collapsed: false }],
+      }),
+    },
+    network: {
+      [DESKTOP_DETECTION_URL]: { status: 200, body: [[DESKTOP_DETECTION_SAMPLE, "fr"]] },
+      "POST https://api.openai.com/v1/chat/completions": {
+        status: 200,
+        body: { choices: [{ message: { content: DESKTOP_TRANSLATED_TEXT } }] },
+      },
+    },
+  });
+
+  // The app-level harness does not load the detection stores, so add the free Google detector
+  // and save the Automatic-target preferences through Settings before opening the popup.
+  await app.press("id:nav-settings");
+  await app.press("id:settings-nav-language-detection");
+  await app.waitFor("id:settings-detection-add");
+  await app.press("id:settings-detection-add");
+  await app.waitFor("id:settings-detection-option-google");
+  await app.press("id:settings-detection-option-google");
+  await app.waitFor("id:settings-detection-row-google");
+  await app.press("id:settings-detection-native-language");
+  await app.waitFor(`role:option[${t("presets.languages.zh")}]`);
+  await app.press(`role:option[${t("presets.languages.zh")}]`);
+  await app.press("id:settings-detection-preferred-language");
+  await app.waitFor(`role:option[${t("presets.languages.en")}]`);
+  await app.press(`role:option[${t("presets.languages.en")}]`);
+  await app.waitUntil(() => {
+    const record = app.storage()[DETECT_COLLECTION_STORAGE_KEY];
+    if (record === undefined) return false;
+    const saved = JSON.parse(record) as {
+      order: string[];
+      channels: Record<string, { enabled: boolean }>;
+    };
+    return saved.order[0] === "google" && saved.channels.google?.enabled === true;
+  });
+  await app.waitUntil(() => {
+    const saved = JSON.parse(app.storage()[LANGUAGE_DETECTION_PREFERENCES_STORAGE_KEY] ?? "{}");
+    return saved.nativeLanguage === "zh" && saved.preferredTranslationLanguage === "en";
+  });
+
+  await app.press("id:harness-tray-quick-translate");
+  await app.waitFor("id:quick-translate-source");
+  await app.type("id:quick-translate-source", DESKTOP_DETECTION_SAMPLE);
+  await app.keyboard.press("enter");
+
+  await app.waitUntil(
+    () => app.requests().some((request) => request.url === GOOGLE_DETECTION_URL),
+    { timeout: 20_000 },
+  );
+  const detection = app.requests().filter((request) => request.url === GOOGLE_DETECTION_URL);
+  expect(detection).toHaveLength(1);
+  expect(detection[0]!.method).toBe("POST");
+  expect(detection[0]!.body).toBe(`q=${encodeURIComponent(DESKTOP_DETECTION_SAMPLE)}`);
+
+  const detectedLabel = t("quickTranslate.autoDetectDetected", {
+    language: t("presets.languages.fr"),
+  });
+  await app.waitFor(`id:quick-translate-source-language >> text:${detectedLabel}`, {
+    timeout: 20_000,
+  });
+
+  const translations = app
+    .requests()
+    .filter((request) => request.url === "https://api.openai.com/v1/chat/completions");
+  expect(translations).toHaveLength(1);
+  const prompt = JSON.parse(translations[0]!.body!);
+  expect(prompt.messages[0].content).toBe(
+    `Translate from ${t("presets.languages.fr")} to ${t("presets.languages.zh")}.`,
+  );
+  expect(prompt.messages[1].content).toBe(DESKTOP_DETECTION_SAMPLE);
+  await app.waitFor(`text:${DESKTOP_TRANSLATED_TEXT}`, { timeout: 20_000 });
+}, 90_000);
+
+test("capability desktop: Quick TTS holds the request until the window closes from its controls", async () => {
+  const app = await open(HARNESS_ENTRY, {
+    ...viewport,
+    storage: ttsWindowStorage(),
+    network: {
+      [QUICK_TTS_URL]: { status: 200, delay: 60_000, body: {} },
+    },
+  });
+
+  await app.press("id:harness-tray-quick-translate");
+  await app.waitFor("id:quick-translate-source");
+  await app.type("id:quick-translate-source", "Hello");
+  await app.press("id:quick-translate-speak-source");
+
+  await app.waitUntil(
+    () => app.requests().some((request) => request.url === GOOGLE_CLOUD_TTS_URL),
+    { timeout: 20_000 },
+  );
+  const speech = app.requests().filter((request) => request.url === GOOGLE_CLOUD_TTS_URL);
+  expect(speech).toHaveLength(1);
+  expect(speech[0]!.method).toBe("POST");
+  expect(speech[0]!.headers?.["x-goog-api-key"]).toBe("tts-key");
+  expect(JSON.parse(speech[0]!.body!)).toEqual({
+    input: { text: "Hello" },
+    voice: { languageCode: "en-US", name: "en-US-Standard-C" },
+    audioConfig: { audioEncoding: "MP3" },
+  });
+
+  // While the route holds the response, the source speak control offers Cancel.
+  await app.waitUntil(
+    () => app.accessibility("id:quick-translate-speak-source")?.label === t("common.cancel"),
+    { timeout: 20_000 },
+  );
+  expect(app.texts()).not.toContain(t("settings.tts.stop"));
+
+  // Close the popup with its own Escape handling, never the frameless window close button.
+  await app.keyboard.press("escape");
+  await app.waitUntil(() => app.window("quick-translate").state()?.visible !== true, {
+    timeout: 20_000,
+  });
+  expect(app.texts()).not.toContain(t("settings.tts.stop"));
+
+  // Reopening sends no new synthesis and starts no playback.
+  await app.press("id:harness-tray-quick-translate");
+  await app.waitFor("id:quick-translate-source");
+  expect(app.texts()).not.toContain(t("settings.tts.stop"));
+  expect(app.requests()).toHaveLength(1);
+}, 90_000);

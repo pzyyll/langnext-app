@@ -1,6 +1,6 @@
 // ABOUTME: The OCR channel that reads screenshots with Google Cloud Vision and one API key.
 // ABOUTME: The key stays in the vault, so the stored config carries no fields.
-import { Text, View } from "nsh";
+import { View } from "nsh";
 import { t } from "nsh/i18n";
 import googleCloudIcon from "../../../../assets/icons/google-cloud.svg";
 import { Input } from "../../../components/ui/input";
@@ -41,16 +41,6 @@ function OcrGoogleCloudSettings(props: ChannelSettingsProps<OcrGoogleCloudConfig
           onChange={(value) => props.onCredentialChange("apiKey", value)}
         />
       </FormField>
-
-      <If when={props.credentialState === "missing"}>
-        <Text
-          testID="settings-ocr-google-key-missing"
-          role="alert"
-          class="text-sm text-destructive"
-        >
-          {t("settings.ocr.googleKeyUnreadable")}
-        </Text>
-      </If>
     </View>
   );
 }
@@ -72,12 +62,15 @@ export const googleCloudOcrChannel: CapabilityChannelContribution<
     defaults: () => ({}),
   },
   credential: [{ key: "apiKey", labelKey: "settings.ocr.apiKey", masked: true }],
+  credentialUnreadableKey: "settings.ocr.googleKeyUnreadable",
   describe: () => t("settings.ocr.configured"),
   validate: ({ credentialDraft, savedCredential }) => {
     const apiKey = trimmedDraft(credentialDraft.apiKey);
     if (apiKey.length > 0 || savedCredential) return { ok: true };
     return { ok: false, key: "settings.ocr.error.googleCloudKeyRequired" };
   },
+  saveAvailable: ({ credentialDraft, credentialReadable }) =>
+    trimmedDraft(credentialDraft.apiKey).length > 0 || credentialReadable,
   readiness: async (_binding, host) =>
     credentialValue(host.credential, "apiKey").length > 0
       ? { ready: true }

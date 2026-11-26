@@ -1,16 +1,11 @@
 // ABOUTME: Google Cloud Translation v2 detection channel with one stored API key.
 // ABOUTME: Execution reads the host's credential record once and maps Google's code onto a supported ID.
 import { t } from "nsh/i18n";
-import { Text } from "nsh";
 import googleCloudMark from "../../../../assets/icons/google-cloud.svg";
 import { Input } from "../../../components/ui/input";
 import { FormField } from "../../../modules/ai/ui/form-field";
 import { ProviderProtocolError } from "../../../modules/ai/contracts/errors";
-import {
-  createGoogleCloudTranslateClient,
-  type GoogleCloudDetectInput,
-  type GoogleCloudDetectOptions,
-} from "../../../modules/google-cloud-translation/client";
+import { createGoogleCloudTranslateClient } from "../../../modules/google-cloud-translation/client";
 import type {
   CapabilityChannelContribution,
   ChannelSettingsProps,
@@ -31,17 +26,6 @@ export const googleCloudDetectionConfig: ConfigSchema<GoogleCloudDetectionConfig
   defaults: () => ({}),
 };
 
-let googleCloudClient: ReturnType<typeof createGoogleCloudTranslateClient> | null = null;
-
-/** Production Google Cloud transport, built once on first use. */
-function googleCloudDetectClient(): (
-  input: GoogleCloudDetectInput,
-  options?: GoogleCloudDetectOptions,
-) => Promise<string> {
-  googleCloudClient ??= createGoogleCloudTranslateClient();
-  return googleCloudClient.detect;
-}
-
 /** Controlled API-key field: the host owns the draft, the vault write, and the save action. */
 function GoogleCloudDetectionSettings(props: ChannelSettingsProps<GoogleCloudDetectionConfig>) {
   const apiKey = () => props.credentialDraft["apiKey"] ?? "";
@@ -58,15 +42,6 @@ function GoogleCloudDetectionSettings(props: ChannelSettingsProps<GoogleCloudDet
         accessibilityLabel={t("settings.languageDetection.apiKey")}
         onChange={(value) => props.onCredentialChange("apiKey", value)}
       />
-      <If when={props.credentialState === "missing"}>
-        <Text
-          testID="settings-detection-google-cloud-key-missing"
-          role="alert"
-          class="text-sm text-destructive"
-        >
-          {t("settings.languageDetection.googleCloudKeyUnreadable")}
-        </Text>
-      </If>
     </FormField>
   );
 }
@@ -84,6 +59,7 @@ export const googleCloudDetectionContribution: CapabilityChannelContribution<
   configurable: true,
   config: googleCloudDetectionConfig,
   credential: [{ key: "apiKey", labelKey: "settings.languageDetection.apiKey", masked: true }],
+  credentialUnreadableKey: "settings.languageDetection.googleCloudKeyUnreadable",
   describe: (binding) =>
     binding.credentialRef === null
       ? t("settings.languageDetection.notConfigured")
@@ -98,6 +74,8 @@ export const googleCloudDetectionContribution: CapabilityChannelContribution<
           field: "apiKey",
         };
   },
+  saveAvailable: ({ credentialDraft, credentialReadable }) =>
+    (credentialDraft["apiKey"] ?? "").trim().length > 0 || credentialReadable,
   readiness: async (_binding, host) =>
     (host.credential?.["apiKey"] ?? "").trim().length > 0
       ? { ready: true }
@@ -107,10 +85,10 @@ export const googleCloudDetectionContribution: CapabilityChannelContribution<
     if (apiKey.length === 0) throw new DetectionChannelError("failed");
     if (input.signal?.aborted) throw new DetectionChannelError("cancelled");
 
-    const runDetect = input.googleCloudDetect ?? googleCloudDetectClient();
+    const client = createGoogleCloudTranslateClient({ fetchImpl: host.fetchImpl });
     let code: string;
     try {
-      code = await runDetect(
+      code = await client.detect(
         { apiKey, text: input.sample },
         { signal: input.signal, timeoutMs: input.timeoutMs },
       );

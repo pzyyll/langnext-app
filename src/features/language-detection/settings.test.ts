@@ -225,7 +225,7 @@ test("detection settings: reorders detectors, clamps targets, and keeps same-slo
   await channels.load();
   await channels.add("google");
   await channels.save("ai", { modelId: "m-1" }, { mode: "keep" });
-  await channels.save("google-cloud", {}, { mode: "keep" });
+  await channels.save("google-cloud", {}, { mode: "replace", value: { apiKey: "cloud-key" } });
 
   expect(channels.order()).toEqual(["google", "ai", "google-cloud"]);
   const writes = mem.setCalls();
@@ -474,4 +474,43 @@ test("detection settings: reports a collection read failure and keeps detection 
     nativeLanguage: null,
     preferredTranslationLanguage: null,
   });
+});
+test("pre-acceptance: a failed preferences load blocks changes", async () => {
+  const malformed = JSON.stringify({
+    version: 1,
+    nativeLanguage: "xx",
+    preferredTranslationLanguage: null,
+  });
+  const { mem, preferences } = createStores({
+    [LANGUAGE_DETECTION_PREFERENCES_STORAGE_KEY]: malformed,
+  });
+  await preferences.load();
+
+  const loadError = preferences.loadError();
+  expect(loadError).toMatchObject({ key: "storage_malformed" });
+  const before = mem.backing[LANGUAGE_DETECTION_PREFERENCES_STORAGE_KEY];
+  expect(before).toBe(malformed);
+
+  const blocked = await preferences.setPreference("nativeLanguage", "zh");
+  expect(blocked).toMatchObject({
+    ok: false,
+    key: "storage_malformed",
+    message: loadError!.message,
+  });
+  expect(mem.backing[LANGUAGE_DETECTION_PREFERENCES_STORAGE_KEY]).toBe(before);
+  expect(mem.setCalls()).toBe(0);
+  expect(preferences.preferences()).toEqual({
+    nativeLanguage: null,
+    preferredTranslationLanguage: null,
+  });
+
+  mem.backing[LANGUAGE_DETECTION_PREFERENCES_STORAGE_KEY] = JSON.stringify({
+    version: 1,
+    nativeLanguage: null,
+    preferredTranslationLanguage: null,
+  });
+  await preferences.load();
+  expect(preferences.loadError()).toBeNull();
+  expect(await preferences.setPreference("nativeLanguage", "zh")).toEqual({ ok: true });
+  expect(mem.setCalls()).toBe(1);
 });

@@ -236,9 +236,9 @@ test("capability section: a non-configurable channel stays static in the list", 
   });
   await app.waitFor("id:settings-test-row-free");
   expect(app.shows("id:settings-test-open-free")).toBe(false);
-
-  await app.press("id:settings-test-channel-free");
-  await app.waitUntil(() => app.shows("id:settings-test-detail-card") === false);
+  expect(app.shows("id:settings-test-channel-free")).toBe(false);
+  expect(app.texts()).toContain("Google Cloud Vision");
+  expect(app.shows("id:settings-test-remove-free")).toBe(true);
   expect(app.shows("id:settings-test-detail-card")).toBe(false);
 });
 
@@ -260,6 +260,15 @@ test("capability section: adding a non-configurable channel keeps the list", asy
   await app.waitFor("id:settings-test-empty-channel-free");
   await app.press("id:settings-test-empty-channel-free");
   await app.waitFor("id:settings-test-row-free");
+  expect(app.shows("id:settings-test-detail-card")).toBe(false);
+  expect(storedRecord(app).channels.free).toMatchObject({ enabled: true, configured: true });
+
+  // The static row has no pressable identity; focus lands on its Remove control.
+  await app.keyboard.press("enter");
+  await app.waitFor("id:settings-test-remove-dialog");
+  await app.press("id:settings-test-remove-cancel");
+  await app.waitUntil(() => !app.shows("id:settings-test-remove-dialog"));
+  expect(app.shows("id:settings-test-row-free")).toBe(true);
   expect(app.shows("id:settings-test-detail-card")).toBe(false);
   expect(storedRecord(app).channels.free).toMatchObject({ enabled: true, configured: true });
 });

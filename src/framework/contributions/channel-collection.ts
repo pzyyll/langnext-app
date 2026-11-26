@@ -218,8 +218,22 @@ export function createChannelCollection(options: ChannelCollectionOptions): Chan
     };
   }
 
-  function enqueueWrite<T>(task: () => Promise<T>): Promise<T> {
-    const queued = writeQueue.then(task);
+  /**
+   * Serializes writes and refuses every one while a load error is outstanding,
+   * so a malformed record stays byte-for-byte intact until a successful reload.
+   */
+  function enqueueWrite<T extends Result>(task: () => Promise<T>): Promise<T> {
+    const queued = writeQueue.then(() => {
+      const outstanding = errorSignal();
+      if (outstanding !== null) {
+        return {
+          ok: false,
+          key: outstanding.key,
+          message: outstanding.message,
+        } as T;
+      }
+      return task();
+    });
     writeQueue = queued.catch(() => undefined);
     return queued;
   }
@@ -357,6 +371,11 @@ export function createChannelCollection(options: ChannelCollectionOptions): Chan
         let credentialRef: string | null;
         let wroteCredential = false;
         if (credential.mode === "keep") {
+          const needsReadable =
+            policy.requireReadableCredentialOnEnable === true && contribution.credential !== null;
+          if (needsReadable && !(await readableCredential(previousRef))) {
+            return failure("credential_unreadable");
+          }
           credentialRef = previousRef;
         } else if (credential.mode === "clear") {
           credentialRef = null;

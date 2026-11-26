@@ -1,9 +1,5 @@
 // ABOUTME: Shared language-detection request, answer, and failure types for detect channels.
 // ABOUTME: One bounded sample goes in; a channel answers one literal supported language ID or throws.
-import type {
-  GoogleCloudDetectInput,
-  GoogleCloudDetectOptions,
-} from "../../modules/google-cloud-translation/client";
 import { isLanguageId, LANGUAGE_IDS, type LanguageId } from "../../framework/languages";
 
 /** Sentinel answer a model returns when it cannot name a supported language. */
@@ -33,11 +29,6 @@ export interface DetectionRequest {
   sample: string;
   signal?: AbortSignal;
   timeoutMs?: number;
-  /** Isolated-test seam for the Google Cloud v2 transport; the client is built when absent. */
-  googleCloudDetect?: (
-    input: GoogleCloudDetectInput,
-    options?: GoogleCloudDetectOptions,
-  ) => Promise<string>;
 }
 
 /** Thrown by a channel when one attempt cannot answer with a supported language. */

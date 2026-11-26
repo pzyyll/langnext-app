@@ -6,10 +6,6 @@ import {
   type AiClientCallOptions,
   type AiClientInput,
 } from "../../modules/ai/runtime/client";
-import type {
-  GoogleCloudDetectInput,
-  GoogleCloudDetectOptions,
-} from "../../modules/google-cloud-translation/client";
 import type { FetchLike } from "../../services/http";
 import { createLogger } from "../../services/log";
 import {
@@ -30,24 +26,10 @@ import {
   isDetectionChannelFailure,
   type DetectionChannelFailure,
   type DetectionRequest,
-  type GoogleDetectionFetch,
 } from "../../contributions/detect";
 import { resolveSavedModelRequest, type SavedModelRequestResolution } from "../models/store";
 import { detectChannels } from "./store";
 import type { EnabledDetectionChannel } from "./preferences";
-
-export {
-  DETECTION_SYSTEM_MESSAGE,
-  GOOGLE_DETECTION_URL,
-  normalizeGoogleLanguageCode,
-  parseDetectionAnswer,
-  readGoogleLanguageCode,
-} from "../../contributions/detect";
-export type {
-  DetectionAnswer,
-  GoogleDetectionFetch,
-  GoogleDetectionResponseLike,
-} from "../../contributions/detect";
 
 const log = createLogger("language-detection/detect");
 
@@ -76,14 +58,10 @@ export interface DetectLanguageOptions {
     request: TextGenerationRequest,
     options?: AiClientCallOptions,
   ) => Promise<string>;
-  googleFetch?: GoogleDetectionFetch;
-  /** Reads a Google Cloud detector's stored key; defaults to the vault of the detection collection. */
-  readGoogleCloudCredential?: (credentialRef: string) => Promise<string | null>;
-  /** Google Cloud v2 detect seam for isolated tests; the production client is built on demand. */
-  googleCloudDetect?: (
-    input: GoogleCloudDetectInput,
-    options?: GoogleCloudDetectOptions,
-  ) => Promise<string>;
+  /** Transport seam for hosted detectors; defaults to the app's logging HTTP wrapper. */
+  fetchImpl?: FetchLike;
+  /** Reads one channel's stored credential record; defaults to the vault of the detection collection. */
+  readCredential?: (credentialRef: string) => Promise<CredentialRecord | null>;
 }
 
 type DetectionContribution = CapabilityChannelContribution<unknown, DetectionRequest, LanguageId>;
@@ -165,19 +143,6 @@ function detectionModels(
   };
 }
 
-/** Adapts the legacy Google fetch seam onto the shared fetch boundary. */
-function detectionFetch(options: DetectLanguageOptions): FetchLike | undefined {
-  const googleFetch = options.googleFetch;
-  if (googleFetch === undefined) return undefined;
-  return (url, init) =>
-    googleFetch(url, {
-      method: "POST",
-      headers: init.headers,
-      body: init.body ?? "",
-      signal: init.signal,
-    });
-}
-
 /** Reads one channel's credential record for this attempt; never logs a value. */
 async function detectionCredential(
   contribution: DetectionContribution,
@@ -189,11 +154,9 @@ async function detectionCredential(
   const credentialRef = binding.credentialRef;
   if (credentialRef === null) return null;
 
-  if (options.readGoogleCloudCredential !== undefined) {
-    const field = fields[0]!.key;
+  if (options.readCredential !== undefined) {
     try {
-      const value = await options.readGoogleCloudCredential(credentialRef);
-      return value === null ? null : { [field]: value };
+      return await options.readCredential(credentialRef);
     } catch {
       return null;
     }
@@ -229,7 +192,7 @@ async function runDetector(
   const host: HostServices = {
     credential,
     models,
-    fetchImpl: detectionFetch(options),
+    fetchImpl: options.fetchImpl,
     log,
   };
 
@@ -295,7 +258,6 @@ export async function detectLanguage(
     sample,
     signal: options.signal,
     timeoutMs: options.timeoutMs,
-    googleCloudDetect: options.googleCloudDetect,
   };
 
   const outcome = await runChain(

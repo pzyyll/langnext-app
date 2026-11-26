@@ -22,12 +22,13 @@ function languageItems(): SelectItem[] {
 /** Native and preferred translation language used by an Automatic target. */
 export function DetectionPreferencesCard(props: { compact: boolean }) {
   const error = signal<string | null>(null);
+  const loadError = () => languageDetectionPreferences.loadError();
 
   const preferenceValue = (field: PreferenceField): string =>
     languageDetectionPreferences.preferences()[field] ?? UNSET_LANGUAGE_CHOICE;
 
   const selectPreference = async (field: PreferenceField, value: string | null) => {
-    if (value === null) return;
+    if (value === null || loadError() !== null) return;
     if (value !== UNSET_LANGUAGE_CHOICE && !isLanguageId(value)) return;
     error.set(null);
     const result = await languageDetectionPreferences.setPreference(
@@ -55,6 +56,7 @@ export function DetectionPreferencesCard(props: { compact: boolean }) {
             testID="settings-detection-native-language"
             items={languageItems()}
             value={preferenceValue("nativeLanguage")}
+            disabled={loadError() !== null}
             accessibilityLabel={t("settings.languageDetection.nativeLanguage")}
             onChange={(value) => void selectPreference("nativeLanguage", value)}
           />
@@ -69,13 +71,23 @@ export function DetectionPreferencesCard(props: { compact: boolean }) {
             testID="settings-detection-preferred-language"
             items={languageItems()}
             value={preferenceValue("preferredTranslationLanguage")}
+            disabled={loadError() !== null}
             accessibilityLabel={t("settings.languageDetection.preferredTranslation")}
             onChange={(value) => void selectPreference("preferredTranslationLanguage", value)}
           />
         </FormField>
       </View>
 
-      <If when={error() !== null}>
+      <If when={loadError() !== null}>
+        <Text
+          testID="settings-detection-preferences-error"
+          role="alert"
+          class="text-sm text-destructive"
+        >
+          {loadError()!.message}
+        </Text>
+      </If>
+      <If when={loadError() === null && error() !== null}>
         <Text testID="settings-detection-error" role="alert" class="text-sm text-destructive">
           {error()}
         </Text>

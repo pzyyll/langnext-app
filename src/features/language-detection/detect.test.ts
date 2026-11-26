@@ -2,13 +2,9 @@ import { beforeEach, expect, test } from "nsh/test";
 import { ProviderProtocolError } from "../../modules/ai/contracts/errors";
 import type { TextGenerationRequest } from "../../modules/ai/contracts/protocol";
 import type { AiClientInput } from "../../modules/ai/runtime/client";
-import {
-  detectLanguage,
-  GOOGLE_DETECTION_URL,
-  type DetectLanguageOptions,
-  type GoogleDetectionFetch,
-} from "./detect";
-import { registerDetectContributions } from "../../contributions/detect";
+import { detectLanguage, type DetectLanguageOptions } from "./detect";
+import { GOOGLE_DETECTION_URL, registerDetectContributions } from "../../contributions/detect";
+import type { FetchLike } from "../../services/http";
 import { createContributionRegistry, setContributionRegistry } from "../../framework/contributions";
 import type { EnabledDetectionChannel } from "./preferences";
 
@@ -293,7 +289,7 @@ test("AI detection: treats a cancelled provider error as cancellation", async ()
   expect(h.requests).toHaveLength(1);
 });
 
-type GoogleInit = Parameters<GoogleDetectionFetch>[1];
+type GoogleInit = Parameters<FetchLike>[1];
 
 interface GoogleHarness {
   calls: { url: string; init: GoogleInit }[];
@@ -314,7 +310,7 @@ function googleHarness(
   return {
     calls,
     options: {
-      googleFetch: async (url, init) => {
+      fetchImpl: async (url, init) => {
         calls.push({ url, init });
         if (options.hang) {
           await new Promise((_resolve, reject) => {
@@ -332,6 +328,17 @@ function googleHarness(
         };
       },
     },
+  };
+}
+
+function routeFetch(routes: { google?: FetchLike; cloud?: FetchLike }): FetchLike {
+  return async (url, init) => {
+    if (url === GOOGLE_DETECTION_URL) {
+      if (routes.google === undefined) throw new Error("unexpected free Google request");
+      return routes.google(url, init);
+    }
+    if (routes.cloud === undefined) throw new Error("unexpected Google Cloud request");
+    return routes.cloud(url, init);
   };
 }
 
@@ -410,7 +417,7 @@ test("Google detection: maps a refusal page and an HTTP error to failed", async 
 
 test("Google detection: maps a network failure and a timeout to failed", async () => {
   const failing = googleHarness();
-  failing.options.googleFetch = async () => {
+  failing.options.fetchImpl = async () => {
     throw new Error("getaddrinfo ENOTFOUND");
   };
   expect(await detectLanguage("Texte", [GOOGLE_DETECTOR], failing.options)).toEqual({
@@ -474,8 +481,11 @@ function googleCloudHarness(
   options: {
     code?: string;
     credential?: string | null;
-    detectError?: Error;
     readError?: Error;
+    status?: number;
+    errorText?: string;
+    hang?: boolean;
+    beforeJson?: () => void;
   } = {},
 ): GoogleCloudHarness {
   const calls: { apiKey: string; text: string }[] = [];
@@ -484,15 +494,33 @@ function googleCloudHarness(
     calls,
     reads,
     options: {
-      readGoogleCloudCredential: async (credentialRef) => {
+      readCredential: async (credentialRef) => {
         reads.push(credentialRef);
         if (options.readError) throw options.readError;
-        return options.credential === undefined ? "cloud-key" : options.credential;
+        const key = options.credential === undefined ? "cloud-key" : options.credential;
+        return key === null ? null : { apiKey: key };
       },
-      googleCloudDetect: async (input) => {
-        calls.push({ apiKey: input.apiKey, text: input.text });
-        if (options.detectError) throw options.detectError;
-        return options.code ?? "fr";
+      fetchImpl: async (_url, init) => {
+        const request = JSON.parse(init.body ?? "null") as { q?: unknown[] };
+        calls.push({
+          apiKey: init.headers["x-goog-api-key"] ?? "",
+          text: String(request.q?.[0] ?? ""),
+        });
+        if (options.hang === true) {
+          await new Promise((_resolve, reject) => {
+            init.signal.addEventListener("abort", () => reject(new Error("aborted")));
+          });
+        }
+        const status = options.status ?? 200;
+        return {
+          ok: status < 400,
+          status,
+          json: async () => {
+            options.beforeJson?.();
+            return { data: { detections: [[{ language: options.code ?? "fr" }]] } };
+          },
+          text: async () => options.errorText ?? "",
+        };
       },
     },
   };
@@ -533,48 +561,63 @@ test("Google Cloud detection: reports unsupported_language for a language outsid
 
 test("Google Cloud detection: maps a transport failure and cancellation", async () => {
   const failing = googleCloudHarness({
-    detectError: new ProviderProtocolError("auth", "API key not valid", 403),
+    status: 403,
+    errorText: JSON.stringify({
+      error: {
+        message: "API key not valid",
+        status: "PERMISSION_DENIED",
+        errors: [{ reason: "keyInvalid" }],
+      },
+    }),
   });
   expect(await detectLanguage("Texte", [GOOGLE_CLOUD_DETECTOR], failing.options)).toEqual({
     ok: false,
     code: "failed",
   });
 
-  const aborted = googleCloudHarness({
-    detectError: new ProviderProtocolError("cancelled", "Cancelled"),
-  });
-  expect(await detectLanguage("Texte", [GOOGLE_CLOUD_DETECTOR], aborted.options)).toEqual({
-    ok: false,
-    code: "cancelled",
-  });
-
   const controller = new AbortController();
-  controller.abort();
-  const preAborted = googleCloudHarness();
+  const late = googleCloudHarness({ beforeJson: () => controller.abort() });
   expect(
     await detectLanguage("Texte", [GOOGLE_CLOUD_DETECTOR], {
-      ...preAborted.options,
+      ...late.options,
       signal: controller.signal,
     }),
   ).toEqual({ ok: false, code: "cancelled" });
-  expect(preAborted.reads).toHaveLength(0);
+
+  const preAborted = new AbortController();
+  preAborted.abort();
+  const untouched = googleCloudHarness();
+  expect(
+    await detectLanguage("Texte", [GOOGLE_CLOUD_DETECTOR], {
+      ...untouched.options,
+      signal: preAborted.signal,
+    }),
+  ).toEqual({ ok: false, code: "cancelled" });
+  expect(untouched.reads).toHaveLength(0);
 });
 
 test("detector chain: the free endpoint and Google Cloud back each other up", async () => {
   const cloud = googleCloudHarness({ code: "ja" });
   const brokenFree = googleHarness({ unreadable: true });
   const freeByCloud = await detectLanguage("Texte", [GOOGLE_DETECTOR, GOOGLE_CLOUD_DETECTOR], {
-    ...brokenFree.options,
     ...cloud.options,
+    fetchImpl: routeFetch({
+      google: brokenFree.options.fetchImpl,
+      cloud: cloud.options.fetchImpl,
+    }),
   });
   expect(freeByCloud).toEqual({ ok: true, language: "ja" });
   expect(brokenFree.calls).toHaveLength(1);
   expect(cloud.calls).toHaveLength(1);
 
   const free = googleHarness({ payload: [["Hello", "de"]] });
+  const brokenCloud = googleCloudHarness({ status: 500 });
   const cloudByFree = await detectLanguage("Texte", [GOOGLE_CLOUD_DETECTOR, GOOGLE_DETECTOR], {
-    ...googleCloudHarness({ detectError: new Error("socket hang up") }).options,
-    ...free.options,
+    ...brokenCloud.options,
+    fetchImpl: routeFetch({
+      google: free.options.fetchImpl,
+      cloud: brokenCloud.options.fetchImpl,
+    }),
   });
   expect(cloudByFree).toEqual({ ok: true, language: "de" });
   expect(free.calls).toHaveLength(1);

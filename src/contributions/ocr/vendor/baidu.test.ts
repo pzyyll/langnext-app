@@ -1,5 +1,6 @@
 import { expect, test } from "nsh/test";
 import type { FetchLike, HttpResponseLike } from "../../../services/http";
+import { logLevel, setLogLevel } from "../../../services/log";
 import { createBaiduOcrClient, type BaiduOcrOperation, type BaiduOcrRecognition } from "./baidu";
 
 interface RecordedRequest {
@@ -72,6 +73,34 @@ function streamResponse(value: unknown, status = 200): HttpResponseLike {
     status,
     body,
     json: async () => value,
+  };
+}
+
+/** A streamed JSON response whose content type makes the transport treat its body as text. */
+function streamJsonResponse(value: unknown, status = 200): HttpResponseLike {
+  return { ...streamResponse(value, status), headers: { get: () => "application/json" } };
+}
+
+type Level = "debug" | "info";
+
+interface Captured {
+  calls: unknown[][];
+  restore(): void;
+}
+
+/** Replaces one `console` method so a test reads what the transport logged. */
+function capture(level: Level): Captured {
+  const calls: unknown[][] = [];
+  const methods = console as unknown as Record<Level, (...data: unknown[]) => void>;
+  const original = methods[level];
+  methods[level] = (...data: unknown[]) => {
+    calls.push(data);
+  };
+  return {
+    calls,
+    restore: () => {
+      methods[level] = original;
+    },
   };
 }
 
@@ -149,6 +178,59 @@ test("baidu ocr: exchanges a token and reads accurate text", async () => {
   expect(Array.from(ocrForm.keys()).sort()).toEqual(["image", "language_type"]);
   expect(ocrForm.get("image")!.startsWith("data:")).toBe(false);
   if (/[+/=]/.test(image)) expect(ocr.body).not.toContain(image);
+});
+
+test("baidu ocr: token exchange does not log credentials", async () => {
+  const tokenEndpoint = "https://aip.baidubce.com/oauth/2.0/token";
+  const maskedOcrEndpoint = "https://aip.baidubce.com/rest/2.0/ocr/v1/accurate?access_token=***";
+  const previousLevel = logLevel();
+  setLogLevel("info");
+  const info = capture("info");
+  const debug = capture("debug");
+  const harness = createHarness((_request, index) => {
+    if (index === 0) return streamJsonResponse({ access_token: ACCESS_TOKEN });
+    return streamJsonResponse(recognizedText());
+  });
+
+  let result: BaiduOcrRecognition;
+  try {
+    result = await harness.client.recognize({
+      operation: "accurate",
+      credentials: { apiKey: API_KEY, secretKey: SECRET_KEY },
+      png: PNG,
+    });
+  } finally {
+    info.restore();
+    debug.restore();
+    setLogLevel(previousLevel);
+  }
+
+  expect(result).toEqual({ status: "recognized", text: "First line\n\u7b2c\u4e8c\u884c" });
+  expect(info.calls).toEqual([
+    [`[ocr/baidu] request POST ${tokenEndpoint}`],
+    [`[ocr/baidu] response 200 POST ${tokenEndpoint}`],
+    [`[ocr/baidu] request POST ${maskedOcrEndpoint}`],
+    [`[ocr/baidu] response 200 POST ${maskedOcrEndpoint}`],
+  ]);
+
+  const debugLines = debug.calls.map(([line]) => String(line));
+  expect(debugLines.filter((line) => line.includes(tokenEndpoint))).toEqual([]);
+  expect(
+    debugLines.some((line) => line.includes("request body") && line.includes(maskedOcrEndpoint)),
+  ).toBe(true);
+
+  const markers = [
+    API_KEY,
+    SECRET_KEY,
+    ACCESS_TOKEN,
+    encodeURIComponent(API_KEY),
+    encodeURIComponent(SECRET_KEY),
+    encodeURIComponent(ACCESS_TOKEN),
+  ];
+  const captured = [...info.calls, ...debug.calls].map(([line]) => String(line));
+  for (const marker of markers) {
+    expect(captured.some((line) => line.includes(marker))).toBe(false);
+  }
 });
 
 const MODES: readonly [BaiduOcrOperation, string][] = [

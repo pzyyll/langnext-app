@@ -278,3 +278,89 @@ test("channel collection: a malformed record fails the load without overwriting 
   expect(collection.order()).toEqual([]);
   expect(backing[STORAGE_KEY]).toBe(seed);
 });
+test("pre-acceptance: a failed collection load blocks writes", async () => {
+  const malformed = JSON.stringify({
+    version: 1,
+    order: ["alpha"],
+    channels: { alpha: { enabled: false } },
+  });
+  const { backing, collection } = makeCollection({ initial: { [STORAGE_KEY]: malformed } });
+  await collection.load();
+  const loadError = collection.loadError();
+  expect(loadError).toMatchObject({ key: "storage_malformed" });
+  const before = backing[STORAGE_KEY];
+
+  expect(await collection.add("beta")).toMatchObject({
+    ok: false,
+    key: "storage_malformed",
+    message: loadError!.message,
+  });
+  expect(
+    await collection.save("alpha", { mode: "basic" }, { mode: "replace", value: { apiKey: "k" } }),
+  ).toMatchObject({ ok: false, key: "storage_malformed" });
+  expect(await collection.setEnabled("alpha", true)).toMatchObject({
+    ok: false,
+    key: "storage_malformed",
+  });
+  expect(await collection.moveTo("alpha", 0)).toMatchObject({
+    ok: false,
+    key: "storage_malformed",
+  });
+  expect(await collection.remove("alpha")).toMatchObject({
+    ok: false,
+    key: "storage_malformed",
+  });
+  expect(backing[STORAGE_KEY]).toBe(before);
+  expect(Object.keys(backing).filter((key) => key.startsWith("secret.test."))).toEqual([]);
+
+  // A successful reload clears the error and lets writes through again.
+  backing[STORAGE_KEY] = JSON.stringify({
+    version: 1,
+    order: ["alpha"],
+    channels: {
+      alpha: { enabled: false, configured: true, config: { mode: "basic" }, credentialRef: null },
+    },
+  });
+  await collection.load();
+  expect(collection.loadError()).toBeNull();
+  expect(await collection.add("beta")).toEqual({ ok: true });
+});
+test("pre-acceptance: keep requires a readable saved credential", async () => {
+  const seed = JSON.stringify({
+    version: 1,
+    order: ["alpha"],
+    channels: {
+      alpha: {
+        enabled: false,
+        configured: true,
+        config: { mode: "basic" },
+        credentialRef: "ref-missing",
+      },
+    },
+  });
+  const { backing, collection } = makeCollection({ initial: { [STORAGE_KEY]: seed } });
+  await collection.load();
+  const before = backing[STORAGE_KEY];
+
+  const blocked = await collection.save("alpha", { mode: "basic" }, { mode: "keep" });
+  expect(blocked).toMatchObject({ ok: false, key: "credential_unreadable" });
+  expect(backing[STORAGE_KEY]).toBe(before);
+  expect(Object.keys(backing).filter((key) => key.startsWith("secret.test."))).toEqual([]);
+
+  expect(
+    await collection.save(
+      "alpha",
+      { mode: "accurate" },
+      { mode: "replace", value: { apiKey: "k-1" } },
+    ),
+  ).toEqual({ ok: true });
+  const record = storedRecord(backing);
+  expect(record.channels.alpha.config).toEqual({ mode: "accurate" });
+  const ref = record.channels.alpha.credentialRef!;
+  expect(backing[`secret.test.${ref}`]).toBe(JSON.stringify({ apiKey: "k-1" }));
+
+  // A readable record can be kept on a later save.
+  expect(await collection.save("alpha", { mode: "basic" }, { mode: "keep" })).toEqual({
+    ok: true,
+  });
+});

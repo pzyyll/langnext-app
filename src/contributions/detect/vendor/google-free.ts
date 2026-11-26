@@ -89,7 +89,7 @@ export async function requestGoogleFreeDetection(
   sample: string,
   options: GoogleFreeDetectionOptions = {},
 ): Promise<GoogleFreeDetectionOutcome> {
-  const runFetch: FetchLike = options.fetchImpl ?? createHttpFetch({ scope: "language-detection" });
+  const runFetch = createHttpFetch({ fetchImpl: options.fetchImpl, scope: "language-detection" });
   const external = options.signal;
   const controller = new AbortController();
   const onExternalAbort = () => controller.abort();

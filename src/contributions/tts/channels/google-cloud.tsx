@@ -747,6 +747,11 @@ export const googleCloudTtsContribution: CapabilityChannelContribution<
     }
     return { ok: true };
   },
+  saveAvailable: ({ config, credentialDraft, savedBinding, credentialReadable }) =>
+    (credentialDraft.apiKey ?? "").trim().length > 0 ||
+    (credentialReadable &&
+      googlePreferencesSignature(config.preferences) !==
+        googlePreferencesSignature(savedBinding.config.preferences)),
   prepare: (binding, input) => {
     const preferences = binding.config.preferences;
     const resolved = resolveGoogleVoice(input.language, preferences);
@@ -813,6 +818,7 @@ function GoogleCloudTtsSettings(props: ChannelSettingsProps<GoogleCloudTtsConfig
   const controlsLocked = () => props.disabled;
   const apiKeyDraft = () => props.credentialDraft.apiKey ?? "";
   const draftKeyPresent = () => apiKeyDraft().trim().length > 0;
+  const savedKeyReadable = () => props.savedCredential && props.credentialState === "readable";
   const problem = () => googleVoiceProblem(preferences(), sampleLanguage());
   const previewBinding = (): ChannelBinding<GoogleCloudTtsConfig> => ({
     enabled: props.binding.enabled,
@@ -864,10 +870,12 @@ function GoogleCloudTtsSettings(props: ChannelSettingsProps<GoogleCloudTtsConfig
         binding={previewBinding()}
         host={props.host}
         language={() => sampleLanguage()}
-        disabled={() => draftKeyPresent() || problem() !== null}
-        note={() =>
-          draftKeyPresent() ? t("settings.tts.previewUnsaved") : (problem() ?? undefined)
-        }
+        disabled={() => draftKeyPresent() || problem() !== null || !savedKeyReadable()}
+        note={() => {
+          if (draftKeyPresent()) return t("settings.tts.previewUnsaved");
+          if (!savedKeyReadable()) return t("settings.tts.previewNeedsKey");
+          return problem() ?? undefined;
+        }}
         label={() => problem() ?? googlePreviewVoiceLabel(preferences(), sampleLanguage())}
         labelClass={() =>
           problem() !== null ? "text-xs text-destructive" : "text-xs text-muted-foreground"

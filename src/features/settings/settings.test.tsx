@@ -189,10 +189,11 @@ function detectionPreferencesRecord(options: Partial<LanguageDetectionPreference
 /** One saved v1 OCR record; each channel keeps its own config, enabled state, and priority order. */
 function ocrRecord(
   options: {
-    order?: readonly ("ai" | "baidu")[];
-    enabled?: Partial<Record<"ai" | "baidu", boolean>>;
+    order?: readonly ("ai" | "baidu" | "google-cloud")[];
+    enabled?: Partial<Record<"ai" | "baidu" | "google-cloud", boolean>>;
     modelId?: string;
     baidu?: { operation: string; credentialRef: string };
+    googleCloud?: { credentialRef: string };
   } = {},
 ): string {
   const order = options.order ?? ["ai", "baidu"];
@@ -206,7 +207,7 @@ function ocrRecord(
         config: { modelId: modelId ?? "" },
         credentialRef: null,
       };
-    } else {
+    } else if (id === "baidu") {
       const baidu = options.baidu;
       channels[id] =
         baidu === undefined
@@ -221,6 +222,17 @@ function ocrRecord(
               configured: true,
               config: { operation: baidu.operation },
               credentialRef: baidu.credentialRef,
+            };
+    } else {
+      const googleCloud = options.googleCloud;
+      channels[id] =
+        googleCloud === undefined
+          ? { enabled: false, configured: false, config: {}, credentialRef: null }
+          : {
+              enabled: options.enabled?.["google-cloud"] ?? true,
+              configured: true,
+              config: {},
+              credentialRef: googleCloud.credentialRef,
             };
     }
   }
@@ -721,7 +733,7 @@ test("language detection: starts with the header add button, adds channels via p
   expect(app.shows("id:settings-detection-detail-title")).toBe(true);
   expect(app.shows("id:settings-detection-priority-info")).toBe(false);
   expect(app.shows("id:settings-detection-add")).toBe(false);
-  expect(app.enabled("id:settings-detection-save")).toBe(true);
+  expect(app.enabled("id:settings-detection-save")).toBe(false);
 
   // Returning without saving still keeps the added AI channel in the list as Not configured.
   await app.press("id:settings-detection-breadcrumb-root");
@@ -782,15 +794,22 @@ test("language detection: starts with the header add button, adds channels via p
   await app.waitUntil(() => !app.shows("id:settings-detection-add-dialog"));
   await app.waitFor("id:settings-detection-row-google");
   expect(app.shows("id:settings-detection-detail-card")).toBe(false);
-  expect(app.shows("id:settings-detection-channel-google")).toBe(true);
+  expect(app.shows("id:settings-detection-channel-google")).toBe(false);
   expect(app.shows("id:settings-detection-open-google")).toBe(false);
+  expect(app.texts()).toContain("Free Google Translate endpoint");
   expect(app.shows("id:settings-detection-role-google")).toBe(true);
   expect(app.texts()).toContain("Backup");
   expect(app.texts()).toContain("Free Google Translate endpoint");
   expect(app.shows("id:settings-detection-grip-ai")).toBe(true);
   expect(app.shows("id:settings-detection-grip-google")).toBe(true);
-  await app.press("id:settings-detection-channel-google");
+  // Focus lands on the static row's Remove control after the add.
+  await app.keyboard.press("enter");
+  await app.waitFor("id:settings-detection-remove-confirm");
+  expect(app.shows("id:settings-detection-row-google")).toBe(true);
+  await app.press("id:settings-detection-remove-cancel");
+  await app.waitUntil(() => !app.shows("id:settings-detection-remove-confirm"));
   expect(app.shows("id:settings-detection-detail-card")).toBe(false);
+  expect(app.shows("id:settings-detection-row-google")).toBe(true);
 
   await app.press("id:settings-nav-general");
   await app.waitFor("id:settings-general-card");
@@ -899,9 +918,10 @@ test("language detection: adds Google Cloud, hides add button when full, and rem
   expect(app.shows("id:settings-detection-breadcrumb")).toBe(true);
   expect(app.texts()).toContain("API Key");
   expect(app.value("id:settings-detection-google-cloud-api-key")).toBe("");
-  expect(app.enabled("id:settings-detection-save")).toBe(true);
+  expect(app.enabled("id:settings-detection-save")).toBe(false);
 
   await app.type("id:settings-detection-google-cloud-api-key", "synthetic-cloud-key");
+  await app.waitUntil(() => app.enabled("id:settings-detection-save"));
   await app.press("id:settings-detection-save");
   await app.waitUntil(() =>
     Boolean(
@@ -1452,7 +1472,7 @@ test("ocr settings: starts empty, adds AI from the empty state, and configures i
   expect(app.shows("id:settings-ocr-detail-title")).toBe(true);
   expect(app.shows("id:settings-ocr-priority-info")).toBe(false);
   expect(app.shows("id:settings-ocr-add")).toBe(false);
-  expect(app.enabled("id:settings-ocr-save")).toBe(true);
+  expect(app.enabled("id:settings-ocr-save")).toBe(false);
 
   await app.press("id:settings-ocr-model");
   await app.waitFor("role:option[OpenAI Main · gpt-4.1]");
@@ -1700,7 +1720,7 @@ test("ocr settings: an empty catalog or a failed write keeps the active binding"
   await app.waitFor("id:settings-ocr-models-recovery");
   expect(app.shows("id:settings-ocr-model")).toBe(true);
   expect(app.enabled("id:settings-ocr-model")).toBe(false);
-  expect(app.enabled("id:settings-ocr-save")).toBe(true);
+  expect(app.enabled("id:settings-ocr-save")).toBe(false);
   await app.press("id:settings-ocr-manage-models");
   await app.waitFor("id:models-page");
 
@@ -1770,13 +1790,14 @@ test("ocr settings: saves Baidu keys on detail page and restores a blank form", 
   expect(app.shows("id:settings-ocr-model")).toBe(false);
   expect(app.shows("id:settings-ocr-models-recovery")).toBe(false);
   expect(app.shows("id:settings-ocr-manage-models")).toBe(false);
-  expect(app.enabled("id:settings-ocr-save")).toBe(true);
+  expect(app.enabled("id:settings-ocr-save")).toBe(false);
 
   await app.type("id:settings-ocr-baidu-api-key", "synthetic-api-key");
-  await app.press("id:settings-ocr-save");
-  await app.waitFor("id:settings-ocr-error");
-  expect(app.texts()).toContain("Enter both the API Key and the Secret Key.");
+  expect(app.enabled("id:settings-ocr-save")).toBe(false);
+  const added = JSON.parse(app.storage()[OCR_STORAGE_KEY]!).channels.baidu;
+  expect(added).toMatchObject({ configured: false, credentialRef: null });
   await app.type("id:settings-ocr-baidu-secret-key", "synthetic-secret-key");
+  await app.waitUntil(() => app.enabled("id:settings-ocr-save"));
   await app.press("id:settings-ocr-save");
   await app.waitUntil(() => Boolean(app.storage()[OCR_STORAGE_KEY]));
   const saved = JSON.parse(app.storage()[OCR_STORAGE_KEY]!) as {
@@ -1802,7 +1823,7 @@ test("ocr settings: saves Baidu keys on detail page and restores a blank form", 
   });
   expect(app.value("id:settings-ocr-baidu-api-key")).toBe("");
   expect(app.value("id:settings-ocr-baidu-secret-key")).toBe("");
-  expect(app.enabled("id:settings-ocr-save")).toBe(true);
+  await app.waitUntil(() => app.enabled("id:settings-ocr-save"));
   expect(app.requests()).toHaveLength(0);
 
   // Clicking OCR in the left rail also returns from the detail page to the list.
@@ -1849,9 +1870,10 @@ test("ocr settings: saves a Vision key without showing it, then keeps it through
   expect(app.shows("id:settings-ocr-baidu-api-key")).toBe(false);
   expect(app.shows("id:settings-ocr-baidu-operation")).toBe(false);
   expect(app.shows("id:settings-ocr-model")).toBe(false);
-  expect(app.enabled("id:settings-ocr-save")).toBe(true);
+  expect(app.enabled("id:settings-ocr-save")).toBe(false);
 
   await app.type("id:settings-ocr-google-api-key", "  " + visionKey + "  ");
+  await app.waitUntil(() => app.enabled("id:settings-ocr-save"));
   await app.press("id:settings-ocr-save");
   await app.waitUntil(() => Boolean(app.storage()[OCR_STORAGE_KEY]));
 
@@ -1892,7 +1914,7 @@ test("ocr settings: saves a Vision key without showing it, then keeps it through
   await app.press("id:settings-ocr-channel-google-cloud");
   await app.waitFor("id:settings-ocr-google-api-key");
   expect(app.value("id:settings-ocr-google-api-key")).toBe("");
-  expect(app.enabled("id:settings-ocr-save")).toBe(true);
+  await app.waitUntil(() => app.enabled("id:settings-ocr-save"));
   expect(app.shows("id:settings-ocr-baidu-operation")).toBe(false);
 });
 
@@ -1935,10 +1957,13 @@ test("ocr settings: an unreadable Vision key does not change the Baidu summary",
   expect(app.texts()).not.toContain("The saved Baidu keys could not be read. Enter both keys.");
 
   await app.press("id:settings-ocr-channel-google-cloud");
-  await app.waitFor("id:settings-ocr-google-key-missing");
-  expect(app.shows("id:settings-ocr-key-missing")).toBe(true);
+  await app.waitFor("id:settings-ocr-key-missing");
+  expect(app.count("id:settings-ocr-key-missing")).toBe(1);
+  expect(app.shows("id:settings-ocr-google-key-missing")).toBe(false);
   expect(app.shows("id:settings-ocr-baidu-operation")).toBe(false);
-  expect(app.enabled("id:settings-ocr-save")).toBe(true);
+  expect(app.enabled("id:settings-ocr-save")).toBe(false);
+  await app.type("id:settings-ocr-google-api-key", "replacement-vision-key");
+  await app.waitUntil(() => app.enabled("id:settings-ocr-save"));
 });
 
 test("ocr settings: removes channels, confirms saved configs, and re-offers the picker", async () => {
@@ -2227,15 +2252,13 @@ test("ocr settings: unreadable Baidu keys and a failed write leave the binding",
   );
 
   await app.press("id:settings-ocr-channel-baidu");
-  await app.waitFor("id:settings-ocr-baidu-keys-missing");
-  expect(app.shows("id:settings-ocr-key-missing")).toBe(true);
-  expect(app.enabled("id:settings-ocr-save")).toBe(true);
+  await app.waitFor("id:settings-ocr-key-missing");
+  expect(app.count("id:settings-ocr-key-missing")).toBe(1);
+  expect(app.enabled("id:settings-ocr-save")).toBe(false);
   await app.type("id:settings-ocr-baidu-api-key", "replacement-api-key");
-  await app.press("id:settings-ocr-save");
-  await app.waitFor("id:settings-ocr-error");
-  expect(app.texts()).toContain("Enter both the API Key and the Secret Key.");
+  expect(app.enabled("id:settings-ocr-save")).toBe(false);
   await app.type("id:settings-ocr-baidu-secret-key", "replacement-secret-key");
-  expect(app.enabled("id:settings-ocr-save")).toBe(true);
+  await app.waitUntil(() => app.enabled("id:settings-ocr-save"));
 
   const failing = await open(APP_ENTRY, {
     ...viewport,
@@ -2251,7 +2274,7 @@ test("ocr settings: unreadable Baidu keys and a failed write leave the binding",
   await failing.press("id:nav-settings");
   await failing.press("id:settings-nav-ocr");
   await failing.press("id:settings-ocr-channel-baidu");
-  await failing.waitFor("id:settings-ocr-baidu-keys-missing");
+  await failing.waitFor("id:settings-ocr-key-missing");
   await failing.type("id:settings-ocr-baidu-api-key", "replacement-api-key");
   await failing.type("id:settings-ocr-baidu-secret-key", "replacement-secret-key");
   await failing.press("id:settings-ocr-save");
@@ -2374,10 +2397,11 @@ test("tts settings: keeps a saved channel off until enabled and preserves the sw
   await app.waitFor("id:settings-tts-empty");
   await app.press("id:settings-tts-empty-channel-google-cloud");
   await app.waitFor("id:settings-tts-detail-card");
-  expect(app.enabled("id:settings-tts-save")).toBe(true);
+  expect(app.enabled("id:settings-tts-save")).toBe(false);
   expect(app.texts()).not.toContain("The key is stored on this device and is not encrypted.");
 
   await app.type("id:settings-tts-api-key", "synthetic-tts-key");
+  await app.waitUntil(() => app.enabled("id:settings-tts-save"));
   await app.press("id:settings-tts-save");
   await app.waitUntil(
     () =>
@@ -2396,7 +2420,7 @@ test("tts settings: keeps a saved channel off until enabled and preserves the sw
     ),
   ).toEqual({ apiKey: "synthetic-tts-key" });
   expect(app.value("id:settings-tts-api-key")).toBe("");
-  expect(app.enabled("id:settings-tts-save")).toBe(true);
+  expect(app.enabled("id:settings-tts-save")).toBe(false);
   expect(app.requests().some((request) => request.url.includes("texttospeech"))).toBe(false);
 
   await app.press("id:settings-tts-breadcrumb-root");
@@ -2701,10 +2725,11 @@ test("tts preview: plays the saved sample and ignores drafts, saves, and toggles
   expect(
     app.audio().some((call) => call.command === "open" && call.src.includes("tts-playback")),
   ).toBe(true);
-  expect(app.enabled("id:settings-tts-api-key")).toBe(true);
-  expect(app.enabled("id:settings-tts-save")).toBe(true);
+  expect(app.enabled("id:settings-tts-api-key")).toBe(false);
+  expect(app.enabled("id:settings-tts-save")).toBe(false);
   await app.endAudio();
   await app.waitFor("text:Play sample");
+  expect(app.enabled("id:settings-tts-api-key")).toBe(true);
   expect(app.audio().some((call) => call.command === "close")).toBe(true);
 
   await app.type("id:settings-tts-api-key", "replacement-preview-key");
@@ -2890,9 +2915,9 @@ test("tts settings: shows the saved Azure region and the channel priority", asyn
   expect(app.value("id:settings-tts-api-key")).toBe("");
   expect(app.texts()).not.toContain("azure-key");
   await app.type("id:settings-tts-region", "2");
-  expect(app.enabled("id:settings-tts-save")).toBe(true);
+  expect(app.enabled("id:settings-tts-save")).toBe(false);
   await app.type("id:settings-tts-api-key", "next-azure-key");
-  expect(app.enabled("id:settings-tts-save")).toBe(true);
+  await app.waitUntil(() => app.enabled("id:settings-tts-save"));
   await app.press("id:settings-tts-save");
   await app.waitUntil(() => {
     const raw = app.storage()[TTS_STORAGE_KEY];
@@ -3337,7 +3362,7 @@ test("tts google: cancelling the overrides dialog keeps the page draft", async (
   await app.press("id:settings-tts-google-override-cancel");
   await app.waitUntil(() => !app.shows("id:settings-tts-google-override-dialog"));
   expect(app.shows("id:settings-tts-google-override-fr")).toBe(false);
-  expect(app.enabled("id:settings-tts-save")).toBe(true);
+  expect(app.enabled("id:settings-tts-save")).toBe(false);
 
   await app.press("id:settings-tts-google-overrides");
   await app.waitFor("id:settings-tts-google-override-dialog");
@@ -3366,6 +3391,423 @@ test("wordbook page: opens Anki settings under Integrations without calling Anki
   expect(app.shows("role:switch[Enable Anki]")).toBe(true);
   expect(app.storage()["settings.wordbook.anki.v1"]).toBeUndefined();
   expect(app.requests()).toEqual([]);
+});
+test("pre-acceptance: malformed collection blocks adding from Settings", async () => {
+  const malformed = JSON.stringify({
+    version: 1,
+    order: ["ai"],
+    channels: { ai: { enabled: false } },
+  });
+  const app = await open(APP_ENTRY, {
+    ...viewport,
+    storage: { "settings.language": "en", [OCR_STORAGE_KEY]: malformed },
+  });
+  await app.press("id:nav-settings");
+  await app.press("id:settings-nav-ocr");
+  await app.waitFor("id:settings-ocr-load-error");
+
+  expect(app.count("id:settings-ocr-load-error")).toBe(1);
+  expect(app.texts()).toContain(t("settings.capabilities.error.storageMalformed"));
+  expect(app.shows("id:settings-ocr-add")).toBe(false);
+  expect(app.shows("id:settings-ocr-empty-channel-ai")).toBe(false);
+  expect(app.shows("id:settings-ocr-empty-channel-baidu")).toBe(false);
+  expect(app.storage()[OCR_STORAGE_KEY]).toBe(malformed);
+});
+test("pre-acceptance: detection preferences show their load error", async () => {
+  const malformedPreferences = JSON.stringify({
+    version: 1,
+    nativeLanguage: "xx",
+    preferredTranslationLanguage: null,
+  });
+  const app = await open(APP_ENTRY, {
+    ...viewport,
+    storage: {
+      "settings.language": "en",
+      [LANGUAGE_DETECTION_STORAGE_KEY]: detectionRecord({
+        order: ["google"],
+        enabled: { google: true },
+      }),
+      [LANGUAGE_DETECTION_PREFERENCES_STORAGE_KEY]: malformedPreferences,
+    },
+  });
+  await app.press("id:nav-settings");
+  await app.press("id:settings-nav-language-detection");
+  await app.waitFor("id:settings-detection-preferences-card");
+  await app.waitFor("id:settings-detection-preferences-error");
+
+  expect(app.count("id:settings-detection-preferences-error")).toBe(1);
+  expect(app.texts()).toContain(t("settings.languageDetection.error.storageMalformed"));
+  expect(app.enabled("id:settings-detection-native-language")).toBe(false);
+  expect(app.enabled("id:settings-detection-preferred-language")).toBe(false);
+  expect(app.shows("id:settings-detection-row-google")).toBe(true);
+  expect(app.storage()[LANGUAGE_DETECTION_PREFERENCES_STORAGE_KEY]).toBe(malformedPreferences);
+});
+test("pre-acceptance: unreadable credential blocks enabling and shows one alert", async () => {
+  const cases = [
+    {
+      nav: "settings-nav-ocr",
+      storageKey: OCR_STORAGE_KEY,
+      record: ocrRecord({
+        order: ["baidu"],
+        enabled: { baidu: false },
+        baidu: { operation: "accurate", credentialRef: "ref-missing" },
+      }),
+      prefix: "settings-ocr",
+      id: "baidu",
+      toggle: "settings-ocr-toggle-baidu",
+      open: "settings-ocr-channel-baidu",
+      alert: "settings-ocr-key-missing",
+      legacyAlert: "settings-ocr-baidu-keys-missing",
+      message: t("settings.ocr.keysUnreadable"),
+      fields: [
+        ["settings-ocr-baidu-api-key", "replacement-api-key"],
+        ["settings-ocr-baidu-secret-key", "replacement-secret-key"],
+      ],
+    },
+    {
+      nav: "settings-nav-ocr",
+      storageKey: OCR_STORAGE_KEY,
+      record: ocrRecord({
+        order: ["google-cloud"],
+        enabled: { "google-cloud": false },
+        googleCloud: { credentialRef: "ref-missing" },
+      }),
+      prefix: "settings-ocr",
+      id: "google-cloud",
+      toggle: "settings-ocr-toggle-google-cloud",
+      open: "settings-ocr-channel-google-cloud",
+      alert: "settings-ocr-key-missing",
+      legacyAlert: "settings-ocr-google-key-missing",
+      message: t("settings.ocr.googleKeyUnreadable"),
+      fields: [["settings-ocr-google-api-key", "replacement-vision-key"]],
+    },
+    {
+      nav: "settings-nav-language-detection",
+      storageKey: LANGUAGE_DETECTION_STORAGE_KEY,
+      record: detectionRecord({
+        order: ["google-cloud"],
+        enabled: { "google-cloud": false },
+        credentialRef: "ref-missing",
+      }),
+      prefix: "settings-detection",
+      id: "google-cloud",
+      toggle: "settings-detection-toggle-google-cloud",
+      open: "settings-detection-channel-google-cloud",
+      alert: "settings-detection-key-missing",
+      legacyAlert: "settings-detection-google-cloud-key-missing",
+      message: t("settings.languageDetection.googleCloudKeyUnreadable"),
+      fields: [["settings-detection-google-cloud-api-key", "replacement-cloud-key"]],
+    },
+  ];
+
+  for (const entry of cases) {
+    const app = await open(APP_ENTRY, {
+      ...viewport,
+      storage: { "settings.language": "en", [entry.storageKey]: entry.record },
+    });
+    await app.press("id:nav-settings");
+    await app.press(`id:${entry.nav}`);
+    await app.waitFor(`id:${entry.toggle}`);
+
+    await app.press(`id:${entry.toggle}`);
+    await app
+      .waitFor("id:settings-ocr-list-error")
+      .catch(() => app.waitFor("id:settings-detection-list-error"));
+    expect(app.texts()).toContain(t("settings.capabilities.error.credentialUnreadable"));
+    const stored = JSON.parse(app.storage()[entry.storageKey]!);
+    expect(stored.channels[entry.id].enabled).toBe(false);
+
+    await app.press(`id:${entry.open}`);
+    await app
+      .waitFor("id:settings-ocr-detail-card")
+      .catch(() => app.waitFor("id:settings-detection-detail-card"));
+    await app.waitFor(`id:${entry.alert}`);
+    expect(app.count(`id:${entry.alert}`)).toBe(1);
+    expect(app.texts()).toContain(entry.message);
+    expect(app.shows(`id:${entry.legacyAlert}`)).toBe(false);
+
+    // A readable replacement recovers the channel; enabling then succeeds.
+    expect(app.enabled(`id:${entry.prefix}-save`)).toBe(false);
+    for (const [field, value] of entry.fields) {
+      await app.type(`id:${field}`, value);
+    }
+    await app.waitUntil(() => app.enabled(`id:${entry.prefix}-save`));
+    await app.press(`id:${entry.prefix}-save`);
+    await app.waitUntil(() => {
+      const next = JSON.parse(app.storage()[entry.storageKey]!);
+      return next.channels[entry.id].credentialRef !== "ref-missing";
+    });
+    await app.waitUntil(() => !app.shows(`id:${entry.alert}`));
+    await app.press(`id:${entry.prefix}-breadcrumb-root`);
+    await app.waitFor(`id:${entry.toggle}`);
+    await app.press(`id:${entry.toggle}`);
+    await app.waitUntil(
+      () => JSON.parse(app.storage()[entry.storageKey]!).channels[entry.id].enabled === true,
+    );
+  }
+});
+test("pre-acceptance: Save availability", async () => {
+  const models = [
+    makeModel({
+      id: "m-vision",
+      providerId: "ch-openai",
+      modelKey: "gpt-4.1",
+      enabled: true,
+      capabilities: { text: true, image: true, pdf: false, video: false },
+    }),
+    makeModel({
+      id: "m-text",
+      providerId: "ch-openai",
+      modelKey: "gpt-4.1-mini",
+      enabled: true,
+      capabilities: { text: true, image: false, pdf: false, video: false },
+    }),
+  ];
+  const channels = [makeChannel({ id: "ch-openai", displayName: "OpenAI Main", enabled: true })];
+
+  const ocr = await open(APP_ENTRY, {
+    ...viewport,
+    storage: makeSeedStorage({
+      channels,
+      models,
+      extra: { [OCR_STORAGE_KEY]: ocrRecord({ order: ["ai"], modelId: "m-removed" }) },
+    }),
+  });
+  await ocr.press("id:nav-settings");
+  await ocr.press("id:settings-nav-ocr");
+  await ocr.press("id:settings-ocr-channel-ai");
+  await ocr.waitFor("id:settings-ocr-detail-card");
+  expect(ocr.enabled("id:settings-ocr-save")).toBe(false);
+  await ocr.press("id:settings-ocr-model");
+  await ocr.waitFor("role:option[OpenAI Main · gpt-4.1]");
+  await ocr.press("role:option[OpenAI Main · gpt-4.1]");
+  await ocr.waitUntil(() => ocr.enabled("id:settings-ocr-save"));
+  await ocr.press("id:settings-ocr-save");
+  await ocr.waitUntil(
+    () => JSON.parse(ocr.storage()[OCR_STORAGE_KEY]!).channels.ai.config.modelId === "m-vision",
+  );
+
+  const detection = await open(APP_ENTRY, {
+    ...viewport,
+    storage: makeSeedStorage({
+      channels,
+      models,
+      extra: {
+        [LANGUAGE_DETECTION_STORAGE_KEY]: detectionRecord({
+          order: ["ai"],
+          modelId: "m-removed",
+        }),
+      },
+    }),
+  });
+  await detection.press("id:nav-settings");
+  await detection.press("id:settings-nav-language-detection");
+  await detection.press("id:settings-detection-channel-ai");
+  await detection.waitFor("id:settings-detection-detail-card");
+  expect(detection.enabled("id:settings-detection-save")).toBe(false);
+  await detection.press("id:settings-detection-model");
+  await detection.waitFor("role:option[OpenAI Main · gpt-4.1-mini]");
+  await detection.press("role:option[OpenAI Main · gpt-4.1-mini]");
+  await detection.waitUntil(() => detection.enabled("id:settings-detection-save"));
+  await detection.press("id:settings-detection-save");
+  await detection.waitUntil(
+    () =>
+      JSON.parse(detection.storage()[LANGUAGE_DETECTION_STORAGE_KEY]!).channels.ai.config
+        .modelId === "m-text",
+  );
+});
+test("pre-acceptance: TTS preview requires a readable saved key and region", async () => {
+  const missing = await open(APP_ENTRY, {
+    ...viewport,
+    storage: {
+      "settings.language": "en",
+      [TTS_STORAGE_KEY]: ttsRecord({
+        order: ["google-cloud"],
+        googleCloud: { enabled: true, credentialRef: "missing-ref" },
+      }),
+    },
+  });
+  await missing.press("id:nav-settings");
+  await missing.press("id:settings-nav-tts");
+  await missing.press("id:settings-tts-open-google-cloud");
+  await missing.waitFor("id:settings-tts-preview");
+  await missing.waitUntil(() => !missing.enabled("id:settings-tts-preview"));
+  await missing.hover("id:settings-tts-preview");
+  await missing.waitUntil(() => missing.texts().includes(t("settings.tts.previewNeedsKey")));
+  expect(missing.requests()).toEqual([]);
+
+  const azureStorage = {
+    "settings.language": "en",
+    [TTS_STORAGE_KEY]: ttsRecord({
+      order: ["azure"],
+      azure: { enabled: true, credentialRef: "azure-ref", region: "eastus" },
+    }),
+    [ttsCredentialStorageKey("azure-ref")]: JSON.stringify({ apiKey: "azure-key" }),
+  };
+  const dirty = await open(APP_ENTRY, { ...viewport, storage: azureStorage });
+  await dirty.press("id:nav-settings");
+  await dirty.press("id:settings-nav-tts");
+  await dirty.press("id:settings-tts-open-azure");
+  await dirty.waitUntil(() => dirty.enabled("id:settings-tts-preview"));
+  await dirty.type("id:settings-tts-region", "westus");
+  await dirty.waitUntil(() => !dirty.enabled("id:settings-tts-preview"));
+  await dirty.hover("id:settings-tts-preview");
+  await dirty.waitUntil(() => dirty.texts().includes(t("settings.tts.previewUnsavedRegion")));
+  expect(dirty.requests()).toEqual([]);
+});
+
+test("pre-acceptance: TTS preview locks while loading", async () => {
+  const azureUrl = "https://eastus.tts.speech.microsoft.com/cognitiveservices/v1";
+  const azureStorage = {
+    "settings.language": "en",
+    [TTS_STORAGE_KEY]: ttsRecord({
+      order: ["azure"],
+      azure: { enabled: true, credentialRef: "azure-ref", region: "eastus" },
+    }),
+    [ttsCredentialStorageKey("azure-ref")]: JSON.stringify({ apiKey: "azure-key" }),
+  };
+  const app = await open(APP_ENTRY, {
+    ...viewport,
+    storage: azureStorage,
+    network: {
+      ["POST " + azureUrl]: { status: 200, delay: 400, body: "ID3azure-sample" },
+    },
+  });
+  await app.press("id:nav-settings");
+  await app.press("id:settings-nav-tts");
+  await app.press("id:settings-tts-open-azure");
+  await app.waitUntil(() => app.enabled("id:settings-tts-preview"));
+  await app.press("id:settings-tts-preview");
+  await app.waitFor("text:Cancel");
+  expect(app.requests()).toHaveLength(1);
+  expect(app.requests()[0]!.url).toBe(azureUrl);
+  expect(app.enabled("id:settings-tts-region")).toBe(false);
+  expect(app.enabled("id:settings-tts-api-key")).toBe(false);
+  expect(app.enabled("id:settings-tts-save")).toBe(false);
+  expect(app.enabled("id:settings-tts-preview")).toBe(true);
+  await app.press("id:settings-tts-preview");
+  await app.waitFor("text:Play sample");
+  expect(app.enabled("id:settings-tts-region")).toBe(true);
+});
+test("capability desktop: adds, saves, enables, reorders, and removes OCR channels", async () => {
+  const app = await open(APP_ENTRY, {
+    ...viewport,
+    storage: { "settings.language": "en" },
+  });
+  await app.press("id:nav-settings");
+  await app.press("id:settings-nav-ocr");
+  await app.waitFor("id:settings-ocr-add");
+
+  // Add Baidu from the picker, save a synthetic pair, and let the first save enable it.
+  await app.press("id:settings-ocr-add");
+  await app.waitFor("id:settings-ocr-add-dialog");
+  await app.press("id:settings-ocr-option-baidu");
+  await app.waitFor("id:settings-ocr-detail-card");
+  expect(app.enabled("id:settings-ocr-save")).toBe(false);
+  await app.type("id:settings-ocr-baidu-api-key", "desktop-api-key");
+  await app.type("id:settings-ocr-baidu-secret-key", "desktop-secret-key");
+  await app.waitUntil(() => app.enabled("id:settings-ocr-save"));
+  await app.press("id:settings-ocr-save");
+  await app.waitFor("id:settings-ocr-detail-card");
+  expect(app.value("id:settings-ocr-baidu-api-key")).toBe("");
+  await app.press("id:settings-ocr-breadcrumb-root");
+  await app.waitFor("id:settings-ocr-row-baidu");
+  expect(app.enabled("id:settings-ocr-toggle-baidu")).toBe(true);
+
+  // Add Vision beside it and save its key.
+  await app.press("id:settings-ocr-add");
+  await app
+    .waitFor("id:settings-ocr-option-google-cloud")
+    .catch(() => app.waitFor("id:settings-ocr-add-dialog"));
+  if (app.shows("id:settings-ocr-add-dialog")) {
+    await app.press("id:settings-ocr-option-google-cloud");
+  }
+  await app.waitFor("id:settings-ocr-detail-card");
+  await app.type("id:settings-ocr-google-api-key", "desktop-vision-key");
+  await app.waitUntil(() => app.enabled("id:settings-ocr-save"));
+  await app.press("id:settings-ocr-save");
+  await app.press("id:settings-ocr-breadcrumb-root");
+  await app.waitFor("id:settings-ocr-row-google-cloud");
+  expect(app.texts()).toContain("Primary");
+  expect(app.texts()).toContain("Backup");
+
+  // Drag reorder moves Vision to the front; the badges follow the stored order.
+  await app.drag("id:settings-ocr-row-google-cloud", { x: 0, y: -80 });
+  await app.waitUntil(
+    () => JSON.parse(app.storage()[OCR_STORAGE_KEY]!).order[0] === "google-cloud",
+  );
+  expect(app.shows("id:settings-ocr-role-google-cloud")).toBe(true);
+
+  // Drag reorder puts Baidu back in front.
+  await app.drag("id:settings-ocr-row-baidu", { x: 0, y: -80 });
+  await app.waitUntil(() => JSON.parse(app.storage()[OCR_STORAGE_KEY]!).order[0] === "baidu");
+
+  // Confirmed removal drops the configured Baidu channel and its stored pair.
+  const baiduRef = JSON.parse(app.storage()[OCR_STORAGE_KEY]!).channels.baidu.credentialRef;
+  await app.press("id:settings-ocr-remove-baidu");
+  await app.waitFor("id:settings-ocr-remove-dialog");
+  await app.press("id:settings-ocr-remove-confirm");
+  await app.waitUntil(() => !app.shows("id:settings-ocr-row-baidu"));
+  const saved = JSON.parse(app.storage()[OCR_STORAGE_KEY]!) as {
+    order: string[];
+    channels: Record<string, { enabled: boolean }>;
+  };
+  expect(saved.order).toEqual(["google-cloud"]);
+  expect(saved.channels.baidu).toBeUndefined();
+  expect(app.storage()[ocrCredentialStorageKey(baiduRef)]).toBeUndefined();
+
+  await app.press("id:settings-ocr-toggle-google-cloud");
+  await app.waitUntil(
+    () => JSON.parse(app.storage()[OCR_STORAGE_KEY]!).channels["google-cloud"].enabled === false,
+  );
+  await app.press("id:settings-ocr-toggle-google-cloud");
+  await app.waitUntil(
+    () => JSON.parse(app.storage()[OCR_STORAGE_KEY]!).channels["google-cloud"].enabled === true,
+  );
+});
+
+test("capability desktop: free Google stays static and an unreadable key shows one alert", async () => {
+  const vision = await open(APP_ENTRY, {
+    ...viewport,
+    storage: makeSeedStorage({
+      extra: {
+        [OCR_STORAGE_KEY]: ocrRecord({
+          order: ["google-cloud"],
+          enabled: { "google-cloud": false },
+          googleCloud: { credentialRef: "missing-ref" },
+        }),
+      },
+    }),
+  });
+  await vision.press("id:nav-settings");
+  await vision.press("id:settings-nav-ocr");
+  await vision.waitFor("id:settings-ocr-toggle-google-cloud");
+  await vision.press("id:settings-ocr-toggle-google-cloud");
+  await vision.waitFor("id:settings-ocr-list-error");
+  expect(vision.texts()).toContain(t("settings.capabilities.error.credentialUnreadable"));
+  await vision.press("id:settings-ocr-channel-google-cloud");
+  await vision.waitFor("id:settings-ocr-key-missing");
+  expect(vision.count("id:settings-ocr-key-missing")).toBe(1);
+  expect(vision.texts()).toContain(t("settings.ocr.googleKeyUnreadable"));
+  expect(vision.shows("id:settings-ocr-google-key-missing")).toBe(false);
+
+  const detection = await open(APP_ENTRY, {
+    ...viewport,
+    storage: { "settings.language": "en" },
+  });
+  await detection.press("id:nav-settings");
+  await detection.press("id:settings-nav-language-detection");
+  await detection.press("id:settings-detection-add");
+  await detection.waitFor("id:settings-detection-option-google");
+  await detection.press("id:settings-detection-option-google");
+  await detection.waitFor("id:settings-detection-row-google");
+  expect(detection.shows("id:settings-detection-channel-google")).toBe(false);
+  expect(detection.texts()).toContain("Free Google Translate endpoint");
+  await detection.keyboard.press("enter");
+  await detection.waitFor("id:settings-detection-remove-confirm");
+  await detection.press("id:settings-detection-remove-cancel");
+  await detection.waitUntil(() => !detection.shows("id:settings-detection-remove-confirm"));
+  expect(detection.shows("id:settings-detection-row-google")).toBe(true);
 });
 
 const ANKI_URL = "http://127.0.0.1:8765/api/v1";

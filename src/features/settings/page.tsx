@@ -452,10 +452,15 @@ export function SettingsPage(props: {
   };
 
   const showingBreadcrumb = () => headerBreadcrumb() !== null;
-  const showAddButton = (section: CapabilitySectionId) =>
-    selectedSection() === section &&
-    !showingBreadcrumb() &&
-    collectionFor(CAPABILITY_SECTIONS[section].capability).available().length > 0;
+  const showAddButton = (section: CapabilitySectionId) => {
+    const collection = collectionFor(CAPABILITY_SECTIONS[section].capability);
+    return (
+      selectedSection() === section &&
+      !showingBreadcrumb() &&
+      collection.loadError() === null &&
+      collection.available().length > 0
+    );
+  };
   const showDetectionAddButton = () => showAddButton("language-detection");
   const showOcrAddButton = () => showAddButton("ocr");
   const showTtsAddButton = () => showAddButton("tts");

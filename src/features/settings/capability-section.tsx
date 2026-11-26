@@ -34,6 +34,7 @@ import type {
   ChannelAudioHost,
   ChannelBinding,
   ChannelCollection,
+  ChannelSaveDraft,
   ChannelSettingsHost,
   ContributionRegistry,
   CredentialInput,
@@ -112,6 +113,41 @@ function ContributionAvatar(props: { contribution: ErasedContribution; size?: Av
   );
 }
 
+function ChannelIdentity(props: {
+  testIdPrefix: string;
+  channelId: string;
+  contribution: ErasedContribution;
+  name: string;
+  role: "primary" | "backup" | null;
+  summary: { text: string; toneClass: string };
+}) {
+  return (
+    <>
+      <ContributionAvatar contribution={props.contribution} />
+      <View class="min-w-0 flex-1 gap-0.5">
+        <View class="flex-row items-center gap-2">
+          <Text class="min-w-0 shrink truncate text-sm font-medium text-card-foreground">
+            {props.name}
+          </Text>
+          <If when={props.role !== null}>
+            <Badge
+              testID={`${props.testIdPrefix}-role-${props.channelId}`}
+              label={t(`settings.capabilities.role.${props.role!}`)}
+              tone={props.role === "primary" ? "primary" : "neutral"}
+            />
+          </If>
+        </View>
+        <Text
+          testID={`${props.testIdPrefix}-summary-${props.channelId}`}
+          class={`min-w-0 truncate text-xs ${props.summary.toneClass}`}
+        >
+          {props.summary.text}
+        </Text>
+      </View>
+    </>
+  );
+}
+
 function asConfig(value: unknown): Record<string, unknown> {
   return typeof value === "object" && value !== null ? (value as Record<string, unknown>) : {};
 }
@@ -136,6 +172,9 @@ interface CapabilityListProps {
   onOpenChannel: (id: string) => void;
   onAddAvailableChannel: (id: string) => void;
   onFocusAddButton: () => void;
+  /** Channel whose Remove control takes focus after an add; null when none is pending. */
+  focusRemoveId: () => string | null;
+  onFocusRemoveConsumed: () => void;
   onRowRef: (id: string, node: ViewRef | null) => void;
   onGripRef: (id: string, node: ViewRef | null) => void;
   onRowFocusRef: (id: string, node: ViewRef | null) => void;
@@ -161,6 +200,19 @@ function CapabilityList(props: CapabilityListProps) {
   cleanup(() => props.onBusyChange(false));
   effect(() => props.onRemoveDialogOpenChange(pendingRemove() !== null));
   cleanup(() => props.onRemoveDialogOpenChange(false));
+
+  // A static channel has no pressable row, so its Remove control takes focus after an add.
+  effect(() => {
+    const target = props.focusRemoveId();
+    const rows = order();
+    if (target === null || !rows.includes(target)) return;
+    queueMicrotask(() => {
+      const node = removeRefs[target];
+      if (node === undefined) return;
+      focusTarget(node);
+      props.onFocusRemoveConsumed();
+    });
+  });
 
   const order = () => props.collection.order();
   const name = (id: string) => t(props.contributions.get(id)?.labelKey ?? id);
@@ -368,11 +420,14 @@ function CapabilityList(props: CapabilityListProps) {
     else if (actionName === "moveDown") void handleMoveBy(id, 1, false);
   };
 
-  const available = () =>
-    props.collection
+  const available = () => {
+    // A failed load leaves the stored record untouched; never offer an action that would overwrite it.
+    if (props.collection.loadError() !== null) return [];
+    return props.collection
       .available()
       .map((id) => props.contributions.get(id))
       .filter((contribution): contribution is ErasedContribution => contribution !== undefined);
+  };
 
   return (
     <View
@@ -476,45 +531,51 @@ function CapabilityList(props: CapabilityListProps) {
                         : "hover:bg-accent/60 active:bg-accent"
                     }`}
                   >
-                    <Button
-                      testID={`${props.testIdPrefix}-channel-${id()}`}
-                      ref={(node) => props.onRowRef(id(), node)}
-                      variant="ghost"
-                      size="row"
-                      accessibilityLabel={rowLabel()}
-                      onPress={() => {
-                        if (!configurable()) return;
-                        props.onClearError();
-                        props.onOpenChannel(id());
-                      }}
-                      class="min-w-0 flex-1 py-2.5 pl-3 pr-2 hover:bg-transparent active:bg-transparent"
-                    >
-                      <If when={props.contributions.get(id())}>
-                        {(contribution) => <ContributionAvatar contribution={contribution()} />}
-                      </If>
-                      <View class="min-w-0 flex-1 gap-0.5">
-                        <View class="flex-row items-center gap-2">
-                          <Text class="min-w-0 shrink truncate text-sm font-medium text-card-foreground">
-                            {nameOf()}
-                          </Text>
-                          <If when={role()}>
-                            {(activeRole) => (
-                              <Badge
-                                testID={`${props.testIdPrefix}-role-${id()}`}
-                                label={t(`settings.capabilities.role.${activeRole()}`)}
-                                tone={activeRole() === "primary" ? "primary" : "neutral"}
+                    <If
+                      when={configurable()}
+                      else={
+                        <View class="min-w-0 flex-1 flex-row items-center gap-2.5 rounded-xl py-2.5 pl-3 pr-2">
+                          <If when={props.contributions.get(id())}>
+                            {(contribution) => (
+                              <ChannelIdentity
+                                testIdPrefix={props.testIdPrefix}
+                                channelId={id()}
+                                contribution={contribution()}
+                                name={nameOf()}
+                                role={role()}
+                                summary={summary()}
                               />
                             )}
                           </If>
                         </View>
-                        <Text
-                          testID={`${props.testIdPrefix}-summary-${id()}`}
-                          class={`min-w-0 truncate text-xs ${summary().toneClass}`}
-                        >
-                          {summary().text}
-                        </Text>
-                      </View>
-                    </Button>
+                      }
+                    >
+                      <Button
+                        testID={`${props.testIdPrefix}-channel-${id()}`}
+                        ref={(node) => props.onRowRef(id(), node)}
+                        variant="ghost"
+                        size="row"
+                        accessibilityLabel={rowLabel()}
+                        onPress={() => {
+                          props.onClearError();
+                          props.onOpenChannel(id());
+                        }}
+                        class="min-w-0 flex-1 py-2.5 pl-3 pr-2 hover:bg-transparent active:bg-transparent"
+                      >
+                        <If when={props.contributions.get(id())}>
+                          {(contribution) => (
+                            <ChannelIdentity
+                              testIdPrefix={props.testIdPrefix}
+                              channelId={id()}
+                              contribution={contribution()}
+                              name={nameOf()}
+                              role={role()}
+                              summary={summary()}
+                            />
+                          )}
+                        </If>
+                      </Button>
+                    </If>
 
                     <If when={canReorder()}>
                       <KeyboardButton
@@ -679,15 +740,18 @@ function CapabilityDetail(props: CapabilityDetailProps) {
   const credentialDraft = signal<CredentialRecord>({});
   const credentialAction = signal<"keep" | "clear">("keep");
   const credentialState = signal<CredentialState>("unknown");
+  const previewBusy = signal(false);
   const error = signal<string | null>(null);
   const saving = signal(false);
   let mounted = true;
   cleanup(() => {
     mounted = false;
+    previewBusy.set(false);
   });
 
   const binding = () => props.collection.binding(props.channelId);
   const savedCredential = () => (binding()?.credentialRef ?? null) !== null;
+  const credentialReadable = () => credentialState() === "readable";
 
   effect(() => {
     const ref = binding()?.credentialRef ?? null;
@@ -711,8 +775,18 @@ function CapabilityDetail(props: CapabilityDetailProps) {
     });
   };
 
+  const saveDraftValues = (): ChannelSaveDraft<unknown> => ({
+    config: configDraft(),
+    credentialDraft: credentialDraft(),
+    savedBinding: savedBinding(),
+    credentialReadable: credentialReadable(),
+    resolveModelBinding: props.hostServices.resolveModelBinding,
+  });
+
+  const saveAvailable = () => props.contribution.saveAvailable?.(saveDraftValues()) ?? true;
+
   const save = async () => {
-    if (saving()) return;
+    if (saving() || previewBusy() || !saveAvailable()) return;
     const checked = validate();
     if (!checked.ok) {
       error.set(t(checked.key));
@@ -741,6 +815,17 @@ function CapabilityDetail(props: CapabilityDetailProps) {
     toast.success(t("settings.capabilities.saved"));
   };
 
+  const savedBinding = (): ChannelBinding<unknown> => {
+    const current = binding();
+    if (current !== null) return current;
+    return {
+      enabled: false,
+      configured: false,
+      config: props.contribution.config.defaults(),
+      credentialRef: null,
+    };
+  };
+
   const draftBinding = (): ChannelBinding<unknown> => ({
     enabled: binding()?.enabled ?? false,
     configured: binding()?.configured ?? false,
@@ -751,6 +836,7 @@ function CapabilityDetail(props: CapabilityDetailProps) {
   const settingsHost = (): ChannelSettingsHost => ({
     ...props.hostServices,
     onDialogOpenChange: props.onDialogOpenChange,
+    onPreviewBusyChange: (busy) => previewBusy.set(busy),
     readSavedCredential: () => props.collection.readCredential(binding()?.credentialRef ?? null),
   });
 
@@ -792,7 +878,10 @@ function CapabilityDetail(props: CapabilityDetailProps) {
             role="alert"
             class="text-sm text-destructive"
           >
-            {t("settings.capabilities.error.credentialUnreadable")}
+            {t(
+              props.contribution.credentialUnreadableKey ??
+                "settings.capabilities.error.credentialUnreadable",
+            )}
           </Text>
         </If>
 
@@ -804,8 +893,9 @@ function CapabilityDetail(props: CapabilityDetailProps) {
             return (
               <Settings
                 binding={draftBinding()}
+                savedBinding={savedBinding()}
                 compact={props.compact}
-                disabled={saving()}
+                disabled={saving() || previewBusy()}
                 savedCredential={savedCredential()}
                 credentialState={credentialState()}
                 credentialDraft={credentialDraft()}
@@ -840,7 +930,7 @@ function CapabilityDetail(props: CapabilityDetailProps) {
             variant="primary"
             size="sm"
             label={saving() ? t("common.saving") : t("common.save")}
-            disabled={saving()}
+            disabled={saving() || previewBusy() || !saveAvailable()}
             onPress={() => void save()}
           />
         </View>
@@ -855,6 +945,7 @@ export function CapabilitySection(props: CapabilitySectionProps) {
   const addDialogOpen = signal(false);
   const adding = signal(false);
   const listBusy = signal(false);
+  const focusRemoveAfterAdd = signal<string | null>(null);
   const listError = signal<string | null>(null);
   const removeDialogOpen = signal(false);
   const detailDialogOpen = signal(false);
@@ -913,7 +1004,14 @@ export function CapabilitySection(props: CapabilitySectionProps) {
   });
 
   const handleOpenAddDialog = () => {
-    if (adding() || listBusy() || props.collection.available().length === 0) return;
+    if (
+      adding() ||
+      listBusy() ||
+      props.collection.loadError() !== null ||
+      props.collection.available().length === 0
+    ) {
+      return;
+    }
     listError.set(null);
     pendingDialogCloseFocus = focusAddButton;
     addDialogOpen.set(true);
@@ -923,7 +1021,7 @@ export function CapabilitySection(props: CapabilitySectionProps) {
   if (unregisterAddTrigger) cleanup(unregisterAddTrigger);
 
   const addChannel = async (id: string): Promise<boolean> => {
-    if (adding()) return false;
+    if (adding() || props.collection.loadError() !== null) return false;
     listError.set(null);
     adding.set(true);
     try {
@@ -939,7 +1037,11 @@ export function CapabilitySection(props: CapabilitySectionProps) {
   };
 
   const openAfterAdd = (id: string) => {
-    if (contributions().get(id)?.configurable === true) props.onSelect(id);
+    if (contributions().get(id)?.configurable === true) {
+      props.onSelect(id);
+      return;
+    }
+    focusRemoveAfterAdd.set(id);
   };
 
   const handleSelectAddKind = async (id: string) => {
@@ -959,6 +1061,7 @@ export function CapabilitySection(props: CapabilitySectionProps) {
   };
 
   const availableContributions = () => {
+    if (props.collection.loadError() !== null) return [];
     const map = contributions();
     return props.collection
       .available()
@@ -1013,6 +1116,8 @@ export function CapabilitySection(props: CapabilitySectionProps) {
           onOpenChannel={(id) => props.onSelect(id)}
           onAddAvailableChannel={(id) => void handleAddAvailableChannel(id)}
           onFocusAddButton={focusAddButton}
+          focusRemoveId={() => focusRemoveAfterAdd()}
+          onFocusRemoveConsumed={() => focusRemoveAfterAdd.set(null)}
           onRowRef={(id, node) => {
             if (node) rowRefs[id] = node;
             else delete rowRefs[id];

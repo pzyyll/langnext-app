@@ -176,8 +176,19 @@ export function createLanguageDetectionPreferencesStore(
   const saveErrorSignal = signal<string | null>(null);
   let writeQueue: Promise<unknown> = Promise.resolve();
 
-  function enqueueWrite<T>(task: () => Promise<T>): Promise<T> {
-    const queued = writeQueue.then(task);
+  /** Refuses every write while a load error is outstanding; only load() clears it. */
+  function enqueueWrite<T extends Result>(task: () => Promise<T>): Promise<T> {
+    const queued = writeQueue.then(() => {
+      const outstanding = loadErrorSignal();
+      if (outstanding !== null) {
+        return {
+          ok: false,
+          key: outstanding.key,
+          message: outstanding.message,
+        } as T;
+      }
+      return task();
+    });
     writeQueue = queued.catch(() => undefined);
     return queued;
   }
@@ -239,7 +250,6 @@ export function createLanguageDetectionPreferencesStore(
           return failed;
         }
         preferencesSignal.set(next);
-        loadErrorSignal.set(null);
         saveErrorSignal.set(null);
         return { ok: true };
       });

@@ -23,8 +23,8 @@ export function createOcrChannelCollection(storage: VaultStorage): ChannelCollec
     storageKey: OCR_CHANNELS_STORAGE_KEY,
     vault: createCredentialVault({ storage, namespace: OCR_CREDENTIAL_NAMESPACE }),
     contributions: () => getContributionRegistry().capabilities("ocr"),
-    // A configured OCR channel runs until the user turns it off.
-    policy: { enableOnFirstSave: true },
+    // A configured OCR channel runs until the user turns it off; a broken key never enables.
+    policy: { enableOnFirstSave: true, requireReadableCredentialOnEnable: true },
   });
 }
 

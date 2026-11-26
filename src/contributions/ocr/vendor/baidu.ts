@@ -354,7 +354,14 @@ async function postForm(
 
 /** Creates a Baidu OCR client. `fetchImpl` is the only I/O boundary. */
 export function createBaiduOcrClient(options: { fetchImpl?: FetchLike } = {}): BaiduOcrClient {
-  const fetchImpl = createHttpFetch({ fetchImpl: options.fetchImpl, scope: "ocr/baidu" });
+  // The token exchange sends the API Key and Secret Key and answers with an access token;
+  // its bodies stay out of the log while recognition keeps the transport's body lines.
+  const tokenFetch = createHttpFetch({
+    fetchImpl: options.fetchImpl,
+    scope: "ocr/baidu",
+    logBodies: false,
+  });
+  const recognitionFetch = createHttpFetch({ fetchImpl: options.fetchImpl, scope: "ocr/baidu" });
 
   return {
     recognize: async (input, callOptions) => {
@@ -383,7 +390,7 @@ export function createBaiduOcrClient(options: { fetchImpl?: FetchLike } = {}): B
           client_secret: input.credentials.secretKey,
         }).toString();
         const tokenResponse = await postForm(
-          fetchImpl,
+          tokenFetch,
           TOKEN_URL,
           tokenBody,
           controller.signal,
@@ -414,7 +421,7 @@ export function createBaiduOcrClient(options: { fetchImpl?: FetchLike } = {}): B
           "?access_token=" +
           encodeURIComponent(token.token);
         const ocrResponse = await postForm(
-          fetchImpl,
+          recognitionFetch,
           ocrUrl,
           ocrBody,
           controller.signal,

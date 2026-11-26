@@ -49,6 +49,9 @@ export function TtsSamplePreview<C>(props: TtsSamplePreviewProps<C>) {
     stop = null;
   });
 
+  effect(() => props.host.onPreviewBusyChange?.(phase() !== "idle"));
+  cleanup(() => props.host.onPreviewBusyChange?.(false));
+
   effect(() => {
     const audio = props.host.audio;
     if (audio === undefined) {

@@ -78,6 +78,39 @@ interface FetchCall {
   init: { method: string; headers: Record<string, string>; body?: string; signal: AbortSignal };
 }
 
+const GOOGLE_CLOUD_DETECT_URL = "https://translation.googleapis.com/language/translate/v2/detect";
+
+function cloudFetch(
+  options: {
+    language?: string;
+    status?: number;
+    errorText?: string;
+    hang?: boolean;
+    beforeJson?: () => void;
+  } = {},
+): { fetchImpl: FetchLike; calls: FetchCall[] } {
+  const calls: FetchCall[] = [];
+  const fetchImpl: FetchLike = async (url, init) => {
+    calls.push({ url, init });
+    if (options.hang === true) {
+      await new Promise((_resolve, reject) => {
+        init.signal.addEventListener("abort", () => reject(new Error("aborted")));
+      });
+    }
+    const status = options.status ?? 200;
+    return {
+      ok: status < 400,
+      status,
+      json: async () => {
+        options.beforeJson?.();
+        return { data: { detections: [[{ language: options.language ?? "fr" }]] } };
+      },
+      text: async () => options.errorText ?? "",
+    };
+  };
+  return { fetchImpl, calls };
+}
+
 function googleFetch(
   options: {
     payload?: unknown;
@@ -383,20 +416,67 @@ test("detect contribution: Google Cloud validates its key and runs with the host
     ),
   ).toEqual({ ready: true });
 
-  const calls: { apiKey: string; text: string }[] = [];
+  const cloud = cloudFetch({ language: "pt-BR" });
+  withKey.host.fetchImpl = cloud.fetchImpl;
   const language = await googleCloudDetectionContribution.execute(
     binding<GoogleCloudDetectionConfig>({}, "ref-1"),
-    {
-      sample: "你好，世界",
-      googleCloudDetect: async (input) => {
-        calls.push({ apiKey: input.apiKey, text: input.text });
-        return "pt-BR";
-      },
-    },
+    { sample: "你好，世界" },
     withKey.host,
   );
   expect(language).toBe("pt");
-  expect(calls).toEqual([{ apiKey: "cloud-key", text: "你好，世界" }]);
+  expect(cloud.calls).toHaveLength(1);
+  expect(cloud.calls[0]!.url).toBe(GOOGLE_CLOUD_DETECT_URL);
+  expect(cloud.calls[0]!.init.headers["x-goog-api-key"]).toBe("cloud-key");
+  expect(JSON.parse(cloud.calls[0]!.init.body ?? "null")).toEqual({ q: ["你好，世界"] });
+});
+
+test("detect contribution: Cloud uses the host fetch boundary", async () => {
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async () => {
+    throw new Error("global fetch must not run");
+  };
+  try {
+    const cloud = cloudFetch({ language: "ja" });
+    const cloudHost: HostServices = {
+      credential: { apiKey: "synthetic-cloud-key" },
+      models: hostWithModels().host.models,
+      fetchImpl: cloud.fetchImpl,
+      log: LOG,
+    };
+
+    const language = await googleCloudDetectionContribution.execute(
+      binding<GoogleCloudDetectionConfig>({}, "ref-1"),
+      { sample: "こんにちは" },
+      cloudHost,
+    );
+
+    expect(language).toBe("ja");
+    expect(cloud.calls).toHaveLength(1);
+    expect(cloud.calls[0]!.url).toBe(GOOGLE_CLOUD_DETECT_URL);
+    expect(cloud.calls[0]!.init.method).toBe("POST");
+    expect(cloud.calls[0]!.init.headers["x-goog-api-key"]).toBe("synthetic-cloud-key");
+    expect(JSON.parse(cloud.calls[0]!.init.body ?? "null")).toEqual({ q: ["こんにちは"] });
+
+    const free = googleFetch({ payload: [["Hello", "fr"]] });
+    const freeHost: HostServices = {
+      credential: null,
+      models: hostWithModels().host.models,
+      fetchImpl: free.fetchImpl,
+      log: LOG,
+    };
+
+    const freeLanguage = await googleDetectionContribution.execute(
+      binding<GoogleDetectionConfig>({}),
+      { sample: "Bonjour" },
+      freeHost,
+    );
+
+    expect(freeLanguage).toBe("fr");
+    expect(free.calls).toHaveLength(1);
+    expect(free.calls[0]!.url).toBe(GOOGLE_DETECTION_URL);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
 });
 
 test("detect contribution: Google Cloud maps transport, cancellation, and unsupported codes", async () => {
@@ -404,46 +484,45 @@ test("detect contribution: Google Cloud maps transport, cancellation, and unsupp
   host.host.credential = { apiKey: "cloud-key" };
   const cloudBinding = binding<GoogleCloudDetectionConfig>({}, "ref-1");
 
-  await expect(
-    googleCloudDetectionContribution.execute(
-      cloudBinding,
-      {
-        sample: "Texte",
-        googleCloudDetect: async () => {
-          throw new ProviderProtocolError("auth", "API key not valid", 403);
-        },
+  const authFailure = cloudFetch({
+    status: 403,
+    errorText: JSON.stringify({
+      error: {
+        message: "API key not valid",
+        status: "PERMISSION_DENIED",
+        errors: [{ reason: "keyInvalid" }],
       },
-      host.host,
-    ),
+    }),
+  });
+  host.host.fetchImpl = authFailure.fetchImpl;
+  await expect(
+    googleCloudDetectionContribution.execute(cloudBinding, { sample: "Texte" }, host.host),
   ).rejects.toMatchObject({ code: "failed" });
-
-  await expect(
-    googleCloudDetectionContribution.execute(
-      cloudBinding,
-      {
-        sample: "Texte",
-        googleCloudDetect: async () => {
-          throw new ProviderProtocolError("cancelled", "Cancelled");
-        },
-      },
-      host.host,
-    ),
-  ).rejects.toMatchObject({ code: "cancelled" });
-
-  await expect(
-    googleCloudDetectionContribution.execute(
-      cloudBinding,
-      { sample: "Bore da", googleCloudDetect: async () => "cy" },
-      host.host,
-    ),
-  ).rejects.toMatchObject({ code: "unsupported_language" });
+  expect(authFailure.calls).toHaveLength(1);
 
   const controller = new AbortController();
+  const hanging = cloudFetch({ hang: true });
+  host.host.fetchImpl = hanging.fetchImpl;
+  const pending = googleCloudDetectionContribution.execute(
+    cloudBinding,
+    { sample: "Texte", signal: controller.signal },
+    host.host,
+  );
   controller.abort();
+  await expect(pending).rejects.toMatchObject({ code: "cancelled" });
+
+  const unsupported = cloudFetch({ language: "cy" });
+  host.host.fetchImpl = unsupported.fetchImpl;
+  await expect(
+    googleCloudDetectionContribution.execute(cloudBinding, { sample: "Bore da" }, host.host),
+  ).rejects.toMatchObject({ code: "unsupported_language" });
+
+  const preAborted = new AbortController();
+  preAborted.abort();
   await expect(
     googleCloudDetectionContribution.execute(
       cloudBinding,
-      { sample: "Texte", signal: controller.signal },
+      { sample: "Texte", signal: preAborted.signal },
       host.host,
     ),
   ).rejects.toMatchObject({ code: "cancelled" });

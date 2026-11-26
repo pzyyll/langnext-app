@@ -1,6 +1,6 @@
 // ABOUTME: The OCR channel that reads screenshots with Baidu OCR and one API/Secret Key pair.
 // ABOUTME: The pair stays in the vault; the stored config keeps only the recognition mode.
-import { Text, View } from "nsh";
+import { View } from "nsh";
 import { t } from "nsh/i18n";
 import baiduCloudIcon from "../../../../assets/icons/baidu-cloud.svg";
 import { Input } from "../../../components/ui/input";
@@ -81,16 +81,6 @@ function OcrBaiduSettings(props: ChannelSettingsProps<OcrBaiduConfig>) {
           onChange={(value) => props.onCredentialChange("secretKey", value)}
         />
       </FormField>
-
-      <If when={props.credentialState === "missing"}>
-        <Text
-          testID="settings-ocr-baidu-keys-missing"
-          role="alert"
-          class="text-sm text-destructive"
-        >
-          {t("settings.ocr.keysUnreadable")}
-        </Text>
-      </If>
     </View>
   );
 }
@@ -118,6 +108,7 @@ export const baiduOcrChannel: CapabilityChannelContribution<
     { key: "apiKey", labelKey: "settings.ocr.apiKey", masked: true },
     { key: "secretKey", labelKey: "settings.ocr.secretKey", masked: true },
   ],
+  credentialUnreadableKey: "settings.ocr.keysUnreadable",
   describe: (binding) => t(`settings.ocr.operation.${binding.config.operation}`),
   validate: ({ credentialDraft, savedCredential }) => {
     const apiKey = trimmedDraft(credentialDraft.apiKey);
@@ -125,6 +116,14 @@ export const baiduOcrChannel: CapabilityChannelContribution<
     if (apiKey.length > 0 && secretKey.length > 0) return { ok: true };
     if (apiKey.length === 0 && secretKey.length === 0 && savedCredential) return { ok: true };
     return { ok: false, key: "settings.ocr.error.baiduKeysRequired" };
+  },
+  saveAvailable: ({ credentialDraft, credentialReadable }) => {
+    const apiKey = trimmedDraft(credentialDraft.apiKey);
+    const secretKey = trimmedDraft(credentialDraft.secretKey);
+    if (apiKey.length > 0 || secretKey.length > 0) {
+      return apiKey.length > 0 && secretKey.length > 0;
+    }
+    return credentialReadable;
   },
   readiness: async (_binding, host) => {
     const apiKey = credentialValue(host.credential, "apiKey");

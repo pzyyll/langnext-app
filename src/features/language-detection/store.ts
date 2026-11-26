@@ -13,7 +13,10 @@ import type { VaultStorage } from "../../framework/contributions/credential-vaul
 export const DETECT_COLLECTION_STORAGE_KEY = "integrations.detect.v1";
 export const DETECT_CREDENTIAL_NAMESPACE = "secret.detect";
 
-const DETECT_COLLECTION_POLICY: ChannelCollectionPolicy = { enableOnFirstSave: true };
+const DETECT_COLLECTION_POLICY: ChannelCollectionPolicy = {
+  enableOnFirstSave: true,
+  requireReadableCredentialOnEnable: true,
+};
 
 /** Creates the detection collection over injected storage. Isolated tests call this. */
 export function createDetectChannels(storage: VaultStorage): ChannelCollection {

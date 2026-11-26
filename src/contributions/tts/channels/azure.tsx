@@ -86,6 +86,8 @@ export const azureTtsContribution: CapabilityChannelContribution<
     }
     return { ok: true };
   },
+  saveAvailable: ({ config, credentialDraft }) =>
+    (credentialDraft.apiKey ?? "").trim().length > 0 && config.region.trim().length > 0,
   prepare: (binding, input) => {
     const voice = azureVoiceForLanguage(input.language);
     if (voice === null) {
@@ -142,11 +144,15 @@ function AzureTtsSettings(props: ChannelSettingsProps<AzureTtsConfig>) {
   const controlsLocked = () => props.disabled;
   const apiKeyDraft = () => props.credentialDraft.apiKey ?? "";
   const draftKeyPresent = () => apiKeyDraft().trim().length > 0;
+  const savedRegion = () => props.savedBinding.config.region.trim().toLowerCase();
+  const regionDirty = () => region().trim().toLowerCase() !== savedRegion();
   const regionProblem = () => parseAzureSpeechRegion(region()) === null;
+  const savedRegionProblem = () => parseAzureSpeechRegion(savedRegion()) === null;
+  const savedKeyReadable = () => props.savedCredential && props.credentialState === "readable";
   const previewBinding = (): ChannelBinding<AzureTtsConfig> => ({
     enabled: props.binding.enabled,
     configured: props.binding.configured,
-    config: draft(),
+    config: { region: savedRegion() },
     credentialRef: props.binding.credentialRef,
   });
 
@@ -180,12 +186,19 @@ function AzureTtsSettings(props: ChannelSettingsProps<AzureTtsConfig>) {
         binding={previewBinding()}
         host={props.host}
         language={() => AZURE_SAMPLE_LANGUAGE}
-        disabled={() => draftKeyPresent() || regionProblem()}
-        note={() =>
-          draftKeyPresent()
-            ? t("settings.tts.previewUnsaved")
-            : t("settings.tts.previewUnsavedRegion")
+        disabled={() =>
+          draftKeyPresent() ||
+          !savedKeyReadable() ||
+          regionDirty() ||
+          regionProblem() ||
+          savedRegionProblem()
         }
+        note={() => {
+          if (draftKeyPresent()) return t("settings.tts.previewUnsaved");
+          if (!savedKeyReadable()) return t("settings.tts.previewNeedsKey");
+          if (regionDirty()) return t("settings.tts.previewUnsavedRegion");
+          return regionProblem() ? t("settings.tts.error.invalidRegion") : undefined;
+        }}
       />
     </>
   );

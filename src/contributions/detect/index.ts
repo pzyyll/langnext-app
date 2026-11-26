@@ -38,10 +38,9 @@ export const detectChannelContributions = [
   googleCloudDetectionContribution,
 ] as const;
 
-/** Registers every detection channel the registry does not have yet. */
+/** Registers every detection channel; a duplicate id stops assembly. */
 export function registerDetectContributions(registry: ContributionRegistry): void {
   for (const contribution of detectChannelContributions) {
-    if (registry.findCapability("detect", contribution.id) !== null) continue;
     registry.registerCapability(contribution as unknown as ErasedChannel);
   }
 }

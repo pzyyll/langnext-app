@@ -1,6 +1,13 @@
 import { expect, test } from "nsh/test";
 import { registerAiContributions } from "../contributions/ai";
-import { createContributionRegistry } from "../framework/contributions";
+import { detectChannelContributions } from "../contributions/detect";
+import { ocrChannelContributions } from "../contributions/ocr";
+import {
+  createContributionRegistry,
+  getContributionRegistry,
+  setContributionRegistry,
+} from "../framework/contributions";
+import { initializeContributions } from "./contributions-setup";
 import { aiRegistry } from "../modules/ai/runtime/registry";
 import { providerSettingsRegistry } from "../modules/ai/ui/registry";
 import { initializeAiModules } from "./ai-setup";
@@ -51,4 +58,23 @@ test("ai setup: registers built-in protocols, providers, and presentations in a 
     fresh.list("provider-presentation").map((presentation) => presentation.providerTypeId),
   ).toEqual(["openai", "gemini", "anthropic", "deepseek", "custom"]);
   expect(fresh.diagnostics()).toEqual([]);
+});
+function expectStartupRejectsDuplicate(contribution: unknown) {
+  const duplicate = createContributionRegistry();
+  duplicate.registerCapability(contribution as never);
+  const previous = getContributionRegistry();
+  setContributionRegistry(duplicate);
+  try {
+    expect(() => initializeContributions()).toThrow("already registered");
+  } finally {
+    setContributionRegistry(previous);
+  }
+}
+
+test("pre-acceptance: startup rejects a duplicate OCR channel", () => {
+  expectStartupRejectsDuplicate(ocrChannelContributions[0]);
+});
+
+test("pre-acceptance: startup rejects a duplicate detection channel", () => {
+  expectStartupRejectsDuplicate(detectChannelContributions[0]);
 });
