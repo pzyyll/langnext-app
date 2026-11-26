@@ -46,7 +46,7 @@ const DEFAULT_FIXTURE: Fixture = {
 
 const CRLF_FIXTURE: Fixture = {
   id: "crlf",
-  source: "Line one.\r\n\r\nSecond 😀 line.",
+  source: "Line one.\r\n\r\nSecond 😀\r\nline.",
   result: "Ligne un. Deuxième 😀 ligne.",
   pairs: [
     {
@@ -55,7 +55,7 @@ const CRLF_FIXTURE: Fixture = {
     },
     {
       segment: { id: "c1", testID: "result-seg-1", start: 10, end: 28 },
-      sourceRange: { start: 13, end: 28 },
+      sourceRange: { start: 13, end: 29 },
     },
   ],
 };

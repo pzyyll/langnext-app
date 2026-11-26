@@ -422,6 +422,25 @@ mod tests {
         assert!(unrelated.is_empty());
     }
 
+    #[test]
+    #[ignore = "requires the pinned model in LANGNEXT_ALIGNMENT_MODEL_DIR"]
+    fn aligns_a_sentence_wrapped_across_three_lines_with_the_real_model() {
+        let directory = PathBuf::from(std::env::var_os("LANGNEXT_ALIGNMENT_MODEL_DIR").unwrap());
+        let source = "Cutting-edge intelligence, with speed and\nefficiency for everyday coding and agentic\nworkflows.";
+        for target in [
+            "尖端智能，兼具速度与效率，适用于日常编码和基于代理的 工作流。",
+            "尖端智能，兼具速度与\n效率，适用于日常编码和基于代理的 工作流。",
+        ] {
+            assert_matches(
+                &directory,
+                source,
+                &[Some(target.into())],
+                &[source],
+                &[target],
+            );
+        }
+    }
+
     fn assert_matches(
         directory: &Path,
         source: &str,

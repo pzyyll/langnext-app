@@ -34,13 +34,15 @@ test("sentence highlight native: highlights aligned source range on result hover
     app.spanStyle("id:quick-translate-source >> text:Hello 😀 world!").backgroundColor,
   ).toBeUndefined();
 
-  // Hovering CRLF fixture maps offsets after \r\n paragraphs cleanly.
+  // The source highlight spans a CRLF within the sentence, but not the preceding paragraph.
   await app.press("id:fixture-crlf");
   await app.waitFor("id:quick-translate-result-text >> text:Deuxième 😀 ligne.");
   await app.hover("id:quick-translate-result-text >> text:Deuxième 😀 ligne.");
-  expect(
-    app.spanStyle("id:quick-translate-source >> text:Second 😀 line.").backgroundColor,
-  ).toEqual(brandSoft);
+  for (const line of ["Second 😀", "line."]) {
+    expect(app.spanStyle(`id:quick-translate-source >> text:${line}`).backgroundColor).toEqual(
+      brandSoft,
+    );
+  }
   expect(
     app.spanStyle("id:quick-translate-source >> text:Line one.").backgroundColor,
   ).toBeUndefined();

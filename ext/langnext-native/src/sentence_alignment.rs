@@ -1,6 +1,6 @@
 //! Conservative local sentence alignment for Quick Translate results.
 
-use std::collections::HashMap;
+use std::{borrow::Cow, collections::HashMap};
 
 use nsh_core::prelude::*;
 use unicode_segmentation::UnicodeSegmentation;
@@ -155,6 +155,17 @@ fn build_utf16_offsets(text: &str) -> Vec<u32> {
     offsets
 }
 
+fn is_markdown_heading_marker(word: &str) -> bool {
+    (1..=6).contains(&word.len()) && word.bytes().all(|byte| byte == b'#')
+}
+
+fn is_markdown_list_marker(word: &str) -> bool {
+    matches!(word, "-" | "+" | "*")
+        || word.strip_suffix(['.', ')']).is_some_and(|number| {
+            !number.is_empty() && number.bytes().all(|byte| byte.is_ascii_digit())
+        })
+}
+
 fn prose_group_byte_ranges(text: &str) -> Vec<(usize, usize)> {
     let bytes = text.as_bytes();
     let mut groups = Vec::new();
@@ -174,15 +185,18 @@ fn prose_group_byte_ranges(text: &str) -> Vec<(usize, usize)> {
                 i += 1;
             }
         }
-        if text[line_start..line_end].trim().is_empty() {
-            if let Some(group) = active.take() {
-                groups.push(group);
-            }
-        } else {
-            active = Some(match active {
-                Some((start, _)) => (start, line_end),
-                None => (line_start, line_end),
-            });
+        let first_word = text[line_start..line_end].split_whitespace().next();
+        let heading = first_word.is_some_and(is_markdown_heading_marker);
+        if (first_word.is_none() || heading || first_word.is_some_and(is_markdown_list_marker))
+            && let Some(group) = active.take()
+        {
+            groups.push(group);
+        }
+        if heading {
+            groups.push((line_start, line_end));
+        } else if first_word.is_some() {
+            let start = active.map_or(line_start, |(start, _)| start);
+            active = Some((start, line_end));
         }
     }
 
@@ -238,7 +252,13 @@ fn collect_block_sentences<'a>(
         let group_id = groups.len();
         let start_sentence = sentences.len();
         let slice = &text[group_start..group_end];
-        for (rel_start, segment) in sentence_segments(slice) {
+        // Replace each break byte with a space so the sentence offsets still index the original text.
+        let prose = if slice.contains(['\r', '\n']) {
+            Cow::Owned(slice.replace(['\r', '\n'], " "))
+        } else {
+            Cow::Borrowed(slice)
+        };
+        for (rel_start, segment) in sentence_segments(&prose) {
             let start_trimmed = segment.trim_start();
             let trimmed = start_trimmed.trim_end();
             if !is_sentence_candidate(trimmed) {
@@ -251,7 +271,7 @@ fn collect_block_sentences<'a>(
                 group_id,
                 utf16_start: utf16_map[abs_start],
                 utf16_end: utf16_map[abs_end],
-                text: trimmed,
+                text: &text[abs_start..abs_end],
             });
         }
         let end_sentence = sentences.len();
@@ -783,6 +803,24 @@ mod tests {
         assert!(align_blocks("\"!\"", &[Some("“。”".to_owned())]).is_empty());
         assert!(align_blocks("「？」", &[Some("\"?\"".to_owned())]).is_empty());
         assert!(align_blocks("One sentence.", &[Some("唯一一句。".to_owned()), None]).is_empty());
+    }
+
+    #[test]
+    fn aligns_wrapped_list_items_without_crossing_structural_boundaries() {
+        let source =
+            "# QUICK Translate\r\n- NSH edits\r\n  😀 the source\r\n2) TSX renders the result";
+        let target = "# QUICK 翻译\n- NSH 编辑\n  😀 原文\n2) TSX 显示译文";
+        assert_eq!(
+            aligned_texts(source, &[Some(target.into())]),
+            [
+                ("# QUICK Translate".into(), "# QUICK 翻译".into()),
+                (
+                    "- NSH edits\r\n  😀 the source".into(),
+                    "- NSH 编辑\n  😀 原文".into(),
+                ),
+                ("2) TSX renders the result".into(), "2) TSX 显示译文".into()),
+            ]
+        );
     }
 
     #[test]
