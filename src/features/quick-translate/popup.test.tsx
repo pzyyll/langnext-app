@@ -4453,11 +4453,11 @@ test("back-translation: keyboard Tab and Enter/Space open, speak, copy, retry, a
   }
   await app.keyboard.press("arrowright");
   expect(app.accessibility("id:quick-translate-back-translation-preview")?.value).toBe(
-    "Sentence 1 of 1: Good morning",
+    "Sentence 1 of 1: Bonjour",
   );
   await app.keyboard.press("enter");
   const popover = "id:quick-translate-sentence-popover";
-  await app.waitFor(`${popover} >> text:Good morning`);
+  await app.waitFor(`${popover} >> text:Bonjour`);
   await app.keyboard.press("escape");
   await app.waitFor(popover, { state: "gone" });
 
@@ -4561,7 +4561,7 @@ test("back-translation: renders zh-CN localization across states and actions", a
   expect(app.texts()).not.toContain("回译");
 });
 
-test("back-translation alignment: highlights the original independently of the forward result", async () => {
+test("back-translation alignment: highlights the matching translation, not the original", async () => {
   let calls = 0;
   const app = await open(POPUP_HARNESS, {
     width: 520,
@@ -4608,11 +4608,16 @@ test("back-translation alignment: highlights the original independently of the f
   await app.hover(sentence);
   const highlight = app.spanStyle(sentence).backgroundColor;
   expect(highlight).toBeTruthy();
-  expect(app.spanStyle(original).backgroundColor).toEqual(highlight);
-  expect(app.spanStyle(forward).backgroundColor).toBeUndefined();
+  expect(app.spanStyle(forward).backgroundColor).toEqual(highlight);
+  expect(app.spanStyle(original).backgroundColor).toBeUndefined();
 
+  await app.hover(forward);
+  expect(app.spanStyle(original).backgroundColor).toEqual(highlight);
+  expect(app.spanStyle(sentence).backgroundColor).toBeUndefined();
+
+  await app.hover(sentence);
   await app.press(sentence);
-  await app.waitFor(`${popover} >> text:Second draft works.`);
+  await app.waitFor(`${popover} >> text:第二句草稿有效。`);
 
   await app.press(`${card} >> id:quick-translate-retry-back-translation`);
   const retriedSentence = `${back} >> text:A revised draft works.`;
@@ -4620,16 +4625,16 @@ test("back-translation alignment: highlights the original independently of the f
   expect(app.shows(popover)).toBe(false);
   expect(app.shows(sentence)).toBe(false);
   await app.press(retriedSentence);
-  await app.waitFor(`${popover} >> text:Second draft works.`);
+  await app.waitFor(`${popover} >> text:第二句草稿有效。`);
 
   await app.press(`${card} >> id:quick-translate-close-back-translation`);
   await app.waitFor(back, { state: "gone" });
   expect(app.shows(popover)).toBe(false);
-  expect(app.spanStyle(original).backgroundColor).toBeUndefined();
   expect(app.shows(forward)).toBe(true);
+  expect(app.spanStyle(forward).backgroundColor).toBeUndefined();
 });
 
-test("back-translation alignment: opens the original from a formatted Markdown fragment with the source collapsed", async () => {
+test("back-translation alignment: highlights a formatted translation even without a match to the original", async () => {
   let calls = 0;
   const app = await open(POPUP_HARNESS, {
     ...viewport,
@@ -4638,7 +4643,16 @@ test("back-translation alignment: opens the original from a formatted Markdown f
       "POST https://api.openai.com/v1/chat/completions": () => ({
         status: 200,
         body: {
-          choices: [{ message: { content: ++calls === 1 ? "Bonjour !" : "Hello **again**!" } }],
+          choices: [
+            {
+              message: {
+                content:
+                  ++calls === 1
+                    ? "# Aperçu SDK\n\nBonjour **NSH** !"
+                    : "# SDK overview\n\nHello **NSH**!",
+              },
+            },
+          ],
         },
       }),
     },
@@ -4646,18 +4660,26 @@ test("back-translation alignment: opens the original from a formatted Markdown f
 
   const source = "id:quick-translate-source";
   const back = "id:quick-translate-back-translation-preview";
+  const matchingTranslation = "id:comparison-seg-1-frag-1";
   await app.press("id:harness-toggle-markdown");
-  await app.type(source, "Good morning!");
+  await app.type(source, "First source sentence. Another source sentence.");
   await app.keyboard.press("enter");
   await app.press("id:quick-translate-back-translate");
   await app.waitFor(back);
   await app.press("id:quick-translate-collapse-source");
   await app.waitFor(source, { state: "gone" });
 
-  const formatted = `${back} >> id:result-seg-0-frag-1`;
-  expect(app.spanStyle(`${formatted} >> text:again`).fontWeight).toBeGreaterThanOrEqual(600);
+  const formatted = `${back} >> id:result-seg-1-frag-1`;
+  expect(app.spanStyle(`${formatted} >> text:NSH`).fontWeight).toBeGreaterThanOrEqual(600);
+  await app.hover(formatted);
+  const highlight = app.viewStyle(formatted)?.backgroundColor;
+  expect(highlight).toBeTruthy();
+  expect(app.viewStyle(matchingTranslation)?.backgroundColor).toEqual(highlight);
+  expect(app.viewStyle("id:comparison-seg-0")?.backgroundColor).toBeUndefined();
   await app.press(formatted);
-  await app.waitFor("id:quick-translate-sentence-popover >> text:Good morning!");
+  const popover = "id:quick-translate-sentence-popover";
+  await app.waitFor(`${popover} >> text:Bonjour NSH !`);
+  expect(app.accessibility(popover)?.label).toBe("Matched translation");
 });
 
 test("sentence highlight live: plain text highlights matched source sentence on hover, clears across collapse and copy", async () => {

@@ -15,12 +15,14 @@ import {
   type AlignmentSegmentNodeData,
 } from "./alignment-document";
 
-export interface SentenceSegment {
-  id: string;
-  start: number;
-  end: number;
-  testID?: string;
-}
+import {
+  composeSentenceFragments,
+  fragmentTestId,
+  type SentenceFragment,
+  type SentenceSegment,
+} from "./alignment-ranges";
+
+export type { SentenceSegment } from "./alignment-ranges";
 
 export interface AlignedTranslationProps {
   testID?: string;
@@ -29,6 +31,8 @@ export interface AlignedTranslationProps {
   document?: TextViewDocument | null;
   segments: readonly SentenceSegment[];
   activeSegmentId?: string | null;
+  comparisonSegments?: readonly SentenceSegment[];
+  activeComparisonId?: string | null;
   onHoverEnterSegment?: (segmentId: string) => void;
   onHoverLeaveSegment?: (segmentId: string) => void;
   onPressSegment?: (segmentId: string, event: PressEvent) => void;
@@ -36,51 +40,48 @@ export interface AlignedTranslationProps {
 }
 
 interface TextPiece {
-  key: string;
   text: string;
-  segment: SentenceSegment | null;
+  fragment?: SentenceFragment;
+  testID?: string;
 }
 
-function buildTextPieces(text: string, segments: readonly SentenceSegment[]): TextPiece[] {
-  if (!text) return [];
-  const valid = segments
+function clippedSegments(text: string, segments: readonly SentenceSegment[]): SentenceSegment[] {
+  return segments
     .map((seg) => ({
       ...seg,
-      start: Math.max(0, Math.min(text.length, seg.start)),
-      end: Math.max(0, Math.min(text.length, seg.end)),
+      start: Math.max(0, seg.start),
+      end: Math.min(text.length, seg.end),
     }))
     .filter((seg) => seg.end > seg.start)
     .sort((a, b) => a.start - b.start);
+}
 
+function buildTextPieces(
+  text: string,
+  segments: readonly SentenceSegment[],
+  comparison: readonly SentenceSegment[],
+): TextPiece[] {
+  const fragments = composeSentenceFragments(
+    clippedSegments(text, segments),
+    clippedSegments(text, comparison),
+  );
+  const counters = new Map<string, number>();
   const pieces: TextPiece[] = [];
   let cursor = 0;
 
-  for (const seg of valid) {
-    const start = Math.max(cursor, seg.start);
-    if (seg.end <= start) continue;
-    if (start > cursor) {
-      pieces.push({
-        key: `gap:${cursor}:${start}`,
-        text: text.slice(cursor, start),
-        segment: null,
-      });
-    }
+  for (const fragment of fragments) {
+    const start = Math.max(cursor, fragment.start);
+    if (fragment.end <= start) continue;
+    if (start > cursor) pieces.push({ text: text.slice(cursor, start) });
     pieces.push({
-      key: `seg:${seg.id}:${start}:${seg.end}`,
-      text: text.slice(start, seg.end),
-      segment: seg,
+      text: text.slice(start, fragment.end),
+      fragment,
+      testID: fragmentTestId(fragment.segment?.testID, counters),
     });
-    cursor = seg.end;
+    cursor = fragment.end;
   }
 
-  if (cursor < text.length) {
-    pieces.push({
-      key: `gap:${cursor}:${text.length}`,
-      text: text.slice(cursor),
-      segment: null,
-    });
-  }
-
+  if (cursor < text.length) pieces.push({ text: text.slice(cursor) });
   return pieces;
 }
 
@@ -133,7 +134,10 @@ function buildSegmentFragmentClass(
 }
 
 export function AlignedTranslation(props: AlignedTranslationProps) {
-  const pieces = () => buildTextPieces(props.text, props.segments);
+  const pieces = () => buildTextPieces(props.text, props.segments, props.comparisonSegments ?? []);
+  const isHighlighted = (segmentId: string | undefined, comparisonId: string | undefined) =>
+    (segmentId !== undefined && props.activeSegmentId === segmentId) ||
+    (comparisonId !== undefined && props.activeComparisonId === comparisonId);
   const textClass = () => translationOutputClass(props.size);
 
   const renderCustomSegment = (node: TextViewCustomNode) => {
@@ -141,9 +145,9 @@ export function AlignedTranslation(props: AlignedTranslationProps) {
       return <Text>{node.text ?? ""}</Text>;
     }
     const data = node.data as AlignmentSegmentNodeData | undefined;
-    const segmentId = data?.segmentId ?? "";
+    const segmentId = data?.segmentId;
     const { text, isCode } = readCustomNodeText(node);
-    const isActive = () => segmentId.length > 0 && props.activeSegmentId === segmentId;
+    const isActive = () => isHighlighted(segmentId, data?.comparisonId);
     const linkUrl = data?.marks?.linkUrl;
     const linkTitle = data?.marks?.linkTitle;
     return (
@@ -184,17 +188,23 @@ export function AlignedTranslation(props: AlignedTranslationProps) {
         <View testID={props.testID ? `${props.testID}-container` : undefined} selectable>
           <Text testID={props.testID} class={textClass()}>
             {pieces().map((piece) => {
-              const seg = piece.segment;
-              if (!seg) return piece.text;
-              const isActive = () => props.activeSegmentId === seg.id;
+              const fragment = piece.fragment;
+              if (!fragment) return piece.text;
+              const id = fragment.segment?.id;
               return (
                 <Text
-                  testID={seg.testID}
+                  testID={piece.testID}
                   focusable={false}
-                  class={isActive() ? "bg-brand-soft hover:opacity-100" : "hover:opacity-100"}
-                  onPress={(event) => props.onPressSegment?.(seg.id, event)}
-                  onMouseEnter={() => props.onHoverEnterSegment?.(seg.id)}
-                  onMouseLeave={() => props.onHoverLeaveSegment?.(seg.id)}
+                  class={
+                    isHighlighted(id, fragment.comparisonId)
+                      ? "bg-brand-soft hover:opacity-100"
+                      : id
+                        ? "hover:opacity-100"
+                        : undefined
+                  }
+                  onPress={id ? (event) => props.onPressSegment?.(id, event) : undefined}
+                  onMouseEnter={id ? () => props.onHoverEnterSegment?.(id) : undefined}
+                  onMouseLeave={id ? () => props.onHoverLeaveSegment?.(id) : undefined}
                 >
                   {piece.text}
                 </Text>

@@ -1,6 +1,13 @@
 import type { SentenceAlignmentPair } from "langnext-native";
 import type { TextViewBlock, TextViewDocument, TextViewInline } from "nsh/base";
 import { TextView } from "nsh/base";
+import {
+  composeSentenceFragments,
+  fragmentTestId,
+  type SentenceFragment,
+  type SentenceSegment,
+  type TextRange,
+} from "./alignment-ranges";
 
 export const ALIGNMENT_SEGMENT_NODE_NAME = "sentenceAlignmentSegment";
 const MAX_CUSTOM_TEXT_RUN_CHARS = 18;
@@ -24,10 +31,9 @@ export interface AlignmentSegmentMarks {
 }
 
 export interface AlignmentSegmentNodeData {
-  segmentId: string;
-  segmentIndex: number;
-  fragmentIndex: number;
-  testID: string;
+  segmentId?: string;
+  comparisonId?: string;
+  testID?: string;
   marks?: AlignmentSegmentMarks;
 }
 
@@ -41,14 +47,6 @@ export interface MarkdownAlignedSegment {
 export interface MarkdownAlignmentResult {
   document: TextViewDocument;
   segments: MarkdownAlignedSegment[];
-}
-
-interface IndexedSegment {
-  id: string;
-  segmentIndex: number;
-  testID: string;
-  start: number;
-  end: number;
 }
 
 interface InlineBlockSlot {
@@ -195,21 +193,19 @@ function chunkWrapFriendlyText(text: string): string[] {
 }
 
 function makeSegmentNode(
-  segment: IndexedSegment,
+  fragment: SentenceFragment,
   fragmentCounters: Map<string, number>,
   inner: TextViewInline[],
   marks: AlignmentSegmentMarks,
 ): TextViewInline {
-  const fragmentIndex = fragmentCounters.get(segment.id) ?? 0;
-  fragmentCounters.set(segment.id, fragmentIndex + 1);
-  const testID = fragmentIndex === 0 ? segment.testID : `${segment.testID}-frag-${fragmentIndex}`;
-  const hasMarks = Object.keys(marks).length > 0;
+  const referenceId = fragment.comparisonId;
+  const testID =
+    fragment.segment?.testID ?? (referenceId ? `comparison-${referenceId}` : undefined);
   const data: AlignmentSegmentNodeData = {
-    segmentId: segment.id,
-    segmentIndex: segment.segmentIndex,
-    fragmentIndex,
-    testID,
-    ...(hasMarks ? { marks } : {}),
+    segmentId: fragment.segment?.id,
+    comparisonId: referenceId,
+    testID: fragmentTestId(testID, fragmentCounters),
+    marks,
   };
   return {
     type: "custom",
@@ -222,7 +218,7 @@ function makeSegmentNode(
 function splitTextInline(
   text: string,
   baseOffset: number,
-  segments: readonly IndexedSegment[],
+  segments: readonly SentenceFragment[],
   fragmentCounters: Map<string, number>,
   marks: AlignmentSegmentMarks,
 ): TextViewInline[] {
@@ -288,7 +284,7 @@ function extendMarksForInline(
 
 function annotateInlines(
   content: readonly TextViewInline[],
-  segments: readonly IndexedSegment[],
+  segments: readonly SentenceFragment[],
   cursorRef: { value: number },
   fragmentCounters: Map<string, number>,
   marks: AlignmentSegmentMarks,
@@ -448,10 +444,49 @@ export function prepareMarkdownAlignment(markdown: string): PreparedMarkdownAlig
   return { document, targetBlocks, slots };
 }
 
+export interface MarkdownComparisonSource {
+  text: string;
+  blocks: readonly (TextRange & { blockIndex: number })[];
+}
+
+export function prepareMarkdownComparisonSource(markdown: string): MarkdownComparisonSource {
+  const targetBlocks = prepareMarkdownAlignment(markdown)?.targetBlocks ?? [];
+  let text = "";
+  const blocks: Array<TextRange & { blockIndex: number }> = [];
+  for (const [blockIndex, block] of targetBlocks.entries()) {
+    if (!block?.trim()) continue;
+    if (text.length > 0) text += "\n\n";
+    const start = text.length;
+    text += block;
+    blocks.push({ blockIndex, start, end: text.length });
+  }
+  return { text, blocks };
+}
+
+export function projectMarkdownComparison(
+  source: MarkdownComparisonSource,
+  segments: readonly SentenceSegment[],
+): ReadonlyMap<number, SentenceSegment[]> {
+  const byBlock = new Map<number, SentenceSegment[]>();
+  for (const block of source.blocks) {
+    const ranges: SentenceSegment[] = [];
+    for (const segment of segments) {
+      const start = Math.max(segment.start, block.start);
+      const end = Math.min(segment.end, block.end);
+      if (start < end) {
+        ranges.push({ id: segment.id, start: start - block.start, end: end - block.start });
+      }
+    }
+    if (ranges.length > 0) byBlock.set(block.blockIndex, ranges);
+  }
+  return byBlock;
+}
+
 export function finalizeMarkdownAlignment(
   sourceText: string,
   prepared: PreparedMarkdownAlignment,
   pairs: readonly SentenceAlignmentPair[],
+  comparison?: ReadonlyMap<number, readonly SentenceSegment[]>,
 ): MarkdownAlignmentResult | null {
   const slotByBlockIndex = new Map<number, InlineBlockSlot>();
   for (const slot of prepared.slots) {
@@ -462,7 +497,7 @@ export function finalizeMarkdownAlignment(
     (a, b) => a.targetBlockIndex - b.targetBlockIndex || a.targetStart - b.targetStart,
   );
 
-  const blockSegments = new Map<number, IndexedSegment[]>();
+  const blockSegments = new Map<number, SentenceSegment[]>();
   const segments: MarkdownAlignedSegment[] = [];
   const fragmentCounters = new Map<string, number>();
 
@@ -490,9 +525,8 @@ export function finalizeMarkdownAlignment(
     const segmentIndex = segments.length;
     const id = `seg-${segmentIndex}`;
     const testID = `result-seg-${segmentIndex}`;
-    const indexed: IndexedSegment = {
+    const indexed: SentenceSegment = {
       id,
-      segmentIndex,
       testID,
       start: pair.targetStart,
       end: pair.targetEnd,
@@ -507,13 +541,17 @@ export function finalizeMarkdownAlignment(
     });
   }
 
-  if (segments.length === 0) return null;
+  if (segments.length === 0 && !comparison?.size) return null;
 
-  for (const [blockIndex, segs] of blockSegments) {
-    const slot = slotByBlockIndex.get(blockIndex);
-    if (!slot) continue;
+  for (const slot of prepared.slots) {
+    const segs = blockSegments.get(slot.blockIndex) ?? [];
+    const refs = comparison?.get(slot.blockIndex) ?? [];
+    if (segs.length === 0 && refs.length === 0) continue;
+    const fragments = composeSentenceFragments(segs, refs);
     const cursorRef = { value: 0 };
-    slot.apply(annotateInlines(slot.getContent(), segs, cursorRef, fragmentCounters, slot.marks));
+    slot.apply(
+      annotateInlines(slot.getContent(), fragments, cursorRef, fragmentCounters, slot.marks),
+    );
   }
 
   return {

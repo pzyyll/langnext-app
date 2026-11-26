@@ -940,6 +940,9 @@ quickTranslate:
   sentencePreviewValue: "第 %{current} / %{total} 句：%{text}"
   sentenceSourcePopoverLabel: 原文
   showSourceSentence: 查看原句
+  backTranslationPreviewHint: 按左右方向键可高亮对应句子，按回车可查看对应的译文。
+  sentenceTranslationPopoverLabel: 对应译文
+  showTranslationSentence: 查看对应译文
   error:
     blankInput: 请输入要翻译的文本。
     presetDisabled: 所选预设已停用，请在“预设”中启用或选择其他预设。

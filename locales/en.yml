@@ -940,6 +940,9 @@ quickTranslate:
   sentencePreviewValue: "Sentence %{current} of %{total}: %{text}"
   sentenceSourcePopoverLabel: Original text
   showSourceSentence: Show original sentence
+  backTranslationPreviewHint: Press the left and right arrow keys to highlight matching sentences, or press Enter to view the matching translation.
+  sentenceTranslationPopoverLabel: Matched translation
+  showTranslationSentence: Show matching translation
   error:
     blankInput: Enter text to translate.
     presetDisabled: Selected preset is disabled. Enable it in Presets or choose another preset.
