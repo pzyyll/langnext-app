@@ -5,6 +5,9 @@ use std::collections::HashMap;
 use nsh_core::prelude::*;
 use unicode_segmentation::UnicodeSegmentation;
 
+#[cfg(windows)]
+mod semantic;
+
 /// Matched UTF-16 ranges between the source text and one visible target prose block.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, JsObject)]
 pub struct SentenceAlignmentPair {
@@ -20,6 +23,27 @@ pub struct SentenceAlignmentPair {
     pub target_end: u32,
 }
 
+/// One file in the pinned offline semantic model.
+#[derive(Debug, JsObject)]
+pub struct SemanticModelAsset {
+    /// File index used by the native installer.
+    pub id: u32,
+    /// Exact number of bytes in the file.
+    pub bytes: u32,
+    /// Public download URL. It receives no input or result text.
+    pub url: String,
+}
+
+#[cfg(windows)]
+async fn semantic_worker<T: Send + 'static>(
+    operation: impl FnOnce(&std::path::Path) -> T + Send + 'static,
+) -> Result<T, String> {
+    let directory = data_dir().ok_or("The app data directory is unavailable.")?;
+    blocking(move || operation(&semantic::directory(&directory)))
+        .await
+        .map_err(|_| "The semantic alignment worker failed.".into())
+}
+
 /// Local sentence boundary splitting and conservative alignment.
 #[module]
 pub struct SentenceAlignmentNative;
@@ -32,6 +56,68 @@ impl SentenceAlignmentNative {
         target_blocks: Vec<Option<String>>,
     ) -> Vec<SentenceAlignmentPair> {
         align_blocks(&source_text, &target_blocks)
+    }
+
+    /// Lists the Windows offline model files without issuing any requests.
+    pub fn model_assets() -> Vec<SemanticModelAsset> {
+        #[cfg(windows)]
+        return semantic::assets();
+        #[cfg(not(windows))]
+        Vec::new()
+    }
+
+    /// Whether all verified model files are present in the app data directory.
+    pub async fn model_ready() -> bool {
+        #[cfg(windows)]
+        return semantic_worker(semantic::installed).await.unwrap_or(false);
+        #[cfg(not(windows))]
+        false
+    }
+
+    /// Writes a bounded chunk to the temporary file for a model asset.
+    pub async fn append_model_chunk(id: u32, offset: u32, chunk: Vec<u8>) -> Result<(), String> {
+        #[cfg(windows)]
+        return semantic_worker(move |directory| semantic::append(directory, id, offset, &chunk))
+            .await?;
+        #[cfg(not(windows))]
+        {
+            let _ = (id, offset, chunk);
+            Err("Semantic alignment is not available on this platform.".into())
+        }
+    }
+
+    /// Checks the downloaded file against the pinned digest before publishing it.
+    pub async fn finish_model_asset(id: u32) -> Result<(), String> {
+        #[cfg(windows)]
+        return semantic_worker(move |directory| semantic::finish(directory, id)).await?;
+        #[cfg(not(windows))]
+        {
+            let _ = id;
+            Err("Semantic alignment is not available on this platform.".into())
+        }
+    }
+
+    /// Removes interrupted temporary downloads without removing installed files.
+    pub async fn clean_model_download() {
+        #[cfg(windows)]
+        let _ = semantic_worker(semantic::cleanup).await;
+    }
+
+    /// Aligns completed text on a blocking worker, without network access.
+    pub async fn align_semantic(
+        source_text: String,
+        target_blocks: Vec<Option<String>>,
+    ) -> Result<Option<Vec<SentenceAlignmentPair>>, String> {
+        #[cfg(windows)]
+        return semantic_worker(move |directory| {
+            semantic::align(directory, &source_text, &target_blocks)
+        })
+        .await?;
+        #[cfg(not(windows))]
+        {
+            let _ = (source_text, target_blocks);
+            Ok(None)
+        }
     }
 }
 

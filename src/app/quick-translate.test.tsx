@@ -273,6 +273,87 @@ test("quick history: discard a late translation when a saved action replaces the
   expect(app.shows("id:quick-translate-card-card-1")).toBe(true);
 });
 
+async function headlessHasAlignmentModel(): Promise<boolean | null> {
+  try {
+    const { SentenceAlignmentNative } = await import("langnext-native");
+    return SentenceAlignmentNative.modelAssets().length > 0;
+  } catch {
+    // Desktop test runners execute this file outside the app's native registry.
+    return null;
+  }
+}
+
+test("offline alignment model: does not download until requested and reports a failed transfer", async () => {
+  if ((await headlessHasAlignmentModel()) === false) return;
+  const app = await open(HARNESS_ENTRY, {
+    ...viewport,
+    storage: { "settings.language": "en" },
+    network: {
+      "GET https://huggingface.co/Xenova/multilingual-e5-small/*": {
+        status: 503,
+        body: "Unavailable",
+      },
+    },
+  });
+  await app.press("id:harness-tray-quick-translate");
+  const download = "id:quick-translate-download-alignment";
+  await app.waitFor(download);
+  expect(app.requests()).toHaveLength(0);
+  await app.press(download);
+  await app.waitFor(t("quickTranslate.alignmentModelDownloadFailed"));
+  expect(app.shows(download)).toBe(true);
+  expect(app.requests().map((request) => request.method)).toEqual(["GET"]);
+  expect(app.requests()[0]!.body ?? "").toBe("");
+});
+
+test("offline alignment model: aligns the complete result without another provider request", async () => {
+  if (!(await headlessHasAlignmentModel())) return;
+  const source = "She opened the door. He stepped inside.";
+  const target = "她打开了门。他走了进去。";
+  const calls: unknown[][] = [];
+  const app = await open(HARNESS_ENTRY, {
+    ...viewport,
+    storage: {
+      ...makeSeedStorage({
+        channels: [makeChannel({ adapterId: "openai-compatible", enabled: true })],
+        models: [makeModel({ enabled: true })],
+        credentials: { "ch-1": "sk-test" },
+      }),
+      [PRESETS_STORAGE_KEY]: JSON.stringify({ version: 1, items: [quickPreset] }),
+      "settings.language": "en",
+      [QUICK_TRANSLATE_PREFERENCES_KEY]: popupPreferences({
+        cards: [{ id: "card-1", presetId: quickPreset.id }],
+      }),
+    },
+    network: {
+      "POST https://api.openai.com/v1/chat/completions": {
+        status: 200,
+        body: { choices: [{ message: { content: target } }] },
+      },
+    },
+    modules: {
+      "langnext-native": {
+        "SentenceAlignmentNative.modelReady": () => true,
+        "SentenceAlignmentNative.alignSemantic": (input: string, blocks: string[]) => {
+          calls.push([input, blocks]);
+          return [
+            { sourceStart: 21, sourceEnd: 39, targetBlockIndex: 0, targetStart: 6, targetEnd: 12 },
+          ];
+        },
+      },
+    },
+  });
+  await app.press("id:harness-tray-quick-translate");
+  await app.type("id:quick-translate-source", source);
+  await app.keyboard.press("enter");
+  await app.waitUntil(() => calls.length > 0);
+  expect(calls).toEqual([[source, [target]]]);
+  await app.waitFor("id:quick-translate-result-preview");
+  await app.press("id:quick-translate-copy");
+  expect(app.clipboard()).toBe(target);
+  expect(app.requests()).toHaveLength(1);
+});
+
 test("quick window: the Markdown toggle reformats all results without retranslating", async () => {
   const heading = "Translation";
   const output = `## ${heading}\n\n**Bonjour**\n\n![Illustration](https://example.com/image.png)`;

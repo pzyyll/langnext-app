@@ -17,7 +17,7 @@ import {
   type Signal,
   type ViewRef,
 } from "nsh";
-import { SentenceAlignmentNative } from "langnext-native";
+import { SentenceAlignmentNative, type SentenceAlignmentPair } from "langnext-native";
 import type { TextViewDocument } from "nsh/base";
 import { t } from "nsh/i18n";
 import { motion } from "../../components/motion";
@@ -41,7 +41,7 @@ import { playMp3Bytes } from "../tts/playback";
 import { prepareQuickSpeech, quickSpeechFailureMessage } from "../tts/quick-speech";
 import { ttsSettingsStore } from "../tts/settings";
 import { AlignedTranslation, type SentenceSegment } from "./aligned-translation";
-import { buildAlignedMarkdownDocument } from "./alignment-document";
+import { buildAlignedMarkdownDocument, prepareMarkdownAlignment } from "./alignment-document";
 import { QuickTranslateHistoryResults } from "./history-results";
 import type { CardResultState, CardViewItem, QuickTranslateSession } from "./session";
 import {
@@ -75,6 +75,8 @@ export interface QuickTranslatePopupProps {
   windowVisible?: Accessor<boolean>;
   /** Increments when the outer scroll container moves. */
   scrollRevision?: Accessor<number>;
+  /** True after the user has installed the offline model. */
+  semanticModelReady?: Accessor<boolean>;
   onAttachSourceInput?: (input: SourceInputHandle | null) => void;
 }
 
@@ -959,6 +961,9 @@ export function QuickTranslatePopup(props: QuickTranslatePopupProps) {
   const keyboardAnnouncement = signal("");
   const focusedPreview = signal<{ cardId: string; resultId: number } | null>(null);
   const alignmentCache = new Map<string, CardAlignmentEntry>();
+  const semanticPairs = new Map<string, { pairs?: SentenceAlignmentPair[] | null }>();
+  const semanticRevision = signal(0);
+  let semanticWork = Promise.resolve();
   let pendingClearToken = 0;
   let pendingClearMatch: ActiveMatchKey | null = null;
   let pendingClearRaf: number | null = null;
@@ -996,6 +1001,9 @@ export function QuickTranslatePopup(props: QuickTranslatePopupProps) {
   const currentRenderMode = (): AlignmentRenderMode =>
     props.markdownEnabled ? "markdown" : "plain";
   const isPreviewWindowVisible = () => props.windowVisible?.() ?? true;
+  const semanticEnabled = () => props.semanticModelReady?.() ?? false;
+  const alignmentKey = (cardId: string, resultId: number, mode: AlignmentRenderMode) =>
+    `${cardId}:${resultId}:${mode}`;
 
   const isCardEligibleForAlignment = (
     card: CardViewItem,
@@ -1010,13 +1018,59 @@ export function QuickTranslatePopup(props: QuickTranslatePopupProps) {
     return card.result.sourceText === sourceText();
   };
 
+  effect(() => {
+    if (!semanticEnabled()) return;
+    const mode = currentRenderMode();
+    const current = new Set<string>();
+    for (const card of props.session.cards()) {
+      if (!isCardEligibleForAlignment(card)) continue;
+      const result = card.result;
+      const key = alignmentKey(card.id, result.resultId, mode);
+      current.add(key);
+      if (semanticPairs.has(key)) continue;
+      const entry: { pairs?: SentenceAlignmentPair[] | null } = {};
+      semanticPairs.set(key, entry);
+      const isCurrent = () => popupAlive && semanticPairs.get(key) === entry;
+      semanticWork = semanticWork.then(async () => {
+        if (!isCurrent()) return;
+        let pairs: SentenceAlignmentPair[] | null;
+        try {
+          const blocks =
+            mode === "markdown"
+              ? (prepareMarkdownAlignment(result.text)?.targetBlocks ?? [])
+              : [result.text];
+          pairs = await SentenceAlignmentNative.alignSemantic(result.sourceText, blocks);
+        } catch {
+          pairs = null;
+        }
+        if (!isCurrent()) return;
+        entry.pairs = pairs;
+        semanticRevision.update((revision) => revision + 1);
+      });
+    }
+    for (const key of semanticPairs.keys()) {
+      if (!current.has(key)) {
+        semanticPairs.delete(key);
+        alignmentCache.delete(`${key}:semantic`);
+      }
+    }
+  });
+
   const resolveCardAlignment = (
     card: CardViewItem,
     mode: AlignmentRenderMode,
   ): CardAlignmentEntry | null => {
     if (!isCardEligibleForAlignment(card)) return null;
     const res = card.result;
-    const key = `${card.id}:${res.resultId}:${mode}`;
+    const resultKey = alignmentKey(card.id, res.resultId, mode);
+    let matches: SentenceAlignmentPair[] | null = null;
+    if (semanticEnabled()) {
+      semanticRevision();
+      const pairs = semanticPairs.get(resultKey)?.pairs;
+      if (pairs === undefined) return null;
+      matches = pairs;
+    }
+    const key = matches === null ? resultKey : `${resultKey}:semantic`;
     const existing = alignmentCache.get(key);
     if (existing && existing.sourceText === res.sourceText && existing.text === res.text) {
       return existing;
@@ -1030,7 +1084,7 @@ export function QuickTranslatePopup(props: QuickTranslatePopupProps) {
       const built = buildAlignedMarkdownDocument(
         res.sourceText,
         res.text,
-        SentenceAlignmentNative.align,
+        matches === null ? SentenceAlignmentNative.align : () => matches,
       );
       if (built) {
         document = built.document;
@@ -1040,7 +1094,7 @@ export function QuickTranslatePopup(props: QuickTranslatePopupProps) {
         }
       }
     } else {
-      const pairs = SentenceAlignmentNative.align(res.sourceText, [res.text]);
+      const pairs = matches ?? SentenceAlignmentNative.align(res.sourceText, [res.text]);
       for (const pair of pairs) {
         if (pair.targetBlockIndex !== 0) continue;
         if (
@@ -1118,6 +1172,7 @@ export function QuickTranslatePopup(props: QuickTranslatePopupProps) {
   };
 
   let lastScrollRevision = props.scrollRevision?.() ?? 0;
+  let lastSemanticState = semanticEnabled();
   effect(() => {
     const cards = props.session.cards();
     const activeCardIds = new Set(cards.map((item) => item.id));
@@ -1137,6 +1192,13 @@ export function QuickTranslatePopup(props: QuickTranslatePopupProps) {
     const historyOpen = showingHistory();
     const composing = isComposing();
     const visible = isPreviewWindowVisible();
+    const semanticState = semanticEnabled();
+    const alignmentChanged = semanticState !== lastSemanticState;
+    lastSemanticState = semanticState;
+    if (alignmentChanged) {
+      focusedPreview.set(null);
+      clearActiveMatch();
+    }
 
     const focused = focusedPreview();
     if (focused) {

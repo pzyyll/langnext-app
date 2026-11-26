@@ -99,3 +99,5 @@ Hovering an eligible result sentence or stepping through result sentences with `
 | Result sentence & source range | Pointer hover, keyboard `Left`/`Right`, accessibility `Previous`/`Next` | Immediate `bg-brand-soft` toggle (0 ms); no scroll, focus move, or caret change | Same immediate toggle |
 
 The highlight adds no overlay, popover, live region, travel, fade, or layout animation.
+
+An optional Windows model download appears above the Quick Translate footer. Its label gives the download size before any transfer. The shared button uses its existing hover and press feedback. Progress, cancellation, and failure replace the same row without animation. Once installed, the row goes away and completed results gain semantic matches without delaying or replaying translation.

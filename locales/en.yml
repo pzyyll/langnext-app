@@ -873,6 +873,9 @@ quickTranslate:
   previousSentence: Previous aligned sentence
   nextSentence: Next aligned sentence
   sentencePreviewValue: "Sentence %{current} of %{total}: %{text}"
+  downloadAlignmentModel: Download offline alignment model (135 MB)
+  downloadingAlignmentModel: "Downloading alignment model: %{progress}%"
+  alignmentModelDownloadFailed: Could not download the alignment model.
   error:
     blankInput: Enter text to translate.
     presetDisabled: Selected preset is disabled. Enable it in Presets or choose another preset.

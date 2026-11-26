@@ -873,6 +873,9 @@ quickTranslate:
   previousSentence: 上一句对齐文本
   nextSentence: 下一句对齐文本
   sentencePreviewValue: "第 %{current} / %{total} 句：%{text}"
+  downloadAlignmentModel: 下载离线对齐模型（135 MB）
+  downloadingAlignmentModel: "正在下载对齐模型：%{progress}%"
+  alignmentModelDownloadFailed: 无法下载对齐模型。
   error:
     blankInput: 请输入要翻译的文本。
     presetDisabled: 所选预设已停用，请在“预设”中启用或选择其他预设。

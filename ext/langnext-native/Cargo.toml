@@ -12,7 +12,12 @@ rusqlite = { version = "0.43", default-features = false, features = ["bundled"] 
 unicode-segmentation = "1.13.3"
 
 [target.'cfg(windows)'.dependencies]
+fastembed = { version = "7.8.0", default-features = false, features = [
+  "ort-download-binaries-native-tls",
+  "fancy-regex",
+] }
 serde_json = "1"
+sha2 = "0.10.9"
 windows = { version = "0.62", features = [
   "Win32_Foundation",
   "Win32_System_Com",
