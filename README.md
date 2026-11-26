@@ -1,191 +1,168 @@
 # Langnext
 
-A desktop AI translator built with NSH Mixed. TSX owns the interface and state.
-Rust provides an extension entry for features that need native code.
+Langnext is a desktop application for translation. You can type text, translate a selection, or translate text in a screenshot. One Quick Translate window can show several translations of the same text.
 
-The initial screen has a narrow sidebar, a custom title bar, and appearance
-settings. The Light, Dark, and System options persist across launches.
+## Prepare a translation
 
-## Set up
+1. Open **Models** and add a model channel.
+2. Open **Presets** and add a preset. A preset can use **AI Translation**, **DeepL API**, or **Google Cloud Translation**.
+3. Enable the presets that you want to use.
 
-Install [mise](https://mise.jdx.dev/). Then run:
+Quick Translate uses enabled presets only.
 
-```sh
-mise trust
-mise install
-mise run setup
-mise run dev
-```
+## The main window
 
-Mixed builds need a native Rust toolchain. On Windows, install Git for Windows
-(for Bash), Visual Studio Build Tools with Desktop development with C++, the
-Windows SDK, and LLVM. On macOS and Linux, make the file tasks executable with
-`chmod +x .mise/tasks/*` after checkout.
-See [NSH installation](https://nsh.dev/docs/installation).
-
-If MSVC reports `D8050` or `LNK1104` for temporary files, create `.nsh/tmp/`.
-Set `TEMP` and `TMP` to that directory's absolute path in the ignored
-`mise.local.toml`, under `[env]`. Keep this machine-specific override out of Git.
-
-## Commands
-
-All project commands are in `.mise/tasks/`.
-
-| Command                                | Action                                               |
-| -------------------------------------- | ---------------------------------------------------- |
-| `mise run dev`                         | Start the desktop app with TSX hot updates.          |
-| `mise run build`                       | Build the release bundle in `.nsh/out/`.             |
-| `mise run check`                       | Check Rust and TypeScript with NSH.                  |
-| `mise run lint`                        | Run oxlint and Rust Clippy.                          |
-| `mise run format`                      | Format source and configuration files.               |
-| `mise run format-check`                | Check formatting without changes.                    |
-| `mise run test`                        | Run Rust tests and headless NSH tests.               |
-| `mise run test-desktop`                | Run the UI tests in desktop windows.                 |
-| `mise run verify`                      | Run formatting, lint, type checks, tests, and build. |
-| `mise run package -- --target windows` | Package the app for Windows.                         |
-
-The first NSH check or build generates editor types in `.nsh/`.
-Do not edit or commit that directory. Keep the NSH CLI and Rust crate versions
-aligned. pnpm provides development tools only; it is not the app runtime.
-
-## Logging
-
-App code logs through `createLogger` in `services/log.ts`; native code logs through the
-`log` crate. A packaged build writes the kept lines to the app's rolling log and to the
-platform's log; a development host prints them to the terminal.
-
-- **File**: `logs/app.log` in the app data directory
-  (`%APPDATA%\com.dev.langnext\logs\app.log` on Windows). It rolls over at 5 MiB and
-  keeps three older files, `app.1.log` to `app.3.log`.
-- **Levels**: `Settings → General → Log level` sets the lowest level the app's TypeScript
-  log calls write: `Error`, `Warning` or `Info` (`Warning` by default). `debug` lines stay
-  outside that setting: NSH keeps them only with `RUST_LOG=debug`, in a packaged build.
-- **Native lines**: Rust lines follow NSH's own filter, not the setting: `RUST_LOG` where
-  NSH reads it, else `warn` and `error` in a packaged build.
-- **Development**: `nsh run` (`mise run dev`) prints the kept lines to the terminal. The
-  Windows development host caps its log at `info` and does not read `RUST_LOG`, so `debug`
-  lines do not appear there.
-- **Path**: `logFile()` (or `process.logFile`) returns the file's path, `null` where the
-  lines go to the platform's log only. `Settings → General → Logs → Open folder` opens
-  the folder that holds it.
-- **Secrets**: never log API keys or credentials. Request and response bodies go only
-  to `debug` lines; `services/http.ts` masks credentials in what it logs.
-
-## Structure
-
-- `App.tsx`: Load settings and mount the application once.
-- `src/app/`: Application shell, navigation, and the system tray.
-- `assets/logos/`: App icon assets: the `icon.png` tile NSH packages and the
-  `icon.svg` glyph the system tray draws.
-- `src/components/`: Styled controls built on NSH base components.
-- `src/features/settings/`: Appearance state and settings screen.
-- `src/services/`: The models.dev catalog client and the app's scoped logger.
-- `theme.json`: Semantic light and dark tokens from the design system.
-- `ext/langnext-native/`: The app's Rust nshm. `src/lib.rs` registers native exports (`langnext-native`) for Windows cursor monitor anchor lookup and Raw Input double-copy detection.
-- `ext/langnext-native/src/database/`: Shared SQLite access and ordered schema migrations for `langnext.sqlite3` in the app data directory. Native features own their queries.
-- `src/platform/`: Cross-display popup placement helpers and thin wrapper over `langnext-native`.
+- **Settings → General → Language** sets the interface language to **System**, **English**, or **简体中文**.
+- **Settings → Appearance** sets **Light**, **Dark**, or **System**. Langnext keeps this choice after you close it.
 
 ## Quick Translate
 
-Quick Translate runs in a compact floating panel (`420 × 360` points, available even when the main window is hidden) and supports independent multi-preset result cards sharing one source input and language pair:
+Quick Translate is a small window. You can open it when the main window is hidden.
 
-- **Card order**: Drag a preset card's header, or focus its grip and press the up or down arrow key, to reorder the cards. Select the header away from its chips and buttons to collapse or expand the card. The order is saved with the popup's preferences.
-- **Sentence alignment (Windows)**: Manage the quantized [Multilingual E5 Small](https://huggingface.co/intfloat/multilingual-e5-small) model (about 135 MB) and **Sentence alignment** in **Settings → Application → Quick Translate**. Turning the switch on asks for confirmation when the model is missing, and waits until the files verify and the local runtime loads. Use **Cancel** on the model row to stop an active download, or download the model first with **Download** while alignment stays off. When enabled and the original is expanded, point at a translated sentence or use Left or Right from a focused result to see its source. Turning the switch off clears open previews without removing the installed model, changing translations, or resending text. Translation still sends the full input to the selected provider. Alignment runs offline and does not send text to a new service.
-- **Activation paths**: Open or focus via the system tray menu (**Quick Translate**) on any desktop, or with a Windows global shortcut in **Settings → Application → Shortcuts**. **Open Quick Translate** defaults to `Alt+Shift+D`. Select **Edit** and press a key combination to save it. Select **Clear** to remove it, or **Reset** to restore the default when the binding differs from it. **Screenshot Translate** defaults to `Alt+S`. Select a screen region to open Quick Translate, recognize the text, and translate it with the enabled presets. **Translate Selection** defaults to `Alt+D` on Windows. It tries UI Automation first. **Simulate Copy to Get Text** is off by default. When enabled, it tries `Ctrl+C` on eligible controls that do not expose a reliable text selection. This can replace the clipboard contents. It does not use OCR. A password field, a missing selection, or an unreadable control opens Quick Translate and keeps the current draft. An empty selection says so in muted text. An unreadable selection shows an alert with a **Screenshot Translate** action that starts the same region selection as the header button; a cancelled selection keeps the draft. **Double-copy Quick Translate (`Ctrl+C × 2`)** is fixed and can be turned on or off.
-- **Drag button (opt-in)**: **Settings → Application → Shortcuts → Show Translate Button After Dragging Text** is off by default. When it is on, dragging over text shows a small **Translate Selection** button beside the release. It reads nothing until a click: the click reads the captured control with UI Automation only, so this path never simulates `Ctrl+C`. The button hides after three seconds, on the next press outside it, on activation, or when Quick Translate takes the screen. The **Translate Selection** shortcut remains the keyboard path.
-- **Selection support**: Windows UI Automation worked in Notepad, Word, and Chrome's Google Search results. VS Code 1.146.0 returned the selected editor text with copy fallback enabled. The app does not translate VS Code's whole-line copy when there is no selection. The tested X page, Adobe Acrobat PDF, and Windows Terminal did not return text through UI Automation. Results can vary by page and app version.
-- **Shortcut conflict recovery**: If the saved shortcut is unavailable at launch, the app warns you and the tray menu remains available. If a replacement cannot register or save, the previous shortcut stays active. If **Open Quick Translate** or **Screenshot Translate** already uses `Alt+D`, that action keeps the key and **Translate Selection** stays inactive until you record a free combination. `Alt+D` can also focus the address bar in Edge or File Explorer. Select **Clear**, or record another combination, to give that key back. **Reset** tries `Alt+D` again and keeps the saved value when the key is still taken.
-- **Windows support & opt-in defaults**: Global shortcut registration, mixed-DPI physical cursor anchor placement, and Raw Input (`RIDEV_INPUTSINK` keyboard-only) double-copy monitoring target Windows. Both double-copy activation and popup **Auto-translate** (`500 ms` debounce) default to **off**. Copied text translates as soon as the window shows it, whatever **Auto-translate** says; source and target languages are configured from the title-bar language menu, and typing, paste, and language changes translate on **Enter** (`Shift+Enter` for newlines) or that toggle.
-- **History**: The app database keeps the source text and successful results for the most recent 30 translation actions. History restores the saved results without requesting a new translation. The database is local and is not encrypted.
-- **Sentence highlight**: On Windows, hovering a sentence in an eligible card result (plain text or Markdown) highlights its matched source sentence without modifying copy text or non-prose Markdown blocks. You can also focus an eligible result with `Tab` and press the left or right arrow keys to step through matched sentences. Alignment runs locally and clears on edits, selection changes, scrolls, collapses, or window hides without logging or storing text.
-- **Data destinations & privacy**: Quick Translate preferences stay in NSH `Storage` under `quickTranslate.preferences.v1` (`doubleCopyEnabled`, `autoTranslate`, `sourceLanguage`, `targetLanguage`, and ordered `{ id, presetId, templateId, collapsed }` cards). The app does not save pin state, drafts, errors, or keystrokes as history. It does not log source text, translated text, or API keys. Provider keys stay in NSH `Storage`. A DeepL preset references its key, which the app stores separately. The app sends translation requests to the enabled preset cards you add.
+Open it from the system tray menu (**Quick Translate**), or with a Windows shortcut.
 
-See [system architecture](docs/specs/system-architecture.md) for the selected scope.
+| Action | Default | Result |
+| --- | --- | --- |
+| Open Quick Translate | `Alt+Shift+D` | Opens or focuses Quick Translate. |
+| Screenshot Translate | `Alt+S` | You select a screen region. Langnext reads the text and translates it. |
+| Translate Selection | `Alt+D` | Langnext reads the selected text and translates it. |
+
+Change a shortcut in **Settings → Application → Shortcuts**:
+
+1. Select **Edit** and press the new key combination.
+2. Select **Clear** to remove the shortcut.
+3. Select **Reset** to restore the default when the current shortcut is different.
+
+These shortcuts work on Windows. If a saved shortcut is not available when Langnext starts, Langnext warns you. The tray menu still opens Quick Translate. If a new shortcut cannot be saved, the previous shortcut stays active.
+
+`Alt+D` can also focus the address bar in Edge or File Explorer. If **Open Quick Translate** or **Screenshot Translate** already uses `Alt+D`, that action keeps the key. **Translate Selection** stays inactive until you record a free combination. **Reset** tries `Alt+D` again. If the key is still in use, the saved shortcut stays.
+
+### Selection
+
+**Translate Selection** reads the selection with Windows UI Automation first. It does not use OCR.
+
+**Simulate Copy to Get Text** is off by default. Turn it on in **Settings → Application → Shortcuts** when a control does not expose the selection. Langnext then tries `Ctrl+C`. This can replace the clipboard contents. Langnext does not translate a whole-line copy from VS Code when nothing is selected.
+
+These results were checked on Windows:
+
+| Application | Result |
+| --- | --- |
+| Notepad, Word, and Chrome search results | UI Automation returned the selection. |
+| VS Code 1.146.0 | The selected editor text was returned when **Simulate Copy to Get Text** was on. |
+| One X page, Adobe Acrobat PDF, and Windows Terminal | UI Automation did not return the text. |
+
+Results can change with the page and the application version.
+
+A password field, a missing selection, or a control that Langnext cannot read still opens Quick Translate and keeps the current draft. An empty selection shows that no text is selected. If the selection cannot be read, an alert offers **Screenshot Translate**. If you cancel the region selection, the draft stays.
+
+### Drag button
+
+**Show Translate Button After Dragging Text** is off by default. Turn it on in **Settings → Application → Shortcuts**. After you drag over text, a **Translate Selection** button appears beside the pointer. The button reads nothing until you click it. The click uses UI Automation only and does not send `Ctrl+C`.
+
+The button hides after three seconds, on the next press outside it, when you use it, or when Quick Translate opens. The **Translate Selection** shortcut stays available.
+
+### Double-copy
+
+**Double-copy Quick Translate (`Ctrl+C × 2`)** is off by default. The shortcut is fixed. Turn it on or off in **Settings → Application → Shortcuts**. Two quick `Ctrl+C` presses open Quick Translate and translate the copied text with your enabled presets.
+
+### Cards and languages
+
+The cards share one source text and one language pair. Each card uses one preset and one prompt template.
+
+- Drag a card header to change the order. You can also focus its grip and press the up or down arrow key.
+- Select the header, away from the controls on it, to collapse or expand the card.
+- Langnext saves the card order.
+
+Set the source language and the target language in the title-bar language menu. **Auto** uses language detection. See [Language detection](#language-detection).
+
+**Auto-translate** is off by default. When it is on, Langnext waits 500 ms after you stop changing the text, then translates. Copied text is translated when the window shows it, even when **Auto-translate** is off. Press **Enter** to translate. Press **Shift+Enter** to insert a new line.
+
+On a result card you can copy the text, show Markdown or plain text, read the text aloud, and request a back-translation. Reading aloud needs a channel in **Settings → Integrations → Text-to-Speech**.
+
+### Screenshot text
+
+**Screenshot Translate** works on Windows. Configure OCR in **Settings → Integrations → OCR** before you capture a region. You can add **LLM**, **Baidu OCR**, or **Google Cloud Vision**. Enabled channels run from top to bottom. Later channels are backups.
+
+Select a screen region. Langnext reads the text and translates it with the enabled presets. You can also start this action from the tray menu.
+
+### Sentence alignment
+
+Sentence alignment is available on Windows. It matches a translated sentence to its source sentence. Alignment runs on this computer and does not send the text to another service. The translation request still sends the full text to the provider that you selected.
+
+1. Open **Settings → Application → Quick Translate**.
+2. Download **Multilingual E5 Small** (about 135 MB), or turn on **Sentence alignment**. If the model is missing, Langnext asks you to confirm the download. It waits until the files are checked and the model loads.
+3. Select **Cancel** on the model row to stop a download. You can select **Download** while alignment stays off.
+
+When alignment is on and the source text is expanded, point at a translated sentence to see its source sentence. You can also focus a result and press the left or right arrow key to move through the matched sentences.
+
+This works for plain text and for Markdown prose. It does not change the copied text, and it skips non-prose Markdown blocks. The highlight clears when you edit the text, change the selection, scroll, collapse the card, or hide the window.
+
+Turn **Sentence alignment** off to clear open highlights. The installed model stays. Langnext does not change the translations and does not send the text again.
+
+### History
+
+Langnext keeps the source text and the successful results of the last 30 translation actions. Open **History** to restore a saved result. A restore does not request a new translation. The database stays on this computer and is not encrypted.
+
+Langnext does not keep drafts, errors, or keystrokes in history.
 
 ## Wordbook
 
-Wordbook saves one Quick Translate result to a local Anki deck. It stays off until you save a destination and turn it on. The app does not migrate older settings, and it does not turn Wordbook on by itself.
+Wordbook saves one Quick Translate result to a local Anki deck. It stays off until you save a destination and turn it on. Langnext does not turn Wordbook on by itself.
 
 1. Install the AnkiConnect add-on in Anki Desktop. Its code is `2055492159`.
 2. Keep Anki Desktop open, with a profile and a normal deck.
 3. Open **Settings → Integrations → Wordbook**.
-4. Enter an API key only when AnkiConnect requires one. A saved key stays in local NSH Storage and is not encrypted.
+4. Enter an API key only when AnkiConnect requires one. A saved key stays on this computer and is not encrypted.
 5. Select **Test connection**. Choose the deck, the note type, and the translation field. The first field of the note type is the source field.
 6. Select **Save**, then turn on **Enable Anki**.
 
-The app sends Anki requests only to `http://127.0.0.1:8765`. On a complete forward result, select **Add to Anki**. That press sends the card's source text and its translation. It does not send history, a back-translation, or another card. If the source already exists in the chosen deck and note type, Anki does not change it.
+Langnext sends Anki requests only to `http://127.0.0.1:8765`. On a finished forward translation, select **Add to Anki**. That action sends the source text and the translation from that card. It does not send history, a back-translation, or another card. If that source already exists in the chosen deck and note type, Anki does not change it.
 
-The app does not claim support for a specific Anki or AnkiConnect version, or for a desktop target that has not been checked with Anki open.
+Langnext does not state support for one Anki version, one AnkiConnect version, or one desktop target.
 
 ## Language detection
 
-Language detection resolves an **Automatic** source or target into a concrete
-language before a prompt is rendered. Three detectors are available; enabled
-detectors run in priority order, and later ones act as backups. There is no
-local detector.
+Language detection resolves **Auto** to a specific language before translation. Enabled detectors run from top to bottom. Later detectors are backups. There is no detector on this computer.
 
-- **Setup**: Open **Settings → Language Detection**, select **Add Channel**
-  to add **AI** (select a model), **Google** (free endpoint, enabled on add), or
-  **Google Cloud** (save an API key), and set the **Native language** and the
-  **Target language**. Detection stays off until a detector is added and
-  enabled.
-- **AI**: One text model per AI detector. A sample goes to that model; an
-  unusable answer falls through to the next enabled detector.
-- **Google**: Add **Google** to use the free Google Translate endpoint. It needs
-  no key and no model configuration; a sample goes to Google Translate.
-- **Google Cloud**: Open **Google Cloud**, paste an API key, and save it. The
-  key is stored in its own storage entry, never in the detector record, and the
-  same key is reused when the field is left blank. Detection calls the Cloud
-  Translation v2 `detect` endpoint with that key, which bills the project.
-- **Priority**: Drag a detector's grip, or focus the grip and press the up and
-  down arrow keys, to order them. The first enabled detector is the primary; later
-  enabled detectors act as backups.
-- **Automatic target**: Text in another language is translated into your native
-  language. Text in your native language is translated into the **Target
-  language**. A concrete source and target pair never starts a detection request.
-- **Upstream choices**: Presets store engine configuration only; the Quick
-  Translate language menu offers **Automatic** for both selections. With no
-  detector enabled, an **Automatic** source needs a manual source selection, and
-  an **Automatic** target needs a native language.
-- **Reuse**: The popup detects an **Automatic** source once for one input. Reading
-  the source aloud starts the same detection when it has not run yet, and later
-  translations of that input, including card expands and retries, reuse the
-  answer. Editing the input or changing the detector chain starts a new
-  detection, and a failed detection is not reused.
-- **Fallback behavior**: A blocked or failed detection never guesses. The card or
-  the reading error shows a localized message that asks you to choose the source
-  manually. Cancellation stays silent.
-- **Request shape**: AI detection uses one buffered request per enabled AI
-  detector, never a stream, and asks the model to skip reasoning because the
-  answer is a single language ID. The free Google detector uses one form-encoded
-  request, so the sample never appears in a URL. Google Cloud detection sends one
-  buffered JSON request with the key in the `x-goog-api-key` header.
-- **Language mapping**: A regional Google code keeps its base language
-  (`zh-CN` → `zh`, `pt-BR` → `pt`), legacy `iw` and `in` map to Hebrew and
-  Indonesian, and any other language is reported as unsupported instead of
-  translated as a guess.
-- **Privacy**: Detection runs only when a translation action or a reading request
-  needs an automatic source, once per input. Every enabled detector tried receives
-  the first 2,048 characters of the trimmed text, and may use a different provider
-  than the translation model. The full source text still goes to the selected
-  translation model. Only settings, model IDs, and the stored API key are kept;
-  samples, detected values, and model replies are never stored or logged.
+1. Open **Settings → Integrations → Language Detection**.
+2. Select **Add Channel**.
+3. Add **LLM** and select a model, add **Google**, or add **Google Cloud** and save an API key. **Google** needs no key and is enabled when you add it.
+4. Set **Native language** and **Target language**.
 
-The bundle identifier is a development placeholder. Set it before distribution.
-Headless tests do not verify native dragging, caption buttons, tooltips, or
-platform permissions. Check those in a desktop window before release. On
-Windows, `mise run test-desktop` also checks that the native cursor's monitor
-ID matches a display reported by NSH.
+Detection stays off until you add a detector and enable it.
 
-## License
+- **LLM** sends a sample to one text model. An unusable answer falls through to the next enabled detector.
+- **Google** uses the free Google Translate endpoint.
+- **Google Cloud** calls Cloud Translation with your API key and bills that project. A blank key field keeps the saved key.
 
-Copyright 2024-2026 ZHILI CAI
+Drag a detector grip to change the order, or focus the grip and press the up or down arrow key. The first enabled detector is the primary detector.
 
-Langnext is licensed under the Apache License, Version 2.0.
-See [LICENSE](LICENSE).
+With an **Auto** target, text in another language is translated into your native language. Text in your native language is translated into the **Target language**. A specific source and a specific target do not start detection.
 
-You may use, copy, modify, and distribute this software under that license.
-Keep the copyright notice and the license text with each copy that you distribute.
-State the changes in a modified copy.
-The license includes a patent grant from contributors and does not grant trademark rights.
-The software is provided without warranty.
+With no enabled detector, an **Auto** source needs a source that you choose. An **Auto** target needs a native language.
+
+Quick Translate detects an **Auto** source once for one input. Reading the source aloud uses that same detection when it has not run yet. Later translations of that input reuse the answer, including when you expand a card or retry. An edit, or a change to the detector order, starts a new detection. A failed detection is not reused.
+
+A blocked or failed detection does not guess the language. The card, or the reading error, asks you to choose the source language. Cancellation stays silent.
+
+Each detector that runs receives the first 2,048 characters of the trimmed text. That service can be different from the translation preset. The full source text still goes to the translation service. Langnext does not store or log the sample, the detected language, or the model reply.
+
+## Logs
+
+Open **Settings → General → Logs** and select **Open folder**.
+
+On Windows, the log file is `%APPDATA%\com.dev.langnext\logs\app.log`. The file rolls over at 5 MiB. Langnext keeps three older files, `app.1.log` through `app.3.log`.
+
+**Settings → General → Log level** sets the lowest level that Langnext writes: **Error**, **Warning**, or **Info**. The default is **Warning**. This setting does not include `debug` lines.
+
+## Privacy
+
+- Provider keys stay on this computer.
+- A translation sends the source text to the services for the enabled preset cards.
+- Language detection sends text only when a translation or a reading needs an automatic source, and only once for that input.
+- Sentence alignment stays on this computer.
+- Langnext does not log source text, translated text, or API keys.
+
+## Build from source
+
+See [Development](docs/development.md).
