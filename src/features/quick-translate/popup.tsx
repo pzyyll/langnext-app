@@ -294,6 +294,7 @@ type AlignmentRenderMode = "plain" | "markdown";
 
 type AlignmentPreviewOrigin = "pointer" | "keyboard" | "accessibility";
 
+/** One alignment per result and render mode; it outlives the card's expanded state. */
 interface CardAlignmentEntry {
   cardId: string;
   resultId: number;
@@ -303,6 +304,15 @@ interface CardAlignmentEntry {
   document: TextViewDocument | null;
   segments: readonly SentenceSegment[];
   sourceRanges: Readonly<Record<string, SourceHighlightRange>>;
+}
+
+/** The offline semantic alignment of one result, queued or settled. */
+interface SemanticPairEntry {
+  cardId: string;
+  resultId: number;
+  sourceText: string;
+  text: string;
+  pairs?: SentenceAlignmentPair[] | null;
 }
 
 interface CardSentenceAlignment {
@@ -320,6 +330,15 @@ interface CardSentenceAlignment {
 }
 
 const MAX_ALIGNMENT_CACHE_ENTRIES = 64;
+const MAX_SEMANTIC_PAIR_ENTRIES = 64;
+
+function trimCache<T>(cache: Map<string, T>, limit: number): void {
+  while (cache.size > limit) {
+    const oldest = cache.keys().next().value;
+    if (oldest === undefined) return;
+    cache.delete(oldest);
+  }
+}
 
 interface PresetCardRowProps {
   card: Accessor<CardViewItem>;
@@ -963,7 +982,7 @@ export function QuickTranslatePopup(props: QuickTranslatePopupProps) {
   const keyboardAnnouncement = signal("");
   const focusedPreview = signal<{ cardId: string; resultId: number } | null>(null);
   const alignmentCache = new Map<string, CardAlignmentEntry>();
-  const semanticPairs = new Map<string, { pairs?: SentenceAlignmentPair[] | null }>();
+  const semanticPairs = new Map<string, SemanticPairEntry>();
   const semanticRevision = signal(0);
   let semanticWork = Promise.resolve();
   let pendingClearToken = 0;
@@ -1011,6 +1030,24 @@ export function QuickTranslatePopup(props: QuickTranslatePopupProps) {
   const alignmentKey = (cardId: string, resultId: number, mode: AlignmentRenderMode) =>
     `${cardId}:${resultId}:${mode}`;
 
+  /** Drops alignments whose result left the session, keeping collapsed and hidden ones. */
+  const retainAlignmentEntries = (cards: readonly CardViewItem[]) => {
+    const live = new Set<string>();
+    for (const card of cards) {
+      if (card.result.status === "success") {
+        live.add(`${card.id}:${card.result.resultId}`);
+      }
+    }
+    const isLive = (entry: { cardId: string; resultId: number }) =>
+      live.has(`${entry.cardId}:${entry.resultId}`);
+    for (const [key, entry] of semanticPairs) {
+      if (!isLive(entry)) semanticPairs.delete(key);
+    }
+    for (const [key, entry] of alignmentCache) {
+      if (!isLive(entry)) alignmentCache.delete(key);
+    }
+  };
+
   const isCardEligibleForAlignment = (
     card: CardViewItem,
   ): card is CardViewItem & {
@@ -1025,17 +1062,27 @@ export function QuickTranslatePopup(props: QuickTranslatePopupProps) {
   };
 
   effect(() => {
-    const cards = semanticEnabled() ? props.session.cards() : [];
+    if (!alignmentEnabled()) {
+      semanticPairs.clear();
+      alignmentCache.clear();
+      return;
+    }
+    if (!semanticEnabled()) return;
+    const cards = props.session.cards();
     const mode = currentRenderMode();
-    const current = new Set<string>();
     for (const card of cards) {
       if (!isCardEligibleForAlignment(card)) continue;
       const result = card.result;
       const key = alignmentKey(card.id, result.resultId, mode);
-      current.add(key);
       if (semanticPairs.has(key)) continue;
-      const entry: { pairs?: SentenceAlignmentPair[] | null } = {};
+      const entry: SemanticPairEntry = {
+        cardId: card.id,
+        resultId: result.resultId,
+        sourceText: result.sourceText,
+        text: result.text,
+      };
       semanticPairs.set(key, entry);
+      trimCache(semanticPairs, MAX_SEMANTIC_PAIR_ENTRIES);
       const isCurrent = () => popupAlive && semanticPairs.get(key) === entry;
       semanticWork = semanticWork.then(async () => {
         if (!isCurrent()) return;
@@ -1054,12 +1101,6 @@ export function QuickTranslatePopup(props: QuickTranslatePopupProps) {
         semanticRevision.update((revision) => revision + 1);
       });
     }
-    for (const key of semanticPairs.keys()) {
-      if (!current.has(key)) {
-        semanticPairs.delete(key);
-        alignmentCache.delete(`${key}:semantic`);
-      }
-    }
   });
 
   const resolveCardAlignment = (
@@ -1068,17 +1109,20 @@ export function QuickTranslatePopup(props: QuickTranslatePopupProps) {
   ): CardAlignmentEntry | null => {
     if (!isCardEligibleForAlignment(card)) return null;
     const res = card.result;
-    const resultKey = alignmentKey(card.id, res.resultId, mode);
+    const key = alignmentKey(card.id, res.resultId, mode);
     let matches: SentenceAlignmentPair[] | null = null;
     if (semanticEnabled()) {
       semanticRevision();
-      const pairs = semanticPairs.get(resultKey)?.pairs;
-      if (!pairs) return null;
-      matches = pairs;
+      const cached = semanticPairs.get(key);
+      if (!cached || cached.sourceText !== res.sourceText || cached.text !== res.text) {
+        semanticPairs.delete(key);
+        return null;
+      }
+      if (!cached.pairs) return null;
+      matches = cached.pairs;
     } else if (requiresSemanticModel) {
       return null;
     }
-    const key = matches === null ? resultKey : `${resultKey}:semantic`;
     const existing = alignmentCache.get(key);
     if (existing && existing.sourceText === res.sourceText && existing.text === res.text) {
       return existing;
@@ -1141,10 +1185,7 @@ export function QuickTranslatePopup(props: QuickTranslatePopupProps) {
       sourceRanges,
     };
     alignmentCache.set(key, entry);
-    if (alignmentCache.size > MAX_ALIGNMENT_CACHE_ENTRIES) {
-      const oldestKey = alignmentCache.keys().next().value;
-      if (oldestKey !== undefined) alignmentCache.delete(oldestKey);
-    }
+    trimCache(alignmentCache, MAX_ALIGNMENT_CACHE_ENTRIES);
     return entry;
   };
 
@@ -1183,12 +1224,7 @@ export function QuickTranslatePopup(props: QuickTranslatePopupProps) {
   let lastSemanticState = semanticEnabled();
   effect(() => {
     const cards = props.session.cards();
-    const activeCardIds = new Set(cards.map((item) => item.id));
-    for (const [key, entry] of alignmentCache) {
-      if (!activeCardIds.has(entry.cardId)) {
-        alignmentCache.delete(key);
-      }
-    }
+    retainAlignmentEntries(cards);
 
     const scrollRev = props.scrollRevision?.() ?? 0;
     const scrolled = scrollRev !== lastScrollRevision;

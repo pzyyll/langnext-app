@@ -626,6 +626,80 @@ test("alignment settings: existing result clears preview and highlight without r
   expect(app.requests()).toHaveLength(1);
 });
 
+test("alignment settings: collapse, expand, and Markdown toggle reuse the settled alignment", async () => {
+  if (!(await headlessHasAlignmentModel())) return;
+  const source = "She opened the door. He stepped inside.";
+  const target = "她打开了门。他走了进去。";
+  const alignCalls: unknown[][] = [];
+  const app = await open(HARNESS_ENTRY, {
+    ...viewport,
+    storage: {
+      ...makeSeedStorage({
+        channels: [makeChannel({ adapterId: "openai-compatible", enabled: true })],
+        models: [makeModel({ enabled: true })],
+        credentials: { "ch-1": "sk-test" },
+      }),
+      [PRESETS_STORAGE_KEY]: JSON.stringify({ version: 1, items: [quickPreset] }),
+      "settings.language": "en",
+      [QUICK_TRANSLATE_PREFERENCES_KEY]: popupPreferences({
+        cards: [{ id: "card-1", presetId: quickPreset.id }],
+      }),
+      [SENTENCE_ALIGNMENT_STORAGE_KEY]: "true",
+    },
+    network: {
+      "POST https://api.openai.com/v1/chat/completions": {
+        status: 200,
+        body: { choices: [{ message: { content: target } }] },
+      },
+    },
+    modules: {
+      "langnext-native": {
+        "SentenceAlignmentNative.modelReady": () => true,
+        "SentenceAlignmentNative.prepareSemanticModel": () => true,
+        "SentenceAlignmentNative.alignSemantic": (input: string, blocks: string[]) => {
+          alignCalls.push([input, blocks]);
+          return [
+            { sourceStart: 0, sourceEnd: 20, targetBlockIndex: 0, targetStart: 0, targetEnd: 6 },
+            { sourceStart: 21, sourceEnd: 39, targetBlockIndex: 0, targetStart: 6, targetEnd: 12 },
+          ];
+        },
+      },
+    },
+  });
+
+  const card = "id:quick-translate-card-card-1";
+  const secondSentence = `${card} >> id:quick-translate-result-text >> text:他走了进去。`;
+  const sourceRange = "id:quick-translate-source >> text:He stepped inside.";
+  const preview = "id:quick-translate-result-preview";
+  await app.press("id:harness-tray-quick-translate");
+  await app.type("id:quick-translate-source", source);
+  await app.keyboard.press("enter");
+  await app.waitFor(preview);
+  expect(alignCalls).toHaveLength(1);
+
+  // Collapsing and expanding restores the settled alignment without another inference.
+  await app.press(`${card} >> id:quick-translate-collapse`);
+  await app.waitFor(`${card} >> label:${t("quickTranslate.expandCard")}`);
+  await app.press(`${card} >> id:quick-translate-collapse`);
+  await app.waitFor(preview);
+  await app.hover(secondSentence);
+  expect(app.spanStyle(sourceRange).backgroundColor).toBeTruthy();
+  expect(alignCalls).toHaveLength(1);
+
+  // Markdown aligns its own block split once; going back reuses the first inference.
+  const toggle = "id:quick-translate-header >> id:quick-translate-markdown-toggle";
+  await app.press(toggle);
+  await app.waitUntil(() => alignCalls.length === 2);
+  await app.hover(secondSentence);
+  expect(app.spanStyle(sourceRange).backgroundColor).toBeTruthy();
+  await app.hover("id:quick-translate-source");
+  await app.press(toggle);
+  await app.hover(secondSentence);
+  expect(app.spanStyle(sourceRange).backgroundColor).toBeTruthy();
+  expect(alignCalls).toHaveLength(2);
+  expect(app.requests()).toHaveLength(1);
+});
+
 test("alignment settings: pending enable download keeps complete translation usable without preview", async () => {
   if (!(await headlessHasAlignmentModel())) return;
   const source = "She opened the door. He stepped inside.";
