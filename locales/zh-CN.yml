@@ -740,7 +740,6 @@ presets:
     keyLabel: API 密钥
     keyPlaceholder: 粘贴 Google Cloud API 密钥
     keyStored: 已保存密钥。输入新密钥可替换。
-    storageNotice: 密钥以未加密形式保存在本机。使用 Google Cloud 可能产生费用。
     usage:
       title: 字符用量
       refresh: 刷新字符用量

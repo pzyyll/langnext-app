@@ -311,9 +311,6 @@ export function PresetEditor(props: PresetEditorProps) {
                   onChange={(googleCloudApiKey) => props.onChange({ googleCloudApiKey })}
                 />
               </FormField>
-              <Text class="text-xs text-muted-foreground">
-                {t("presets.googleCloud.storageNotice")}
-              </Text>
             </Card>
 
             <If when={props.draft.sourceId !== null}>

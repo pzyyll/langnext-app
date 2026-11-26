@@ -1344,7 +1344,6 @@ test("presets ui: Google Cloud", async () => {
   // Usage needs a saved preset, so a new draft shows no usage section.
   expect(app.shows("id:preset-google-cloud-usage")).toBe(false);
   expect(app.value("id:preset-google-cloud-api-key")).toBe("");
-  expect(app.texts()).toContain(t("presets.googleCloud.storageNotice"));
   expect(app.requests()).toHaveLength(0);
 
   await app.type("id:preset-name", "Google Cloud");

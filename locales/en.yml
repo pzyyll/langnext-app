@@ -740,7 +740,6 @@ presets:
     keyLabel: API key
     keyPlaceholder: Paste your Google Cloud API key
     keyStored: A key is stored. Enter a new key to replace it.
-    storageNotice: The key is stored locally without encryption. Google Cloud usage may incur charges.
     usage:
       title: Character usage
       refresh: Refresh character usage
