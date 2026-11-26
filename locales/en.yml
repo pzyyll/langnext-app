@@ -929,7 +929,7 @@ quickTranslate:
   copyBackTranslation: Copy back-translation
   backTranslationCopied: Back-translation copied
   sourceLabel: Source text
-  sourcePlaceholder: Enter text to translate…
+  sourcePlaceholder: Enter text, or paste an image…
   sourceCharacters: "Characters: %{count}"
   collapseSource: Collapse input
   editSource: Edit input

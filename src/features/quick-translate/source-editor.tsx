@@ -58,6 +58,8 @@ export interface QuickTranslateSourceEditorProps {
   inputClass?: string;
   measureClass?: string;
   onChangeText?: (text: string) => void;
+  /** An image pasted into the field. The editor inserts nothing for it. */
+  onPasteImage?: (png: Uint8Array) => void;
   onSubmitEditing?: () => void;
   onFocus?: () => void;
   onBlur?: () => void;
@@ -428,6 +430,16 @@ export function QuickTranslateSourceEditor(props: QuickTranslateSourceEditorProp
             },
           },
         }}
+        onPasteFiles={
+          props.onPasteImage
+            ? (event) => {
+                const image = event.paste.files.find(
+                  (file) => file.mime.startsWith("image/") && file.data.byteLength > 0,
+                );
+                if (image) props.onPasteImage?.(new Uint8Array(image.data));
+              }
+            : undefined
+        }
         onChange={() => {
           docRevision.update((n: number) => n + 1);
           if (syncingExternal) return;

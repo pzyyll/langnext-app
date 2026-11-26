@@ -82,6 +82,8 @@ export interface QuickTranslatePopupProps {
   selectionFeedback?: Accessor<QuickTranslateSelectionFeedback | null>;
   /** Starts the existing Screenshot Translate command; omitted where screen capture is unavailable. */
   onScreenshotTranslate?: () => void;
+  /** Recognizes an image pasted into the source field. */
+  onPasteImage?: (png: Uint8Array) => void;
   /** False while the native window is hidden. Omitted in a harness with no window. */
   playbackAllowed?: Accessor<boolean>;
   /** False while the containing popup or window is hidden. */
@@ -2439,6 +2441,16 @@ export function QuickTranslatePopup(props: QuickTranslatePopupProps) {
                         placeholder={ocrRecognizing() ? "" : t("quickTranslate.sourcePlaceholder")}
                         accessibilityLabel={t("quickTranslate.sourceLabel")}
                         inputClass="min-h-10"
+                        onPaste={(event) => {
+                          if (!props.onPasteImage || event.text.trim().length > 0) return;
+                          const image = event.files.find(
+                            (file) => file.type.startsWith("image/") && file.size > 0,
+                          );
+                          if (!image) return;
+                          void image.arrayBuffer().then((buffer) => {
+                            props.onPasteImage?.(new Uint8Array(buffer));
+                          });
+                        }}
                         onChange={(nextText) => props.session.handleSourceChange(nextText)}
                         onSubmit={() => {
                           if (isComposing()) return;
@@ -2467,6 +2479,7 @@ export function QuickTranslatePopup(props: QuickTranslatePopupProps) {
                       highlightRange={activeSourceHighlight()}
                       placeholder={ocrRecognizing() ? "" : t("quickTranslate.sourcePlaceholder")}
                       accessibilityLabel={t("quickTranslate.sourceLabel")}
+                      onPasteImage={props.onPasteImage}
                       onChangeText={(nextText) => props.session.handleSourceChange(nextText)}
                       onSubmitEditing={() => {
                         if (isComposing()) return;

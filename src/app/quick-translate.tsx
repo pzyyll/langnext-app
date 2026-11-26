@@ -425,6 +425,9 @@ function QuickTranslateWindowBody(props: {
                 ? () => void props.controller.startOcr()
                 : undefined
             }
+            onPasteImage={(png) => {
+              void props.controller.recognizePastedImage(png);
+            }}
             playbackAllowed={() => props.controller.attachedWindow()?.state()?.visible === true}
             windowVisible={() => props.controller.isOpen() && win.state()?.visible !== false}
             scrollRevision={() => scrollRevision()}

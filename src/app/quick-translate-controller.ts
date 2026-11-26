@@ -12,6 +12,7 @@ import {
   checkOcrReadiness,
   enabledOcrEntries,
   recognizeScreenshot,
+  type OcrRecognitionOutcome,
 } from "../features/ocr/recognize";
 import type { SourceDelivery, SourceDeliveryKind } from "../features/quick-translate/session";
 import type { SourceInputHandle } from "../features/quick-translate/source-editor";
@@ -105,6 +106,8 @@ export interface QuickTranslateController {
   /** Reads and delivers the selection captured by a drag release, after the user clicks. */
   activateSelectionFromHint: (target: string) => Promise<void>;
   startOcr: () => Promise<void>;
+  /** Recognizes one pasted image and replaces the source with its text. */
+  recognizePastedImage: (png: Uint8Array) => Promise<void>;
   setPinned: (pinned: boolean) => void;
   togglePinned: () => void;
   toggleAutoTranslate: () => void;
@@ -541,6 +544,26 @@ export function createQuickTranslateController(
     ...captureOverlayTheme(),
   });
 
+  /** Applies one recognition result. True when the OCR action should take focus back. */
+  const finishRecognition = (outcome: OcrRecognitionOutcome): boolean => {
+    switch (outcome.status) {
+      case "recognized":
+        deliverSource(outcome.text, "ocr");
+        return false;
+      case "no_text":
+        setOcrMessage(t("ocr.failure.noText"));
+        return true;
+      case "unavailable":
+        setOcrMessage(outcome.reason);
+        return true;
+      case "failed":
+        setOcrMessage(outcome.message);
+        return true;
+      case "cancelled":
+        return true;
+    }
+  };
+
   /**
    * Reads the selected screen region and replaces the source with its text.
    *
@@ -642,26 +665,7 @@ export function createQuickTranslateController(
       });
       if (!isStillWanted()) return;
 
-      switch (outcome.status) {
-        case "recognized":
-          deliverSource(outcome.text, "ocr");
-          break;
-        case "no_text":
-          shouldRestoreFocus = true;
-          setOcrMessage(t("ocr.failure.noText"));
-          break;
-        case "unavailable":
-          shouldRestoreFocus = true;
-          setOcrMessage(outcome.reason);
-          break;
-        case "failed":
-          shouldRestoreFocus = true;
-          setOcrMessage(outcome.message);
-          break;
-        case "cancelled":
-          shouldRestoreFocus = true;
-          break;
-      }
+      shouldRestoreFocus = finishRecognition(outcome);
     } catch {
       if (isCurrent()) {
         shouldRestoreFocus = true;
@@ -675,6 +679,53 @@ export function createQuickTranslateController(
         if (shouldRestoreFocus && openSignal()) {
           ocrFocusSeqSignal.set(ocrFocusSeqSignal() + 1);
         }
+        ocrStateSignal.set({ phase: "idle", message: ocrStateSignal().message });
+      }
+    }
+  };
+
+  /**
+   * Recognizes one image pasted into the source field and replaces the draft with its text.
+   *
+   * The popup stays open. A screen selection already in progress is left alone; a recognition
+   * already running is cancelled so the latest image wins.
+   */
+  const recognizePastedImage = async (png: Uint8Array) => {
+    if (isSelecting() || png.byteLength === 0) return;
+    ocrAbort?.abort();
+    sourceReadGen += 1;
+    releaseQueuedSelection();
+    setSelectionFeedback(null);
+    ocrActive = true;
+    ocrStateSignal.set({ phase: "recognizing", message: null });
+    const runGen = ++ocrRunGen;
+    const draftAtStart = draftGen;
+    const closeAtStart = openGen;
+    const abort = new AbortController();
+    ocrAbort = abort;
+    const isCurrent = () => runGen === ocrRunGen;
+    const isStillWanted = () =>
+      isCurrent() && draftGen === draftAtStart && openGen === closeAtStart;
+
+    try {
+      const readiness = await checkOcrReadiness(enabledOcrEntries());
+      if (!isStillWanted()) return;
+      if (!readiness.ready) {
+        setOcrMessage(readiness.reason ?? t("ocr.failure.unconfigured"));
+        return;
+      }
+
+      const outcome = await recognizeScreenshot(enabledOcrEntries(), png, {
+        signal: abort.signal,
+      });
+      if (!isStillWanted()) return;
+      finishRecognition(outcome);
+    } catch {
+      if (isCurrent()) setOcrMessage(t("ocr.failure.failed"));
+    } finally {
+      if (runGen === ocrRunGen) {
+        ocrAbort = null;
+        ocrActive = false;
         ocrStateSignal.set({ phase: "idle", message: ocrStateSignal().message });
       }
     }
@@ -837,6 +888,7 @@ export function createQuickTranslateController(
     activateSelectionTranslate,
     activateSelectionFromHint,
     startOcr,
+    recognizePastedImage,
     setPinned: (pinned: boolean) => pinnedSignal.set(pinned),
     togglePinned: () => pinnedSignal.set(!pinnedSignal()),
     toggleAutoTranslate: options.onToggleAutoTranslate

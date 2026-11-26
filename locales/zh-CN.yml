@@ -929,7 +929,7 @@ quickTranslate:
   copyBackTranslation: 复制回译文
   backTranslationCopied: 已复制回译文
   sourceLabel: 源文本
-  sourcePlaceholder: 输入要翻译的文本…
+  sourcePlaceholder: 输入文本，或粘贴图片…
   sourceCharacters: "字符数：%{count}"
   collapseSource: 收起输入框
   editSource: 编辑输入框
