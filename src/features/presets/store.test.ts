@@ -1,5 +1,6 @@
 import { expect, test } from "nsh/test";
 import { t } from "nsh/i18n";
+import { googleCloudUsageStorageKey } from "./google-cloud-usage";
 import {
   createPresetsStore,
   DEEPL_CREDENTIAL_KEY_PREFIX,
@@ -905,8 +906,11 @@ test("presets store: Google Cloud keeps, replaces, and removes keys with the rec
   expect((readError as Error).message).not.toContain("ERR_SECRET_READ_FAILED");
   mem.setGetError(null);
 
-  // Delete removes the referenced key.
+  // Delete removes the referenced key and the preset's monthly usage.
+  const usageKey = googleCloudUsageStorageKey(replaced.id);
+  mem.backing[usageKey] = JSON.stringify({ version: 1, month: "2026-11", characters: 10 });
   await store.remove(replaced.id);
   expect(store.records()).toEqual([]);
   expect(mem.backing[googleCloudCredentialStorageKey(secondRef)]).toBeUndefined();
+  expect(mem.backing[usageKey]).toBeUndefined();
 });

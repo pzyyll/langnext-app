@@ -2,6 +2,7 @@ import { t } from "nsh/i18n";
 import { expect, open, test, type App } from "nsh/test";
 import { SPLIT_RAIL_STORAGE_KEYS } from "../../components/layout/split-rail";
 import { makeChannel, makeModel, makeSeedStorage } from "../models/__tests__/fixtures";
+import { googleCloudUsageStorageKey, nextUsageReset, usageMonthKey } from "./google-cloud-usage";
 import {
   deepLCredentialStorageKey,
   googleCloudCredentialStorageKey,
@@ -19,6 +20,21 @@ function makeDeepLPresetRecord(id: string, name: string, credentialRef: string):
     createdAt: "2026-01-01T00:00:00.000Z",
     updatedAt: "2026-01-01T00:00:00.000Z",
     engine: { kind: "deepl", credentialRef },
+  };
+}
+
+function makeGoogleCloudPresetRecord(
+  id: string,
+  name: string,
+  credentialRef: string,
+): TranslationPreset {
+  return {
+    id,
+    name,
+    enabled: true,
+    createdAt: "2026-01-01T00:00:00.000Z",
+    updatedAt: "2026-01-01T00:00:00.000Z",
+    engine: { kind: "google-cloud", credentialRef },
   };
 }
 
@@ -418,6 +434,57 @@ test("presets ui: DeepL usage reports a rejected key and retries", async () => {
   expect(app.shows("id:preset-deepl-usage-error")).toBe(false);
   expect(app.shows("id:preset-deepl-usage-bar")).toBe(true);
   expect(app.texts()).toContain("42");
+});
+
+test("presets ui: Google Cloud character usage counts the current month only", async () => {
+  const preset = makeGoogleCloudPresetRecord("p-google", "Google Cloud", "ref-google-usage");
+  const app = await open(APP_ENTRY, {
+    ...viewport,
+    locale: "en-US",
+    storage: makeSeedStorage({
+      extra: {
+        [PRESETS_STORAGE_KEY]: JSON.stringify({ version: 1, items: [preset] }),
+        [googleCloudUsageStorageKey("p-google")]: JSON.stringify({
+          version: 1,
+          month: usageMonthKey(),
+          characters: 123456,
+        }),
+      },
+    }),
+  });
+
+  await app.press("id:nav-presets");
+  await app.waitFor("id:preset-google-cloud-usage-count");
+  expect(app.accessibility("id:preset-google-cloud-usage-count")?.name).toBe("123,456");
+  expect(app.accessibility("id:preset-google-cloud-usage-scope")?.name).toBe(
+    t("presets.googleCloud.usage.scope"),
+  );
+  expect(app.enabled("id:preset-google-cloud-usage-refresh")).toBe(true);
+  const reset = t("presets.googleCloud.usage.resets", {
+    date: new Intl.DateTimeFormat("en-US", { month: "short", day: "numeric" }).format(
+      nextUsageReset(),
+    ),
+  });
+  expect(app.accessibility("id:preset-google-cloud-usage-reset")?.name).toBe(reset);
+
+  // A record from an earlier month starts the count over at zero.
+  const stale = await open(APP_ENTRY, {
+    ...viewport,
+    locale: "en-US",
+    storage: makeSeedStorage({
+      extra: {
+        [PRESETS_STORAGE_KEY]: JSON.stringify({ version: 1, items: [preset] }),
+        [googleCloudUsageStorageKey("p-google")]: JSON.stringify({
+          version: 1,
+          month: "2000-01",
+          characters: 42,
+        }),
+      },
+    }),
+  });
+  await stale.press("id:nav-presets");
+  await stale.waitFor("id:preset-google-cloud-usage-count");
+  expect(stale.accessibility("id:preset-google-cloud-usage-count")?.name).toBe("0");
 });
 
 test("presets ui: picker and DeepL editor fit compact dark zh-CN with reduced motion", async () => {
@@ -1274,6 +1341,8 @@ test("presets ui: Google Cloud", async () => {
   expect(app.shows("id:preset-temperature")).toBe(false);
   expect(app.shows("id:preset-template-name")).toBe(false);
   expect(app.shows("id:preset-source-language")).toBe(false);
+  // Usage needs a saved preset, so a new draft shows no usage section.
+  expect(app.shows("id:preset-google-cloud-usage")).toBe(false);
   expect(app.value("id:preset-google-cloud-api-key")).toBe("");
   expect(app.texts()).toContain(t("presets.googleCloud.storageNotice"));
   expect(app.requests()).toHaveLength(0);
@@ -1293,6 +1362,8 @@ test("presets ui: Google Cloud", async () => {
   await app.waitUntil(() => Boolean(app.storage()[PRESETS_STORAGE_KEY]));
   expect(app.requests()).toHaveLength(0);
   expect(app.texts()).toContain("Google Cloud Translation");
+  await app.waitFor("id:preset-google-cloud-usage-count");
+  expect(app.accessibility("id:preset-google-cloud-usage-count")?.name).toBe("0");
   const raw = app.storage()[PRESETS_STORAGE_KEY]!;
   expect(raw).not.toContain("google-test-key");
   const items = JSON.parse(raw).items as TranslationPreset[];

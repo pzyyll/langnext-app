@@ -741,6 +741,14 @@ presets:
     keyPlaceholder: Paste your Google Cloud API key
     keyStored: A key is stored. Enter a new key to replace it.
     storageNotice: The key is stored locally without encryption. Google Cloud usage may incur charges.
+    usage:
+      title: Character usage
+      refresh: Refresh character usage
+      loading: Reading character usage…
+      unreadable: Could not read character usage. Try again.
+      characters: characters
+      resets: Resets %{date}
+      scope: Counts only characters this app sends through this preset.
   language:
     autoTarget: Automatic
   languages:

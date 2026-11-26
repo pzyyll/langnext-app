@@ -726,6 +726,66 @@ test("Google Cloud preset: reports a missing key and can cancel a pending key re
   expect(calls).toBe(0);
 });
 
+test("Google Cloud preset: records the source characters after a successful translation", async () => {
+  const recorded: Array<{ presetId: string; characters: number }> = [];
+  const recordGoogleCloudUsage = (presetId: string, characters: number) => {
+    recorded.push({ presetId, characters });
+  };
+
+  const result = await translateWithPreset(
+    {
+      preset: makeGoogleCloudPreset(),
+      sourceText: "Hello 😀",
+      sourceLanguage: "en",
+      targetLanguage: "zh",
+    },
+    {
+      readGoogleCloudCredential: async () => "test-google-key",
+      googleCloudTranslate: async () => "你好 😀",
+      recordGoogleCloudUsage,
+    },
+  );
+  expect(result).toEqual({ ok: true, text: "你好 😀", modelId: null, templateId: null });
+  expect(recorded).toEqual([{ presetId: "preset-google", characters: 7 }]);
+
+  // A failed request bills nothing, so it is not recorded.
+  const failed = await translateWithPreset(
+    {
+      preset: makeGoogleCloudPreset(),
+      sourceText: "Hello",
+      sourceLanguage: "en",
+      targetLanguage: "zh",
+    },
+    {
+      readGoogleCloudCredential: async () => "test-google-key",
+      googleCloudTranslate: async () => {
+        throw new ProviderProtocolError("server", "upstream down");
+      },
+      recordGoogleCloudUsage,
+    },
+  );
+  expect(failed).toEqual({ ok: false, cancelled: false, error: "upstream down" });
+  expect(recorded).toHaveLength(1);
+
+  // A recorder failure never turns a delivered translation into an error.
+  const brokenRecorder = await translateWithPreset(
+    {
+      preset: makeGoogleCloudPreset(),
+      sourceText: "Hello",
+      sourceLanguage: "en",
+      targetLanguage: "zh",
+    },
+    {
+      readGoogleCloudCredential: async () => "test-google-key",
+      googleCloudTranslate: async () => "你好",
+      recordGoogleCloudUsage: async () => {
+        throw new Error("storage unavailable");
+      },
+    },
+  );
+  expect(brokenRecorder).toEqual({ ok: true, text: "你好", modelId: null, templateId: null });
+});
+
 test("DeepL preset: uses the supplied pair and stored key without AI work or streaming", async () => {
   const calls: Array<{
     apiKey: string;

@@ -1,6 +1,7 @@
 import { computed, signal, Storage } from "nsh";
 import { t } from "nsh/i18n";
 import { createLogger } from "../../services/log";
+import { googleCloudUsageStorageKey } from "./google-cloud-usage";
 import { readAvailableModelChoices } from "./model-choices";
 import { isTemperature } from "./temperature";
 import {
@@ -159,6 +160,15 @@ function credentialEngine(
   return kind === "deepl"
     ? { kind: "deepl", credentialRef }
     : { kind: "google-cloud", credentialRef };
+}
+
+/** Removes a deleted preset's monthly usage; it is a local counter, not preset data. */
+async function removeUsageQuietly(storage: PresetsStorage, presetId: string): Promise<void> {
+  try {
+    await storage.removeItem(googleCloudUsageStorageKey(presetId));
+  } catch {
+    log.warn("Could not remove a deleted Google Cloud preset's character usage.");
+  }
 }
 
 /** Removes an orphaned key without undoing a committed record or leaking the secret. */
@@ -381,6 +391,9 @@ export function createPresetsStore(
         itemsSignal.set(next);
         if (existing.engine.kind === "deepl" || existing.engine.kind === "google-cloud") {
           await removeSecretQuietly(storage, existing.engine.kind, existing.engine.credentialRef);
+        }
+        if (existing.engine.kind === "google-cloud") {
+          await removeUsageQuietly(storage, existing.id);
         }
       } finally {
         mutatingSignal.set(false);

@@ -9,6 +9,7 @@ import { Switch } from "../../components/ui/switch";
 import { FormField } from "../../modules/ai/ui/form-field";
 import { DeepLUsageSection } from "./deepl-usage-section";
 import type { PresetDraft } from "./draft";
+import { GoogleCloudUsageSection } from "./google-cloud-usage-section";
 import { ModelsSection } from "./models-section";
 import { PromptTemplates, type TemplateEditableField } from "./prompt-templates";
 import type { ModelChoice, PresetValidationField, PromptTemplate } from "./types";
@@ -314,6 +315,10 @@ export function PresetEditor(props: PresetEditorProps) {
                 {t("presets.googleCloud.storageNotice")}
               </Text>
             </Card>
+
+            <If when={props.draft.sourceId !== null}>
+              <GoogleCloudUsageSection presetId={props.draft.sourceId!} />
+            </If>
           </If>
 
           <If when={isDeepL()}>

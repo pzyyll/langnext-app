@@ -13,9 +13,12 @@ import {
   type GoogleCloudTranslateInput,
 } from "../../modules/google-cloud-translation/client";
 import { getLanguageLabel, type LanguageId } from "../../framework/languages";
+import { createLogger } from "../../services/log";
+import { countUsageCharacters, googleCloudUsageStore } from "../presets/google-cloud-usage";
 import { presetsStore } from "../presets/store";
 import type { PromptTemplate, TranslationPreset } from "../presets/types";
 
+const log = createLogger("quick-translate/translate");
 const TEMPLATE_TOKEN_PATTERN = /\{\{\s*(source_language|target_language|text)\s*\}\}/g;
 const RETRYABLE_ERROR_KINDS = new Set(["timeout", "network", "rate_limited", "server"]);
 const BACK_TRANSLATION_PROMPT: Pick<PromptTemplate, "systemTemplate" | "userTemplate"> = {
@@ -57,6 +60,8 @@ export interface TranslateWithPresetOptions {
     input: GoogleCloudTranslateInput,
     options?: GoogleCloudTranslateOptions,
   ) => Promise<string>;
+  /** Adds a successful Google Cloud request's characters to the preset's local monthly usage. */
+  recordGoogleCloudUsage?: (presetId: string, characters: number) => void | Promise<void>;
 }
 
 export interface DeepLTranslateOptions {
@@ -233,6 +238,7 @@ async function translateWithGoogleCloud(
   }
 
   const runTranslate = options.googleCloudTranslate ?? createGoogleCloudTranslateClient().translate;
+  const recordUsage = options.recordGoogleCloudUsage ?? googleCloudUsageStore.record;
   try {
     const text = await runTranslate(
       {
@@ -245,6 +251,12 @@ async function translateWithGoogleCloud(
     );
     if (options.signal?.aborted) {
       return cancelledResult();
+    }
+    // Google bills the source text, so the local monthly total counts it too.
+    try {
+      await recordUsage(preset.id, countUsageCharacters(input.sourceText));
+    } catch (error) {
+      log.warn("Could not record Google Cloud character usage.", error);
     }
     return { ok: true, text, modelId: null, templateId: null };
   } catch (error) {
