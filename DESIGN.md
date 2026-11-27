@@ -47,16 +47,17 @@ The feedback adds no overlay, travel, or live region; it does not move the keybo
 
 ## Quick Translate Selection Hint
 
-After the user drags over text, an optional small **Translate Selection** button appears beside the release point. It is an opt-in in **Settings → Application → Shortcuts**, off by default. The button never takes the focus, so the selection stays with the application that owns it, and it reads nothing until it is clicked. It hides after three seconds, on the next press outside it, on activation, when Quick Translate or its screenshot workflow takes over, or when the option is turned off. The **Translate Selection** shortcut remains the keyboard path.
+After the user drags over text, an optional small **Translate Selection** icon appears beside the release point. It is an opt-in in **Settings → Application → Shortcuts**, off by default. The icon never takes the focus, so the selection stays with the application that owns it, and it reads nothing until it is clicked. It carries the action name as its accessible name only. It hides three seconds after it appears, unless the pointer rests on it: the countdown pauses while the pointer is there and starts again when the pointer leaves. It also hides on the next press outside it, on activation, when Quick Translate or its screenshot workflow takes over, or when the option is turned off. The **Translate Selection** shortcut remains the keyboard path.
 
 ### Motion Inventory
 
-| Change                                | Motion                                                               | Reduced motion         |
-| ------------------------------------- | -------------------------------------------------------------------- | ---------------------- |
-| Hint appears or follows a new release | No opening transition, travel, or fade: it is placed before it opens | Same                   |
-| Hint disappears on expiry or a press  | Removed at once; nothing animates and the pointer never chases it    | Same                   |
-| Translate Selection press             | Shared `pressScale` feedback                                         | No transition or scale |
-| Drag button setting switch            | Shared switch motion                                                 | No transition          |
+| Change                                | Motion                                                                                  | Reduced motion         |
+| ------------------------------------- | --------------------------------------------------------------------------------------- | ---------------------- |
+| Hint appears or follows a new release | No opening transition, travel, or fade: it is placed before it opens                    | Same                   |
+| Pointer rests on or leaves the hint   | No motion: the countdown pauses while the pointer rests and starts again when it leaves | Same                   |
+| Hint disappears on expiry or a press  | Removed at once; nothing animates and the pointer never chases it                       | Same                   |
+| Translate Selection press             | Shared `pressScale` feedback                                                            | No transition or scale |
+| Drag button setting switch            | Shared switch motion                                                                    | No transition          |
 
 ## Quick Translate Vertical Stream
 

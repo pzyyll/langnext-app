@@ -11,7 +11,6 @@ import { ModelsPage } from "../features/models/page";
 import { PresetsPage } from "../features/presets/page";
 import { SettingsPage } from "../features/settings/page";
 import {
-  formatShortcut,
   type TranslationShortcutBinding,
   type TranslationShortcutId,
   type TranslationShortcutSetting,
@@ -115,10 +114,6 @@ export function AppShell(props: AppShellProps = {}) {
 
   const selectionHint = signal<SelectionHintCandidate | null>(null);
   const selectionHintPress = signal<PointerPressPoint | null>(null);
-  const selectionShortcutLabel = () => {
-    const chord = shortcuts?.settings["selection-translate"].shortcut() ?? null;
-    return chord === null ? null : formatShortcut(chord);
-  };
 
   // The hint shows only where a display resolves; the press that began the drag never dismisses it.
   const handleSelectionGesture = (event: SelectionGestureEvent) => {
@@ -184,7 +179,6 @@ export function AppShell(props: AppShellProps = {}) {
     <SelectionHintWindow
       hint={selectionHint}
       press={selectionHintPress}
-      shortcut={selectionShortcutLabel}
       onTranslate={(target) => void quickTranslate.activateSelectionFromHint(target)}
       onDismiss={() => selectionHint.set(null)}
     />,

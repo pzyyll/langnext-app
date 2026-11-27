@@ -2970,6 +2970,34 @@ test("selection hint activation: a stale, expired, outside-pressed, or edge hint
   expect(app.texts().join(" ")).toContain("selReads=0|");
 });
 
+test("selection hint lifetime: a pointer resting on it holds it open, and leaving it starts the countdown again", async () => {
+  const app = await open(HARNESS_ENTRY, {
+    ...viewport,
+    clock: {},
+    storage: { "settings.language": "en", [SELECTION_HINT_STORAGE_KEY]: "true" },
+  });
+
+  await app.press("id:harness-selection-hint-candidate");
+  await app.waitUntil(() => app.window("selection-hint").state()?.visible === true);
+  // The icon alone shows the action; its accessible name carries the words.
+  expect(app.accessibility("id:selection-hint-translate")?.label).toBe(
+    t("settings.shortcuts.selectionTranslate"),
+  );
+  expect(app.texts()).not.toContain(t("settings.shortcuts.selectionTranslate"));
+  expect(app.texts()).not.toContain(formatShortcut(DEFAULT_SELECTION_TRANSLATE_SHORTCUT));
+
+  // A pointer resting on the hint pauses the countdown, so it stays past its three seconds.
+  await app.hover("id:selection-hint-translate");
+  await app.clock!.runFor(SELECTION_HINT_DURATION_MS + 100);
+  expect(app.window("selection-hint").state()?.visible).toBe(true);
+
+  // A pointer that leaves starts the countdown again, and the hint goes without reading.
+  await app.hover("id:harness-selection-hint-press");
+  await app.clock!.runFor(SELECTION_HINT_DURATION_MS + 100);
+  await app.waitUntil(() => app.window("selection-hint").state()?.visible !== true);
+  expect(app.texts().join(" ")).toContain("selReads=0|");
+});
+
 test("selection hint setting: starts one listener only for the saved preference and stops it on disable", async () => {
   const switchId = "id:settings-selection-hint-switch";
   const app = await open(HARNESS_ENTRY, {

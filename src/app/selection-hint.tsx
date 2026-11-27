@@ -1,7 +1,6 @@
-import { cleanup, effect, signal, Text, View, type Accessor, type Point } from "nsh";
+import { cleanup, effect, signal, View, type Accessor, type Point } from "nsh";
 import { displays, Window, type DisplayId, type WindowRef } from "nsh/desktop";
 import { t } from "nsh/i18n";
-import { appFontStyle } from "../features/settings/font";
 import { Button } from "../components/ui/button";
 import { Icon } from "../components/ui/icon";
 import {
@@ -13,11 +12,11 @@ import {
 /** The hint is its own native window so it never joins Quick Translate's layout. */
 export const SELECTION_HINT_WINDOW_ID = "selection-hint";
 
-/** How long one hint stays available after the release that showed it. */
+/** How long one hint stays available after the release that showed it, while the pointer is away. */
 export const SELECTION_HINT_DURATION_MS = 3_000;
 
-/** The hint window's fixed size in points: one small action, placed before it opens. */
-export const SELECTION_HINT_SIZE = { width: 232, height: 40 } as const;
+/** The hint window's fixed size in points: one icon button, placed before it opens. */
+export const SELECTION_HINT_SIZE = { width: 40, height: 40 } as const;
 
 /** One drag release the hint offers to translate, and the target it captured. */
 export interface SelectionHintCandidate {
@@ -34,30 +33,38 @@ export interface SelectionHintWindowProps {
   hint: Accessor<SelectionHintCandidate | null>;
   /** The newest global press, used to dismiss a hint the press landed outside of. */
   press: Accessor<PointerPressPoint | null>;
-  /** The configured Translate Selection shortcut, shown as the keyboard alternative. */
-  shortcut: Accessor<string | null>;
   onTranslate: (target: string) => void;
   onDismiss: () => void;
 }
 
 /**
- * One temporary Translate Selection button beside a possible text drag.
+ * One temporary Translate Selection icon beside a possible text drag.
  *
  * It never takes the focus, so the selection stays with the application that owns it. It reads
- * nothing: a click hands the captured target to the Quick Translate controller.
+ * nothing: a click hands the captured target to the Quick Translate controller. The icon alone
+ * shows the action; its accessible name carries the rest. The pointer resting on it holds it open.
  */
 export function SelectionHintWindow(props: SelectionHintWindowProps) {
   const attached = signal<WindowRef | null>(null);
+  const hovering = signal(false);
   const label = () => t("settings.shortcuts.selectionTranslate");
 
-  // A new candidate moves an already open hint and restarts its lifetime.
+  // A new candidate moves an already open hint and gives it a fresh lifetime: the pointer must
+  // come to rest on it again before it holds the hint open.
   effect(() => {
     const candidate = props.hint();
+    hovering.set(false);
     if (candidate === null) return;
-    const timer = setTimeout(() => props.onDismiss(), SELECTION_HINT_DURATION_MS);
-    cleanup(() => clearTimeout(timer));
     const win = attached();
     if (win?.state()?.visible === true) win.setBounds({ origin: candidate.origin });
+  });
+
+  // The countdown runs only while the pointer is away, so the hint stays while the pointer rests
+  // on it and the reader can look before clicking.
+  effect(() => {
+    if (props.hint() === null || hovering()) return;
+    const timer = setTimeout(() => props.onDismiss(), SELECTION_HINT_DURATION_MS);
+    cleanup(() => clearTimeout(timer));
   });
 
   // A press anywhere else dismisses it; a press on the hint is the click that translates.
@@ -101,14 +108,16 @@ export function SelectionHintWindow(props: SelectionHintWindowProps) {
       ref={(node) => attached.set(node)}
     >
       <View
-        class="flex-1 flex-row items-center rounded-xl border border-border bg-background p-0.5 shadow-lg"
-        style={appFontStyle()}
+        class="flex-1"
+        onMouseEnter={() => hovering.set(true)}
+        onMouseMove={() => hovering.set(true)}
+        onMouseLeave={() => hovering.set(false)}
       >
         <Button
           testID="selection-hint-translate"
-          size="sm"
+          size="icon"
           variant="ghost"
-          class="flex-1 justify-start"
+          class="size-full rounded-xl border border-border bg-background shadow-lg"
           accessibilityLabel={label()}
           onPress={() => {
             const candidate = props.hint();
@@ -117,11 +126,7 @@ export function SelectionHintWindow(props: SelectionHintWindowProps) {
             props.onDismiss();
           }}
         >
-          <Icon name="mdi:translate" tone="brand" class="size-3.5 shrink-0" />
-          <Text class="min-w-0 flex-1 truncate font-medium text-foreground">{label()}</Text>
-          <If when={props.shortcut() !== null}>
-            <Text class="shrink-0 text-muted-foreground">{props.shortcut() ?? ""}</Text>
-          </If>
+          <Icon name="mdi:translate" tone="brand" class="size-4 shrink-0" />
         </Button>
       </View>
     </Window>
