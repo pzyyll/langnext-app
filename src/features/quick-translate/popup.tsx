@@ -1762,29 +1762,55 @@ export function QuickTranslatePopup(props: QuickTranslatePopupProps) {
 
   // Any edit that empties the field (Select All and Delete included) must drop the previous
   // line box. Rebuild the native field between two frames: blur first, then replace it, so
-  // nothing is disposed while the control still owns the keyboard.
+  // nothing is disposed while the control still owns the keyboard. An input method composes
+  // the first character of a replacement with the field already empty, so the rebuild waits
+  // until it commits or gives up: dropping the field there loses the composition.
+  let pendingEmptyRebuild = false;
+  const rebuildEmptyField = () => {
+    requestAnimationFrame(() => {
+      if (!popupAlive) return;
+      if (isComposing()) {
+        pendingEmptyRebuild = true;
+        return;
+      }
+      if (isSourceCollapsed() || hasSourceText()) return;
+      sourceInputRef()?.blur();
+      editorAlive.set(false);
+      requestAnimationFrame(() => {
+        if (!popupAlive) return;
+        editorAlive.set(true);
+        requestAnimationFrame(() => {
+          if (!popupAlive) return;
+          if (isComposing()) {
+            pendingEmptyRebuild = true;
+            return;
+          }
+          if (isSourceCollapsed() || hasSourceText()) return;
+          const input = sourceInputRef();
+          input?.focus();
+          input?.setSelection(0, 0);
+        });
+      });
+    });
+  };
+
   let hadSourceText = hasSourceText();
   effect(() => {
     const has = hasSourceText();
-    if (hadSourceText && !has) {
+    if (has) {
+      pendingEmptyRebuild = false;
+    } else if (hadSourceText) {
       sourceFontStep.set(LARGEST_FONT_STEP);
-      requestAnimationFrame(() => {
-        if (!popupAlive || isSourceCollapsed() || hasSourceText()) return;
-        sourceInputRef()?.blur();
-        editorAlive.set(false);
-        requestAnimationFrame(() => {
-          if (!popupAlive) return;
-          editorAlive.set(true);
-          requestAnimationFrame(() => {
-            if (!popupAlive || isSourceCollapsed() || hasSourceText()) return;
-            const input = sourceInputRef();
-            input?.focus();
-            input?.setSelection(0, 0);
-          });
-        });
-      });
+      if (isComposing()) pendingEmptyRebuild = true;
+      else rebuildEmptyField();
     }
     hadSourceText = has;
+  });
+
+  effect(() => {
+    if (!pendingEmptyRebuild || isComposing() || hasSourceText()) return;
+    pendingEmptyRebuild = false;
+    rebuildEmptyField();
   });
 
   const expandSource = () => {
