@@ -117,7 +117,7 @@ export function SelectionHintWindow(props: SelectionHintWindowProps) {
           testID="selection-hint-translate"
           size="icon"
           variant="ghost"
-          class="size-full rounded-xl border border-border bg-background shadow-lg"
+          class="size-full rounded-xl border border-border bg-background"
           accessibilityLabel={label()}
           onPress={() => {
             const candidate = props.hint();
