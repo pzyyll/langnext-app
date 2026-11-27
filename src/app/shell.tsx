@@ -1,13 +1,5 @@
-import { cleanup, effect, platform, signal, untracked, View } from "nsh";
-import {
-  Application,
-  currentWindow,
-  displays,
-  titleBar,
-  Tray,
-  Window,
-  type TrayOptions,
-} from "nsh/desktop";
+import { cleanup, computed, effect, platform, signal, untracked, View } from "nsh";
+import { Application, currentWindow, displays, Tray, Window, type TrayOptions } from "nsh/desktop";
 import { t } from "nsh/i18n";
 import trayIcon from "../../assets/logos/icon.svg";
 import { AppMenu } from "../components/app-menu";
@@ -205,6 +197,7 @@ function MainWindow(props: {
   shortcuts?: Record<TranslationShortcutId, TranslationShortcutSetting>;
 }) {
   const win = currentWindow();
+  const caption = computed(() => win.titleBar());
   effect(() => win.set({ backdrop: transparency() ? "popover" : "none" }));
   // Every way of closing the main window keeps the app in the background: the
   // close button, Alt+F4, the taskbar and the window menu hide it. Only the
@@ -261,11 +254,11 @@ function MainWindow(props: {
         testID="title-bar"
         desktop={{ windowDrag: true }}
         class="flex-row items-center"
-        // Runtime platform titleBar() insets determine height and horizontal clearance.
+        // Native caption insets determine the height and leave room for system buttons.
         style={{
-          height: Math.max(TITLE_BAR_HEIGHT, titleBar().height),
-          paddingLeft: titleBar().left,
-          paddingRight: titleBar().right + 16,
+          height: Math.max(TITLE_BAR_HEIGHT, caption().height),
+          paddingLeft: caption().left,
+          paddingRight: caption().right + 16,
         }}
       >
         <View class="w-14 shrink-0 items-center">

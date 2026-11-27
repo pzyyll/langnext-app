@@ -16,7 +16,7 @@ export function startupFailureMessage(error: unknown): string {
  * model v2 creates no window until the app declares one, so without it a
  * failed start would leave nothing on the screen.
  */
-export function StartupError(props: { message: string }) {
+export function StartupError(props: { message: string | null }) {
   const desktop = DESKTOP_OS.has(platform.os);
   const exit = () => {
     if (desktop) Application.quit();
@@ -24,6 +24,7 @@ export function StartupError(props: { message: string }) {
   return (
     <Window
       id="startup-error"
+      open={props.message !== null}
       // The system title bar keeps the window movable without the shell's drag row.
       titleBar={{ style: "default" }}
       closeOnPress={false}

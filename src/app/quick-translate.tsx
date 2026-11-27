@@ -10,7 +10,7 @@ import {
   View,
   type ViewRef,
 } from "nsh";
-import { Application, currentWindow, GlobalShortcut, titleBar, Window } from "nsh/desktop";
+import { Application, currentWindow, GlobalShortcut, Window } from "nsh/desktop";
 import { t } from "nsh/i18n";
 import { Button } from "../components/ui/button";
 import { Icon } from "../components/ui/icon";
@@ -176,13 +176,15 @@ export function registerQuickTranslateDoubleCopy(
 /** Top + bottom border width (1 pt each) of the rounded frameless root container. */
 const ROOT_BORDER_HEIGHT = 2;
 
-/** Renders popup contents inside `<Window>` so `titleBar()` reads this window's caption area. */
+/** Renders the popup contents and measures them for window height fitting. */
 function QuickTranslateWindowBody(props: {
   controller: QuickTranslateController;
   session: QuickTranslateSession;
 }) {
   const session = props.session;
   const win = currentWindow();
+  // Hot reload can rerun bindings after NSH unregisters the window.
+  const caption = computed(() => win.titleBar());
   // NSH 0.7 can retain a closed window's effects after its replacement opens.
   const isCurrentWindow = computed(() => props.controller.attachedWindow() === win);
   const headerHeight = signal(0);
@@ -275,11 +277,11 @@ function QuickTranslateWindowBody(props: {
         onLayout={({ bounds }) => headerHeight.set(bounds.size.height)}
         desktop={{ windowDrag: true }}
         class="shrink-0 flex-row items-center justify-between gap-1 border-b border-border/70 bg-background"
-        // Runtime platform titleBar() insets clear native caption buttons; 16 pt matches the px-4 body spine.
+        // Native caption insets leave room for system buttons; 16 pt matches the px-4 body padding.
         style={{
-          height: Math.max(44, titleBar().height),
-          paddingLeft: titleBar().left + 16,
-          paddingRight: titleBar().right + 16,
+          height: Math.max(44, caption().height),
+          paddingLeft: caption().left + 16,
+          paddingRight: caption().right + 16,
         }}
       >
         <View desktop={{ windowDrag: false }} class="min-w-0 shrink flex-row items-center">
@@ -385,7 +387,7 @@ function QuickTranslateWindowBody(props: {
               class="size-3.5"
             />
           </Button>
-          <If when={titleBar().right === 0}>
+          <If when={caption().right === 0}>
             <View class="mx-0.5 h-3.5 w-px bg-border" />
             <Button
               testID="quick-translate-close"

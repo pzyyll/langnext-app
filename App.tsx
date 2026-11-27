@@ -1,4 +1,4 @@
-import { mount, platform } from "nsh";
+import { ErrorBoundary, mount, platform, signal } from "nsh";
 import { initializeIntegrations } from "./src/app/integrations-setup";
 import { AppShell } from "./src/app/shell";
 import { StartupError, startupFailureMessage } from "./src/app/startup-error";
@@ -25,6 +25,14 @@ import { loadTransparency } from "./src/features/settings/transparency";
 import { createLogger, logFile } from "./src/services/log";
 
 const log = createLogger("app");
+
+type StartupState = "idle" | "loading" | "ready" | { message: string };
+const startup = signal<StartupState>("idle");
+
+function reportStartupFailure(error: unknown): string {
+  log.error("Could not start the app", error);
+  return startupFailureMessage(error);
+}
 
 async function startApp() {
   try {
@@ -56,13 +64,33 @@ async function startApp() {
       wordbookSettingsStore.load(),
       loadSplitRailWidths(),
     ]);
-    mount(AppShell);
+    startup.set("ready");
   } catch (error) {
-    // Window model v2 opens no window until the app declares one, so the
-    // failure gets a window of its own: a failed start is never invisible.
-    log.error("Could not start the app", error);
-    mount(StartupError, { message: startupFailureMessage(error) });
+    startup.set({ message: reportStartupFailure(error) });
   }
 }
 
-void startApp();
+function App() {
+  const startupError = () => {
+    const state = startup();
+    return typeof state === "object" ? state.message : null;
+  };
+
+  // Declaring the closed error window keeps NSH from opening an implicit window while settings load.
+  return [
+    <StartupError message={startupError()} />,
+    <If when={startup() === "ready"}>
+      <ErrorBoundary fallback={(error) => <StartupError message={reportStartupFailure(error)} />}>
+        <AppShell />
+      </ErrorBoundary>
+    </If>,
+  ];
+}
+
+// NSH reuses a synchronous mount during hot reload. A mount after an await is
+// disposed first, which can close the last window and exit the Windows host.
+mount(App);
+if (startup() === "idle") {
+  startup.set("loading");
+  void startApp();
+}
