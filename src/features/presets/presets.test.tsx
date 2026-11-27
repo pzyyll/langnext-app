@@ -1539,7 +1539,7 @@ test("presets ui: Google Web localizes the engine label and disclosure", async (
   await app.press("id:preset-type-google-web");
   await app.waitUntil(() => !app.shows("id:add-preset-dialog"));
   await app.waitFor("id:preset-google-web-disclosure");
-  expect(app.texts()).toContain("文本将发送到 Google 未公开的翻译接口。");
+  expect(app.texts()).toContain("使用谷歌网页版未公开的翻译接口，不保证稳定性");
   expect(app.requests()).toHaveLength(0);
 });
 

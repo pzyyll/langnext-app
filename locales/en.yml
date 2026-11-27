@@ -761,7 +761,7 @@ presets:
       resets: Resets %{date}
       scope: Counts only characters this app sends through this preset.
   googleWeb:
-    disclosure: Sends text to Google's undocumented translation service.
+    disclosure: Uses Google's undocumented web translation interface. Stability is not guaranteed.
   language:
     autoTarget: Automatic
   languages:

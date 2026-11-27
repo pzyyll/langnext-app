@@ -761,7 +761,7 @@ presets:
       resets: "%{date}重置"
       scope: 仅统计本应用通过此预设发送的字符。
   googleWeb:
-    disclosure: 文本将发送到 Google 未公开的翻译接口。
+    disclosure: 使用谷歌网页版未公开的翻译接口，不保证稳定性
   language:
     autoTarget: 自动
   languages:
