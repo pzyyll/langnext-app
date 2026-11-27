@@ -236,7 +236,7 @@ export function QuickTranslateSourceEditor(props: QuickTranslateSourceEditorProp
   });
 
   const syncExternalValue = (nextRaw: string) => {
-    if (nextRaw === lastRawValue) return;
+    if (disposed || nextRaw === lastRawValue) return;
     const nextProj = buildSourceProjection(nextRaw);
     lastRawValue = nextRaw;
     activeProjection = nextProj;
@@ -254,14 +254,17 @@ export function QuickTranslateSourceEditor(props: QuickTranslateSourceEditorProp
 
   const handle: QuickTranslateSourceHandle = {
     focus() {
+      if (disposed) return;
       if (editorRef) editorRef.focus();
       else session.focus();
     },
     blur() {
+      if (disposed) return;
       if (editorRef) editorRef.blur();
       else session.blur();
     },
     setSelection(start: number, end: number) {
+      if (disposed) return;
       syncExternalValue(props.value);
       const from = rawOffsetToDocPos(activeProjection, start);
       const to = rawOffsetToDocPos(activeProjection, end);
@@ -274,6 +277,7 @@ export function QuickTranslateSourceEditor(props: QuickTranslateSourceEditorProp
   });
 
   const applyHighlightDecorations = (range: SourceHighlightRange | null | undefined) => {
+    if (disposed) return;
     const mapped = rawRangeToDocRange(activeProjection, range);
     session.setDecorations(
       HIGHLIGHT_DECORATION_KEY,
@@ -446,6 +450,7 @@ export function QuickTranslateSourceEditor(props: QuickTranslateSourceEditorProp
             : undefined
         }
         onChange={() => {
+          if (disposed) return;
           docRevision.update((n: number) => n + 1);
           if (syncingExternal) return;
           const nextNorm = readSessionPlainText(session);
