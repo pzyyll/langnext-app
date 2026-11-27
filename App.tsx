@@ -14,6 +14,7 @@ import { loadSkippedNoticeDismissal } from "./src/features/presets/skipped-notic
 import { presetsStore } from "./src/features/presets/store";
 import { loadQuickTranslatePreferences } from "./src/features/quick-translate/preferences";
 import { loadAppearance } from "./src/features/settings/appearance";
+import { loadFontSettings } from "./src/features/settings/font";
 import { loadLanguage } from "./src/features/settings/language";
 import { loadLogLevel } from "./src/features/settings/log-level";
 import { loadSentenceAlignment } from "./src/features/settings/quick-translate";
@@ -37,6 +38,7 @@ async function startApp() {
     }
     await Promise.all([
       loadAppearance(),
+      loadFontSettings(),
       loadLanguage(),
       loadSentenceAlignment(),
       loadSelectionCopy(),

@@ -8,6 +8,7 @@ pub mod quick_translate;
 pub mod screen_capture;
 pub mod selection_text;
 pub mod sentence_alignment;
+pub mod system_fonts;
 pub mod taskbar_icon;
 mod translation_history;
 
@@ -19,6 +20,7 @@ fn native(registry: &mut Registry) {
     registry.module::<screen_capture::ScreenCaptureNative>();
     registry.module::<selection_text::SelectionTextNative>();
     registry.module::<sentence_alignment::SentenceAlignmentNative>();
+    registry.module::<system_fonts::SystemFontsNative>();
     registry.module::<taskbar_icon::TaskbarIconNative>();
     registry.module::<translation_history::TranslationHistoryNative>();
 }

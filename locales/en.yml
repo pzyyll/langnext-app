@@ -126,6 +126,14 @@ settings:
     en: English
     "zh-CN": 简体中文
     error: Could not save language. Your choice will apply until you close the app.
+  font:
+    title: Font
+    system: System font
+    bundled: App fonts
+    installed: Installed fonts
+    saveError: Could not save the font. Your choice will apply until you close the app.
+    families:
+      googleSans: Google Sans
   silentLaunch:
     label: Silent launch
     error: Could not save silent launch. Try again.

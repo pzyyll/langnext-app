@@ -33,6 +33,7 @@ import {
 } from "../features/quick-translate/session";
 import { createAnkiClient } from "../features/wordbook/anki-client";
 import { wordbookSettingsStore } from "../features/wordbook/settings";
+import { appFontStyle } from "../features/settings/font";
 import { sentenceAlignmentEnabled } from "../features/settings/quick-translate";
 import { selectionCopyEnabled } from "../features/settings/selection-copy";
 import {
@@ -267,6 +268,7 @@ function QuickTranslateWindowBody(props: {
     <View
       testID="quick-translate-surface"
       class="flex-1 overflow-hidden rounded-2xl border border-border bg-background text-foreground"
+      style={appFontStyle()}
     >
       <View
         testID="quick-translate-header"

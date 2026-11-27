@@ -22,6 +22,7 @@ import {
 } from "../language-detection/store";
 import { makeChannel, makeModel, makeSeedStorage } from "../models/__tests__/fixtures";
 import { OCR_CHANNELS_STORAGE_KEY, OCR_CREDENTIAL_NAMESPACE } from "../ocr/store";
+import { FONT_STORAGE_KEY } from "./font";
 import { LOG_LEVEL_STORAGE_KEY } from "./log-level";
 import { SELECTION_COPY_STORAGE_KEY } from "./selection-copy";
 import { SILENT_LAUNCH_STORAGE_KEY } from "./silent-launch";
@@ -4015,4 +4016,26 @@ test("wordbook page: keeps a masked key out of the binding and can remove it", a
     credentialRef?: string;
   };
   expect(removed.credentialRef).toBeUndefined();
+});
+
+test("font: applies the saved family to the window and saves a new choice", async () => {
+  const app = await open(APP_ENTRY, {
+    ...viewport,
+    storage: { "settings.language": "en", [FONT_STORAGE_KEY]: "Google Sans" },
+  });
+
+  await app.press("id:nav-settings");
+  await app.waitFor("id:settings-font");
+
+  // The trigger names the saved font, and every text in the window inherits it.
+  await app.waitFor("id:settings-font >> text:Google Sans");
+  const applied = app.spanStyle("id:settings-font >> text:Google Sans").fontFamily ?? "";
+  expect(applied).toContain("Google Sans");
+  expect(applied).toContain("'Microsoft YaHei UI'");
+
+  // The system font is the first choice and clears the family again.
+  await app.press("id:settings-font");
+  await app.press("System font");
+  await app.waitUntil(() => app.storage()[FONT_STORAGE_KEY] === "system");
+  expect(app.spanStyle("id:settings-font >> text:System font").fontFamily ?? null).toBeNull();
 });

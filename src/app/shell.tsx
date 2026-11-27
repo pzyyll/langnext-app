@@ -24,6 +24,7 @@ import {
   type TranslationShortcutId,
   type TranslationShortcutSetting,
 } from "../features/settings/shortcuts";
+import { appFontStyle } from "../features/settings/font";
 import { silentLaunch } from "../features/settings/silent-launch";
 import { transparency } from "../features/settings/transparency";
 import {
@@ -251,7 +252,11 @@ function MainWindow(props: {
   const selectSettings = () => navigateTo("settings");
 
   return (
-    <View class="flex-1 bg-sidebar" classList={{ "bg-sidebar/80": transparency() }}>
+    <View
+      class="flex-1 bg-sidebar"
+      classList={{ "bg-sidebar/80": transparency() }}
+      style={appFontStyle()}
+    >
       <View
         testID="title-bar"
         desktop={{ windowDrag: true }}
