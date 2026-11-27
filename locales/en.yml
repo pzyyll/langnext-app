@@ -734,6 +734,7 @@ presets:
     ai: AI Translation
     deepl: DeepL API
     googleCloud: Google Cloud Translation
+    googleWeb: Google Web
   deepl:
     keyLabel: API key
     keyPlaceholder: Paste your DeepL API key
@@ -759,6 +760,8 @@ presets:
       characters: characters
       resets: Resets %{date}
       scope: Counts only characters this app sends through this preset.
+  googleWeb:
+    disclosure: Sends text to Google's undocumented translation service.
   language:
     autoTarget: Automatic
   languages:
@@ -995,3 +998,12 @@ googleCloud:
     quota: This Google Cloud Translation quota is used up.
     server: Google Cloud Translation is unavailable right now.
     invalidResponse: Google Cloud Translation returned an unreadable response.
+googleWeb:
+  error:
+    unsupportedLanguage: Google Web translation does not support this language.
+    accessDenied: Google blocked this translation request. Choose another preset or try again later.
+    rateLimited: Google is limiting translation requests. Wait a moment and try again.
+    tooLarge: This text is too long for Google Web translation.
+    rejected: Google rejected this translation request.
+    server: Google Web translation is unavailable right now.
+    invalidResponse: Google Web translation returned an unreadable response.

@@ -159,6 +159,7 @@ export function resolveModelBindingInfo(
 export type PresetChannelMark =
   | { kind: "deepl" }
   | { kind: "google-cloud" }
+  | { kind: "google-web" }
   | { kind: "provider"; presentation: ProviderPresentation };
 
 /** Resolves the channel mark for an engine and the model it translates with. */
@@ -171,6 +172,9 @@ export function resolvePresetChannelMark(
   }
   if (engineKind === "google-cloud") {
     return { kind: "google-cloud" };
+  }
+  if (engineKind === "google-web") {
+    return { kind: "google-web" };
   }
   if (!primaryModelId) return null;
   const model = modelsStore.models().find((entry) => entry.id === primaryModelId);
@@ -211,6 +215,9 @@ export function summarizePreset(preset: Pick<TranslationPreset, "engine">): stri
   }
   if (preset.engine.kind === "google-cloud") {
     return t("presets.engine.googleCloud");
+  }
+  if (preset.engine.kind === "google-web") {
+    return t("presets.engine.googleWeb");
   }
   return summarizePresetModels(preset.engine.modelIds);
 }

@@ -1,5 +1,6 @@
 import { Image, View, type Accessor } from "nsh";
 import googleCloudIcon from "../../../assets/icons/google-cloud.svg";
+import googleIcon from "../../../assets/icons/google.svg";
 import { Icon } from "../../components/ui/icon";
 import { ProviderMark } from "../../modules/ai/ui/provider-mark";
 import type { PresetChannelMark } from "./model-choices";
@@ -10,7 +11,7 @@ interface PresetMarkProps {
   class?: string;
 }
 
-/** Leads a preset summary with its channel mark: DeepL, Google Cloud, or the primary model's channel. */
+/** Leads a preset summary with its channel mark: DeepL, a Google service, or the primary model's channel. */
 export function PresetMark(props: PresetMarkProps) {
   const iconClass = () => `overflow-hidden ${props.class ?? "size-3 shrink-0"}`;
   const providerPresentation = () => {
@@ -26,7 +27,19 @@ export function PresetMark(props: PresetMarkProps) {
           else={
             <If
               when={props.mark()?.kind === "google-cloud"}
-              else={<Icon name="deepl" tone="foreground" class={iconClass()} />}
+              else={
+                <If
+                  when={props.mark()?.kind === "google-web"}
+                  else={<Icon name="deepl" tone="foreground" class={iconClass()} />}
+                >
+                  <Image
+                    testID={props.testID ? `${props.testID}-google-web` : undefined}
+                    src={googleIcon}
+                    accessibilityElementsHidden={true}
+                    class={iconClass()}
+                  />
+                </If>
+              }
             >
               <Image src={googleCloudIcon} accessibilityElementsHidden={true} class={iconClass()} />
             </If>

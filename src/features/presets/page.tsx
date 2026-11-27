@@ -206,6 +206,7 @@ export function PresetsPage(props: PresetsPageProps) {
     if (!draft) return "";
     if (draft.engineKind === "deepl") return t("presets.engine.deepl");
     if (draft.engineKind === "google-cloud") return t("presets.engine.googleCloud");
+    if (draft.engineKind === "google-web") return t("presets.engine.googleWeb");
     return summarizePresetModels(draft.primaryModelId ? [draft.primaryModelId] : []);
   };
   const draftChannelMark = () => {

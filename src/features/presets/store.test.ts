@@ -107,6 +107,15 @@ function googleCloudRef(preset: TranslationPreset): string {
   return preset.engine.credentialRef;
 }
 
+function makeGoogleWebInput(overrides: Partial<SavePresetInput> = {}): SavePresetInput {
+  return {
+    name: "Google Web Preset",
+    enabled: true,
+    engine: { kind: "google-web" },
+    ...overrides,
+  };
+}
+
 function makeBaseInput(overrides: Partial<SavePresetInput> = {}): SavePresetInput {
   return {
     name: "Technical EN to ZH",
@@ -869,6 +878,73 @@ test("presets store: Google Cloud validates keys, trims them, and locks the engi
   await expect(
     store.save({ ...makeBaseInput({ id: ai.id }), engine: makeGoogleCloudInput().engine }),
   ).rejects.toMatchObject({ key: "engine_type_locked" });
+});
+
+test("Google Web preset: saves, reloads, renames, and removes with no credential or usage record", async () => {
+  const mem = createMemoryStorage();
+  let catalogReads = 0;
+  const catalog = (): ModelChoiceId[] => {
+    catalogReads += 1;
+    return [{ id: "m-1" }];
+  };
+  const store = createPresetsStore(mem.storage, catalog);
+  await store.load();
+
+  const saved = await store.save(makeGoogleWebInput({ name: "  Google Web  " }));
+  expect(saved.name).toBe("Google Web");
+  expect(saved.enabled).toBe(true);
+  expect(saved.engine).toEqual({ kind: "google-web" });
+  expect(Object.keys(saved.engine)).toEqual(["kind"]);
+  expect(catalogReads).toBe(0);
+  expect(Object.keys(mem.backing)).toEqual([PRESETS_STORAGE_KEY]);
+  expect(mem.getSetCalls()).toBe(1);
+  expect(await store.readDeepLCredential(saved.id)).toBeNull();
+  expect(await store.readGoogleCloudCredential(saved.id)).toBeNull();
+
+  const raw = mem.backing[PRESETS_STORAGE_KEY]!;
+  expect(raw).not.toContain("apiKey");
+  expect(raw).not.toContain("credentialRef");
+  expect(raw).not.toContain("modelIds");
+  expect(JSON.parse(raw).items[0]).toEqual(saved);
+
+  const reloaded = createPresetsStore(mem.storage, catalog);
+  await reloaded.load();
+  expect(reloaded.status()).toEqual({ kind: "ready", skippedCount: 0 });
+  expect(reloaded.records()).toEqual([saved]);
+
+  const renamed = await reloaded.save(
+    makeGoogleWebInput({ id: saved.id, name: "  Renamed Google Web  ", enabled: false }),
+  );
+  expect(renamed.id).toBe(saved.id);
+  expect(renamed.name).toBe("Renamed Google Web");
+  expect(renamed.enabled).toBe(false);
+  expect(renamed.engine).toEqual({ kind: "google-web" });
+  expect(reloaded.records()).toEqual([renamed]);
+  expect(Object.keys(mem.backing)).toEqual([PRESETS_STORAGE_KEY]);
+
+  // The saved kind stays locked in both directions.
+  await expect(
+    reloaded.save({
+      id: renamed.id,
+      name: renamed.name,
+      enabled: true,
+      engine: makeAiEngine(),
+    }),
+  ).rejects.toMatchObject({ key: "engine_type_locked" });
+  const ai = await reloaded.save(makeBaseInput());
+  await expect(
+    reloaded.save({
+      id: ai.id,
+      name: ai.name,
+      enabled: true,
+      engine: { kind: "google-web" },
+    }),
+  ).rejects.toMatchObject({ key: "engine_type_locked" });
+
+  await reloaded.remove(renamed.id);
+  expect(reloaded.records()).toEqual([ai]);
+  expect(Object.keys(mem.backing)).toEqual([PRESETS_STORAGE_KEY]);
+  expect(JSON.parse(mem.backing[PRESETS_STORAGE_KEY]!).items).toEqual([ai]);
 });
 
 test("presets store: Google Cloud keeps, replaces, and removes keys with the record", async () => {

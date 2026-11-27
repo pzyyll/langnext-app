@@ -101,6 +101,8 @@ function isValidStoredPreset(value: unknown): value is TranslationPreset {
   if (value.engine.kind === "google-cloud") {
     return isValidCredentialEngine(value.engine, "google-cloud");
   }
+  // Google Web stores no configuration: the engine tag is the whole record.
+  if (value.engine.kind === "google-web") return true;
   return false;
 }
 
@@ -360,13 +362,17 @@ export function createPresetsStore(
           return await saveCredentialPreset(existing, validated, validated.engine, now);
         }
 
+        const engine =
+          validated.engine.kind === "ai"
+            ? validated.engine.engine
+            : ({ kind: "google-web" } as const);
         const record: TranslationPreset = {
           id: existing?.id ?? crypto.randomUUID(),
           name: validated.name,
           enabled: validated.enabled,
           createdAt: existing?.createdAt ?? now,
           updatedAt: now,
-          engine: validated.engine.engine,
+          engine,
         };
         const next = replaceItems(existing, record);
         await writePresets(storage, next);

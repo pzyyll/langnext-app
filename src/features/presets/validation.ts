@@ -108,7 +108,8 @@ function validatePromptBody(
 export type ValidatedPresetEngine =
   | { kind: "ai"; engine: AiPresetEngine }
   | { kind: "deepl"; apiKey: string | null }
-  | { kind: "google-cloud"; apiKey: string | null };
+  | { kind: "google-cloud"; apiKey: string | null }
+  | { kind: "google-web" };
 
 export interface ValidatedPresetPayload {
   name: string;
@@ -152,7 +153,8 @@ export function validatePresetForSave(
     !input.engine ||
     (input.engine.kind !== "ai" &&
       input.engine.kind !== "deepl" &&
-      input.engine.kind !== "google-cloud")
+      input.engine.kind !== "google-cloud" &&
+      input.engine.kind !== "google-web")
   ) {
     throw new PresetsStoreError("engine_unsupported", t("presets.error.engineUnsupported"));
   }
@@ -196,6 +198,14 @@ export function validatePresetForSave(
       name,
       enabled: Boolean(input.enabled),
       engine: { kind: "google-cloud", apiKey },
+    };
+  }
+
+  if (input.engine.kind === "google-web") {
+    return {
+      name,
+      enabled: Boolean(input.enabled),
+      engine: { kind: "google-web" },
     };
   }
 

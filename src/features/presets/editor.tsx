@@ -64,7 +64,11 @@ export function PresetEditor(props: PresetEditorProps) {
   const canSave = () => {
     if (props.saving) return false;
     if (props.draft.sourceId === null) {
-      if (props.draft.engineKind === "deepl" || props.draft.engineKind === "google-cloud") {
+      if (
+        props.draft.engineKind === "deepl" ||
+        props.draft.engineKind === "google-cloud" ||
+        props.draft.engineKind === "google-web"
+      ) {
         return true;
       }
       return props.modelChoices.length > 0 && props.modelsError === null;
@@ -72,9 +76,10 @@ export function PresetEditor(props: PresetEditorProps) {
     return props.dirty;
   };
 
+  const isAi = () => props.draft.engineKind === "ai";
   const isDeepL = () => props.draft.engineKind === "deepl";
   const isGoogleCloud = () => props.draft.engineKind === "google-cloud";
-  const isCredentialEngine = () => isDeepL() || isGoogleCloud();
+  const isGoogleWeb = () => props.draft.engineKind === "google-web";
   const isNew = () => props.draft.sourceId === null;
 
   const canCancel = () => {
@@ -327,7 +332,7 @@ export function PresetEditor(props: PresetEditorProps) {
             </Card>
           </If>
 
-          <If when={!isCredentialEngine()}>
+          <If when={isAi()}>
             <ModelsSection
               primaryModelId={props.draft.primaryModelId}
               fallbackModelIds={props.draft.fallbackModelIds}
@@ -379,6 +384,14 @@ export function PresetEditor(props: PresetEditorProps) {
               }
               onClearTemplateRefs={(tplId) => props.onClearTemplateRefs(tplId)}
             />
+          </If>
+
+          <If when={isGoogleWeb()}>
+            <Card class={cardClass()}>
+              <Text testID="preset-google-web-disclosure" class="text-sm text-muted-foreground">
+                {t("presets.googleWeb.disclosure")}
+              </Text>
+            </Card>
           </If>
 
           <If when={isGoogleCloud()}>

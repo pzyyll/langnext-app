@@ -40,6 +40,7 @@ import {
   type TranslationOutputSize,
 } from "../../components/ui/translation-output";
 import googleCloudIcon from "../../../assets/icons/google-cloud.svg";
+import googleIcon from "../../../assets/icons/google.svg";
 import { ProviderMark } from "../../modules/ai/ui/provider-mark";
 import { createLogger } from "../../services/log";
 import { languageResolutionErrorMessage } from "../language-detection/messages";
@@ -273,12 +274,24 @@ function PresetLeadingMark(props: { preset: TranslationPreset | null; testID?: s
             when={props.preset?.engine.kind === "google-cloud"}
             else={
               <If
-                when={providerMark()}
-                else={<View class="size-1.5 shrink-0 rounded-full bg-brand" />}
+                when={props.preset?.engine.kind === "google-web"}
+                else={
+                  <If
+                    when={providerMark()}
+                    else={<View class="size-1.5 shrink-0 rounded-full bg-brand" />}
+                  >
+                    {(presentation) => (
+                      <ProviderMark presentation={presentation()} class="size-3 shrink-0" />
+                    )}
+                  </If>
+                }
               >
-                {(presentation) => (
-                  <ProviderMark presentation={presentation()} class="size-3 shrink-0" />
-                )}
+                <Image
+                  testID="quick-translate-preset-mark-google-web"
+                  src={googleIcon}
+                  accessibilityElementsHidden={true}
+                  class="size-3 shrink-0 overflow-hidden"
+                />
               </If>
             }
           >

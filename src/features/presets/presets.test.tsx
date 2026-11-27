@@ -39,7 +39,7 @@ function makeGoogleCloudPresetRecord(
 }
 
 /** Picks a preset type in the Add Preset picker and waits for the editor. */
-async function choosePresetType(app: App, kind: "ai" | "deepl" | "google-cloud") {
+async function choosePresetType(app: App, kind: "ai" | "deepl" | "google-cloud" | "google-web") {
   await app.waitFor("id:add-preset-dialog");
   await app.press(`id:preset-type-${kind}`);
   await app.waitUntil(() => !app.shows("id:add-preset-dialog"));
@@ -290,6 +290,7 @@ test("presets ui: preset type", async () => {
   expect(emptyApp.shows("id:preset-type-ai")).toBe(true);
   expect(emptyApp.shows("id:preset-type-deepl")).toBe(true);
   expect(emptyApp.shows("id:preset-type-google-cloud")).toBe(true);
+  expect(emptyApp.shows("id:preset-type-google-web")).toBe(true);
   await emptyApp.press("id:preset-type-cancel");
   await emptyApp.waitUntil(() => !emptyApp.shows("id:add-preset-dialog"));
   expect(emptyApp.shows("id:empty-add-preset-button")).toBe(true);
@@ -1468,6 +1469,78 @@ test("presets ui: Google Cloud", async () => {
   expect(reopened.shows("id:preset-save")).toBe(false);
   expect(reopened.texts()).toContain("Google Cloud Translation");
   expect(reopened.requests()).toHaveLength(0);
+});
+
+test("presets ui: Google Web", async () => {
+  const app = await open(APP_ENTRY, {
+    ...viewport,
+    locale: "en-US",
+    storage: makeSeedStorage({}),
+  });
+  await app.press("id:nav-presets");
+  await app.waitFor("id:empty-add-preset-button");
+  await app.press("id:empty-add-preset-button");
+  await app.waitFor("id:add-preset-dialog");
+  expect(app.shows("id:preset-type-google-cloud")).toBe(true);
+  expect(app.shows("id:preset-type-google-web")).toBe(true);
+  await app.press("id:preset-type-google-web");
+  await app.waitUntil(() => !app.shows("id:add-preset-dialog"));
+  await app.waitFor("id:preset-name");
+
+  // Google Web has no key, model, template, language, or usage control.
+  expect(app.shows("id:preset-google-cloud-api-key")).toBe(false);
+  expect(app.shows("id:preset-deepl-api-key")).toBe(false);
+  expect(app.shows("id:preset-primary-model")).toBe(false);
+  expect(app.shows("id:preset-temperature")).toBe(false);
+  expect(app.shows("id:preset-template-name")).toBe(false);
+  expect(app.shows("id:preset-source-language")).toBe(false);
+  expect(app.shows("id:preset-google-cloud-usage")).toBe(false);
+  expect(app.texts()).toContain(t("presets.googleWeb.disclosure"));
+  expect(app.requests()).toHaveLength(0);
+
+  await app.type("id:preset-name", "Google Web");
+  await app.press("id:preset-save");
+  await app.waitUntil(() => Boolean(app.storage()[PRESETS_STORAGE_KEY]));
+  expect(app.requests()).toHaveLength(0);
+
+  const items = JSON.parse(app.storage()[PRESETS_STORAGE_KEY]!).items as TranslationPreset[];
+  expect(items).toHaveLength(1);
+  expect(items[0]).toMatchObject({ name: "Google Web", enabled: true });
+  expect(items[0]!.engine).toEqual({ kind: "google-web" });
+  expect(app.texts()).toContain("Google Web");
+  expect(app.shows(`id:preset-item-${items[0]!.id} >> id:preset-item-mark-google-web`)).toBe(true);
+
+  // Reopening loads the name, the enabled switch, and the same engine without a request.
+  const reopened = await open(APP_ENTRY, {
+    ...viewport,
+    locale: "en-US",
+    storage: app.storage(),
+  });
+  await reopened.press("id:nav-presets");
+  await reopened.waitFor("id:preset-google-web-disclosure");
+  expect(presetTitle(reopened)).toBe("Google Web");
+  expect(reopened.accessibility("id:preset-enabled")?.checked).toBe("true");
+  expect(reopened.shows("id:preset-save")).toBe(false);
+  expect(reopened.texts()).toContain(t("presets.googleWeb.disclosure"));
+  expect(reopened.requests()).toHaveLength(0);
+});
+
+test("presets ui: Google Web localizes the engine label and disclosure", async () => {
+  const app = await open(APP_ENTRY, {
+    ...viewport,
+    locale: "zh-CN",
+    storage: makeSeedStorage({ extra: { "settings.language": "zh-CN" } }),
+  });
+  await app.press("id:nav-presets");
+  await app.waitFor("id:empty-add-preset-button");
+  await app.press("id:empty-add-preset-button");
+  await app.waitFor("id:add-preset-dialog");
+  expect(app.shows("id:preset-type-google-web >> text:Google 网页翻译")).toBe(true);
+  await app.press("id:preset-type-google-web");
+  await app.waitUntil(() => !app.shows("id:add-preset-dialog"));
+  await app.waitFor("id:preset-google-web-disclosure");
+  expect(app.texts()).toContain("文本将发送到 Google 未公开的翻译接口。");
+  expect(app.requests()).toHaveLength(0);
 });
 
 test("presets ui: rail summaries lead with the channel mark", async () => {
