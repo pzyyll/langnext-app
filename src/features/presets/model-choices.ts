@@ -158,6 +158,7 @@ export function resolveModelBindingInfo(
 /** What a preset summary leads with: its service brand, or the primary model's channel mark. */
 export type PresetChannelMark =
   | { kind: "deepl" }
+  | { kind: "deeplx" }
   | { kind: "google-cloud" }
   | { kind: "google-web" }
   | { kind: "provider"; presentation: ProviderPresentation };
@@ -169,6 +170,9 @@ export function resolvePresetChannelMark(
 ): PresetChannelMark | null {
   if (engineKind === "deepl") {
     return { kind: "deepl" };
+  }
+  if (engineKind === "deeplx") {
+    return { kind: "deeplx" };
   }
   if (engineKind === "google-cloud") {
     return { kind: "google-cloud" };
@@ -212,6 +216,9 @@ export function summarizePresetModels(modelIds: readonly string[]): string {
 export function summarizePreset(preset: Pick<TranslationPreset, "engine">): string {
   if (preset.engine.kind === "deepl") {
     return t("presets.engine.deepl");
+  }
+  if (preset.engine.kind === "deeplx") {
+    return t("presets.engine.deeplx");
   }
   if (preset.engine.kind === "google-cloud") {
     return t("presets.engine.googleCloud");

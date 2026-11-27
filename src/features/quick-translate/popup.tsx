@@ -268,7 +268,7 @@ function PresetLeadingMark(props: { preset: TranslationPreset | null; testID?: s
   return (
     <View testID={props.testID} class="size-3 shrink-0 items-center justify-center">
       <If
-        when={props.preset?.engine.kind === "deepl"}
+        when={props.preset?.engine.kind === "deepl" || props.preset?.engine.kind === "deeplx"}
         else={
           <If
             when={props.preset?.engine.kind === "google-cloud"}

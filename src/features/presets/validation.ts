@@ -1,4 +1,5 @@
 import { t } from "nsh/i18n";
+import { normalizeDeepLXEndpoint } from "../../modules/deeplx/endpoint";
 import { isTemperature, isTemperatureText } from "./temperature";
 import {
   PresetsStoreError,
@@ -108,6 +109,7 @@ function validatePromptBody(
 export type ValidatedPresetEngine =
   | { kind: "ai"; engine: AiPresetEngine }
   | { kind: "deepl"; apiKey: string | null }
+  | { kind: "deeplx"; endpointUrl: string; token: string | null | undefined }
   | { kind: "google-cloud"; apiKey: string | null }
   | { kind: "google-web" };
 
@@ -115,6 +117,21 @@ export interface ValidatedPresetPayload {
   name: string;
   enabled: boolean;
   engine: ValidatedPresetEngine;
+}
+
+/** Reads a DeepLX token for save: undefined keeps a stored token, null clears it, a string replaces it. */
+function parseDeepLXToken(raw: unknown): string | null | undefined {
+  if (raw === undefined) return undefined;
+  if (raw === null) return null;
+  const invalid = () =>
+    new PresetsStoreError("deeplx_token_invalid", t("presets.error.deeplxTokenInvalid"), {
+      field: "deeplxToken",
+    });
+  if (typeof raw !== "string") throw invalid();
+  const token = raw.trim();
+  // An empty string means an interrupted edit, not a request to clear the token; null does that.
+  if (token.length === 0 || !/^[\x21-\x7E]+$/.test(token)) throw invalid();
+  return token;
 }
 
 /** Reads an optional credential key for save: blank keeps the stored key, embedded whitespace is invalid. */
@@ -153,6 +170,7 @@ export function validatePresetForSave(
     !input.engine ||
     (input.engine.kind !== "ai" &&
       input.engine.kind !== "deepl" &&
+      input.engine.kind !== "deeplx" &&
       input.engine.kind !== "google-cloud" &&
       input.engine.kind !== "google-web")
   ) {
@@ -178,6 +196,26 @@ export function validatePresetForSave(
       name,
       enabled: Boolean(input.enabled),
       engine: { kind: "deepl", apiKey },
+    };
+  }
+
+  if (input.engine.kind === "deeplx") {
+    const endpointUrl = normalizeDeepLXEndpoint(input.engine.endpointUrl);
+    if (endpointUrl === null) {
+      throw new PresetsStoreError(
+        "deeplx_endpoint_invalid",
+        t("presets.error.deeplxEndpointInvalid"),
+        { field: "deeplxEndpoint" },
+      );
+    }
+    return {
+      name,
+      enabled: Boolean(input.enabled),
+      engine: {
+        kind: "deeplx",
+        endpointUrl,
+        token: parseDeepLXToken(input.engine.token),
+      },
     };
   }
 

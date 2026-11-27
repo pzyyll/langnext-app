@@ -91,6 +91,17 @@ Google Web is an opt-in preset engine for the Demo build. It has no credential a
 - **Transport**: `src/modules/google-web-translation/transport.ts` is shared with the free Google detector. Translation refuses redirects, keeps request and response bodies out of the log, and maps `403`, `429`, `413`, other `4xx`, and `5xx` to localized errors. It never retries.
 - **Limits**: Google publishes no support, quota, or compatibility contract for the endpoint. A release check that finds a block or a changed response stops rollout; the code does not work around it.
 
+## DeepLX translation notes
+
+DeepLX is a preset engine for a DLX v1 server the user configures. The app neither bundles nor deploys DLX.
+
+- **Endpoint**: a complete URL that ends in `/translate`; a mount prefix is allowed. HTTPS is required except for HTTP on `localhost`, `127.0.0.1`, or `[::1]`. Query strings, fragments, URL credentials, and the `/v1/translate` and `/v2/translate` compatibility routes are rejected. The saved form is `origin + path` without trailing slashes.
+- **Request shape**: one JSON `POST` whose `text` is a single string, with `source_lang` and `target_lang` as DLX codes. `he` and `vi` are the two codes DLX adds to the DeepL maps. The optional server token travels only as `Authorization: Bearer <token>`.
+- **Response shape**: numeric `code: 200` and a non-blank string `data`. Anything else is an unreadable response.
+- **Limit**: 1,500 UTF-16 code units, matching DLX v1.3.1. The client rejects longer text; it never splits or truncates.
+- **Transport and privacy**: `createJsonHttpClient` with `privatePayloads` keeps request and response bodies out of the log, does not read a failed answer to log it, and reports transport failures with generic copy. Redirects are refused. `401` asks the user to check the server token; `403` and `429` are access denied and rate limited. There is no retry or provider fallback.
+- **Storage**: the preset record keeps the endpoint and a non-secret token reference in `presets.v1.items`; the token lives in `presets.v1.deeplxTokens.<ref>` like other preset secrets, which are not protected by the OS keychain.
+
 ## Checks before distribution
 
 The bundle identifier is a development placeholder. Set it before distribution.

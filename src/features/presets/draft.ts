@@ -23,6 +23,16 @@ export interface PresetDraft {
   googleCloudApiKey: string;
   /** True when the saved preset references a stored key; only a placeholder is shown. */
   googleCloudApiKeyStored: boolean;
+  /** DeepLX endpoint typed in the editor; the store saves its normalized form. */
+  deepLXEndpointUrl: string;
+  /** Replacement or new DeepLX server token typed in the editor; empty keeps a stored token. */
+  deepLXToken: string;
+  /** True when the saved preset references a stored token; only a placeholder is shown. */
+  deepLXTokenStored: boolean;
+  /** True after the user asks to remove the stored token; Save commits it and Cancel discards it. */
+  deepLXTokenRemoved: boolean;
+  /** The saved endpoint the stored token belongs to; null for a preset without a token. */
+  deepLXEndpointSaved: string | null;
 }
 
 /** Creates a blank new preset draft with one localized Default prompt template. */
@@ -51,6 +61,11 @@ export function createEmptyDraft(engineKind: PresetEngine["kind"] = "ai"): Prese
     deepLApiKeyStored: false,
     googleCloudApiKey: "",
     googleCloudApiKeyStored: false,
+    deepLXEndpointUrl: "",
+    deepLXToken: "",
+    deepLXTokenStored: false,
+    deepLXTokenRemoved: false,
+    deepLXEndpointSaved: null,
   };
 }
 
@@ -73,6 +88,11 @@ export function createDraftFromPreset(preset: TranslationPreset): PresetDraft {
     deepLApiKeyStored: preset.engine.kind === "deepl",
     googleCloudApiKey: "",
     googleCloudApiKeyStored: preset.engine.kind === "google-cloud",
+    deepLXEndpointUrl: preset.engine.kind === "deeplx" ? preset.engine.endpointUrl : "",
+    deepLXToken: "",
+    deepLXTokenStored: preset.engine.kind === "deeplx" && preset.engine.credentialRef !== null,
+    deepLXTokenRemoved: false,
+    deepLXEndpointSaved: preset.engine.kind === "deeplx" ? preset.engine.endpointUrl : null,
   };
 }
 
@@ -101,6 +121,10 @@ export function isDraftDirty(current: PresetDraft, baseline: PresetDraft): boole
     current.deepLApiKeyStored !== baseline.deepLApiKeyStored ||
     current.googleCloudApiKey !== baseline.googleCloudApiKey ||
     current.googleCloudApiKeyStored !== baseline.googleCloudApiKeyStored ||
+    current.deepLXEndpointUrl !== baseline.deepLXEndpointUrl ||
+    current.deepLXToken !== baseline.deepLXToken ||
+    current.deepLXTokenStored !== baseline.deepLXTokenStored ||
+    current.deepLXTokenRemoved !== baseline.deepLXTokenRemoved ||
     current.fallbackModelIds.length !== baseline.fallbackModelIds.length ||
     current.templates.length !== baseline.templates.length
   ) {
@@ -137,6 +161,20 @@ export function draftToSaveInput(draft: PresetDraft): SavePresetInput {
       name: draft.name,
       enabled: draft.enabled,
       engine: { kind: "deepl", apiKey: draft.deepLApiKey },
+    };
+  }
+
+  if (draft.engineKind === "deeplx") {
+    const token = draft.deepLXTokenRemoved
+      ? null
+      : draft.deepLXToken.trim().length > 0
+        ? draft.deepLXToken
+        : undefined;
+    return {
+      id: draft.sourceId,
+      name: draft.name,
+      enabled: draft.enabled,
+      engine: { kind: "deeplx", endpointUrl: draft.deepLXEndpointUrl, token },
     };
   }
 

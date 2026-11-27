@@ -1,5 +1,6 @@
 import { computed, signal, Storage } from "nsh";
 import { t } from "nsh/i18n";
+import { normalizeDeepLXEndpoint } from "../../modules/deeplx/endpoint";
 import { createLogger } from "../../services/log";
 import { googleCloudUsageStorageKey } from "./google-cloud-usage";
 import { readAvailableModelChoices } from "./model-choices";
@@ -19,6 +20,7 @@ import { validatePresetForSave, type ValidatedPresetPayload } from "./validation
 
 export const PRESETS_STORAGE_KEY = "presets.v1.items";
 export const DEEPL_CREDENTIAL_KEY_PREFIX = "presets.v1.deeplKeys.";
+export const DEEPLX_TOKEN_KEY_PREFIX = "presets.v1.deeplxTokens.";
 export const GOOGLE_CLOUD_CREDENTIAL_KEY_PREFIX = "presets.v1.googleCloudKeys.";
 
 const log = createLogger("presets/store");
@@ -31,6 +33,11 @@ export function deepLCredentialStorageKey(ref: string): string {
 /** Storage key for one Google Cloud preset's key, addressed by its non-secret reference. */
 export function googleCloudCredentialStorageKey(ref: string): string {
   return `${GOOGLE_CLOUD_CREDENTIAL_KEY_PREFIX}${ref}`;
+}
+
+/** Storage key for one DeepLX server token, addressed by its non-secret reference. */
+export function deeplxTokenStorageKey(ref: string): string {
+  return `${DEEPLX_TOKEN_KEY_PREFIX}${ref}`;
 }
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
@@ -98,6 +105,12 @@ function isValidStoredPreset(value: unknown): value is TranslationPreset {
   if (!isPlainObject(value.engine)) return false;
   if (value.engine.kind === "ai") return isValidAiEngine(value.engine);
   if (value.engine.kind === "deepl") return isValidCredentialEngine(value.engine, "deepl");
+  if (value.engine.kind === "deeplx") {
+    if (typeof value.engine.endpointUrl !== "string") return false;
+    if (normalizeDeepLXEndpoint(value.engine.endpointUrl) === null) return false;
+    const ref = value.engine.credentialRef;
+    return ref === null || (typeof ref === "string" && ref.trim().length > 0);
+  }
   if (value.engine.kind === "google-cloud") {
     return isValidCredentialEngine(value.engine, "google-cloud");
   }
@@ -170,6 +183,15 @@ async function removeUsageQuietly(storage: PresetsStorage, presetId: string): Pr
     await storage.removeItem(googleCloudUsageStorageKey(presetId));
   } catch {
     log.warn("Could not remove a deleted Google Cloud preset's character usage.");
+  }
+}
+
+/** Removes an unused DeepLX server token without undoing a committed record or leaking it. */
+async function removeDeepLXTokenQuietly(storage: PresetsStorage, ref: string): Promise<void> {
+  try {
+    await storage.removeItem(deeplxTokenStorageKey(ref));
+  } catch {
+    log.warn("Could not remove an unused DeepLX server token.");
   }
 }
 
@@ -275,6 +297,73 @@ export function createPresetsStore(
     return record;
   };
 
+  // A DeepLX endpoint may change without a new token, which clears the old token after the commit.
+  const saveDeepLXPreset = async (
+    existing: TranslationPreset | null,
+    meta: Pick<ValidatedPresetPayload, "name" | "enabled">,
+    engine: { endpointUrl: string; token: string | null | undefined },
+    now: string,
+  ): Promise<TranslationPreset> => {
+    const previous =
+      existing !== null && existing.engine.kind === "deeplx" ? existing.engine : null;
+    const previousRef = previous?.credentialRef ?? null;
+    const endpointChanged = previous === null || previous.endpointUrl !== engine.endpointUrl;
+
+    let nextRef = previousRef;
+    if (engine.token === null || (engine.token === undefined && endpointChanged)) {
+      nextRef = null;
+    }
+
+    let wroteToken = false;
+    if (typeof engine.token === "string") {
+      nextRef = crypto.randomUUID();
+      try {
+        await storage.setItem(deeplxTokenStorageKey(nextRef), engine.token);
+      } catch (error) {
+        throw writeFailure(error);
+      }
+      wroteToken = true;
+    }
+
+    const record: TranslationPreset = {
+      id: existing?.id ?? crypto.randomUUID(),
+      name: meta.name,
+      enabled: meta.enabled,
+      createdAt: existing?.createdAt ?? now,
+      updatedAt: now,
+      engine: { kind: "deeplx", endpointUrl: engine.endpointUrl, credentialRef: nextRef },
+    };
+    const next = replaceItems(existing, record);
+
+    try {
+      await writePresets(storage, next);
+    } catch (error) {
+      if (wroteToken && nextRef !== null) await removeDeepLXTokenQuietly(storage, nextRef);
+      throw error;
+    }
+    itemsSignal.set(next);
+
+    // The record now points at the new token or none; the replaced one is removable.
+    if (previousRef !== null && previousRef !== nextRef) {
+      await removeDeepLXTokenQuietly(storage, previousRef);
+    }
+    return record;
+  };
+
+  const readDeepLXToken = async (ref: string | null): Promise<string | null> => {
+    if (ref === null) return null;
+    let raw: string | null;
+    try {
+      raw = await storage.getItem(deeplxTokenStorageKey(ref));
+    } catch (error) {
+      throw new PresetsStoreError("storage_read_failed", t("presets.error.deeplxTokenUnreadable"), {
+        cause: error,
+      });
+    }
+    const trimmed = raw?.trim();
+    return trimmed ? trimmed : null;
+  };
+
   const readCredential = async (
     presetId: string,
     kind: CredentialEngineKind,
@@ -358,6 +447,10 @@ export function createPresetsStore(
 
       mutatingSignal.set(true);
       try {
+        if (validated.engine.kind === "deeplx") {
+          return await saveDeepLXPreset(existing, validated, validated.engine, now);
+        }
+
         if (validated.engine.kind === "deepl" || validated.engine.kind === "google-cloud") {
           return await saveCredentialPreset(existing, validated, validated.engine, now);
         }
@@ -431,6 +524,9 @@ export function createPresetsStore(
         if (existing.engine.kind === "deepl" || existing.engine.kind === "google-cloud") {
           await removeSecretQuietly(storage, existing.engine.kind, existing.engine.credentialRef);
         }
+        if (existing.engine.kind === "deeplx" && existing.engine.credentialRef !== null) {
+          await removeDeepLXTokenQuietly(storage, existing.engine.credentialRef);
+        }
         if (existing.engine.kind === "google-cloud") {
           await removeUsageQuietly(storage, existing.id);
         }
@@ -440,6 +536,7 @@ export function createPresetsStore(
     },
     readDeepLCredential: (presetId: string) => readCredential(presetId, "deepl"),
     readGoogleCloudCredential: (presetId: string) => readCredential(presetId, "google-cloud"),
+    readDeepLXToken,
   };
 }
 

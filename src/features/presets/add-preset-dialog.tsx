@@ -73,6 +73,19 @@ export function AddPresetDialog(props: AddPresetDialogProps) {
           </Text>
         </Button>
         <Button
+          testID="preset-type-deeplx"
+          variant="outline"
+          size="card"
+          accessibilityLabel={t("presets.engine.deeplx")}
+          onPress={() => props.onSelect("deeplx")}
+          class="w-full"
+        >
+          <Icon name="deepl" tone="foreground" class="size-4" />
+          <Text class="min-w-0 flex-1 truncate text-sm font-medium text-foreground">
+            {t("presets.engine.deeplx")}
+          </Text>
+        </Button>
+        <Button
           testID="preset-type-google-cloud"
           variant="outline"
           size="card"

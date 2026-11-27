@@ -27,6 +27,11 @@ export interface CreateJsonHttpClientOptions {
    * request deadline, then uses the returned error, or the default status mapping for null.
    */
   classifyErrorResponse?: (status: number, body: unknown) => ProviderProtocolError | null;
+  /**
+   * Keeps request and response payloads out of the log and reports transport failures with the
+   * generic network copy. A failed answer is never read just to fill the log.
+   */
+  privatePayloads?: boolean;
 }
 
 function cancelling(error: unknown): boolean {
@@ -100,6 +105,7 @@ async function requestJson(
   body: string | undefined,
   options: JsonHttpOptions,
   classifyErrorResponse?: (status: number, body: unknown) => ProviderProtocolError | null,
+  privatePayloads = false,
 ): Promise<Record<string, unknown>> {
   const externalSignal = options.signal;
   const timeoutMs = options.timeoutMs ?? DEFAULT_HTTP_TIMEOUT_MS;
@@ -161,6 +167,9 @@ async function requestJson(
       if (cancelling(error) || externalSignal?.aborted) {
         throw new ProviderProtocolError("cancelled", t("protocol.error.cancelled"));
       }
+      if (privatePayloads) {
+        throw new ProviderProtocolError("network", t("protocol.error.networkDefault"));
+      }
       const rawDetail = error instanceof Error ? error.message : t("protocol.error.networkDefault");
       throw new ProviderProtocolError(
         "network",
@@ -175,7 +184,7 @@ async function requestJson(
     if (!response.ok) {
       // Only an opted-in caller maps the error body; the log keeps it for every client.
       if (!classifyErrorResponse || typeof response.text !== "function") {
-        await readFailureBody(response);
+        if (!privatePayloads) await readFailureBody(response);
         throw statusError(response.status);
       }
       let rawError: string;
@@ -237,14 +246,23 @@ async function requestJson(
 
 /** Creates the shared JSON HTTP boundary; it performs no I/O until a call. */
 export function createJsonHttpClient(options: CreateJsonHttpClientOptions = {}): JsonHttpClient {
+  const privatePayloads = options.privatePayloads === true;
   const fetchImpl = createHttpFetch({
     fetchImpl: options.fetchImpl,
     scope: options.logScope ?? "ai/http",
     logFailures: false,
+    logBodies: !privatePayloads,
   });
   return {
     getJson: (target, callOptions) =>
-      requestJson(fetchImpl, target, undefined, callOptions ?? {}, options.classifyErrorResponse),
+      requestJson(
+        fetchImpl,
+        target,
+        undefined,
+        callOptions ?? {},
+        options.classifyErrorResponse,
+        privatePayloads,
+      ),
     postJson: (target, body, callOptions) =>
       requestJson(
         fetchImpl,
@@ -255,6 +273,7 @@ export function createJsonHttpClient(options: CreateJsonHttpClientOptions = {}):
           redirect: callOptions?.redirect ?? "error",
         },
         options.classifyErrorResponse,
+        privatePayloads,
       ),
     postEventStream: (target, body, callOptions) =>
       requestEventStream(fetchImpl, target, JSON.stringify(body), {

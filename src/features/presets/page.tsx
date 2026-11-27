@@ -83,6 +83,8 @@ export function PresetsPage(props: PresetsPageProps) {
   let nameInputRef: InputRef | null = null;
   let renameButtonRef: ViewRef | null = null;
   let deeplKeyInputRef: InputRef | null = null;
+  let deeplxEndpointInputRef: InputRef | null = null;
+  let deeplxTokenInputRef: InputRef | null = null;
   let googleCloudKeyInputRef: InputRef | null = null;
   let primaryModelRef: ViewRef | null = null;
   const fallbackRefs = new Map<number, ViewRef>();
@@ -136,6 +138,12 @@ export function PresetsPage(props: PresetsPageProps) {
           break;
         case "deeplKey":
           focusNode(deeplKeyInputRef);
+          break;
+        case "deeplxEndpoint":
+          focusNode(deeplxEndpointInputRef);
+          break;
+        case "deeplxToken":
+          focusNode(deeplxTokenInputRef);
           break;
         case "googleCloudKey":
           focusNode(googleCloudKeyInputRef);
@@ -205,6 +213,7 @@ export function PresetsPage(props: PresetsPageProps) {
     const draft = draftSignal();
     if (!draft) return "";
     if (draft.engineKind === "deepl") return t("presets.engine.deepl");
+    if (draft.engineKind === "deeplx") return t("presets.engine.deeplx");
     if (draft.engineKind === "google-cloud") return t("presets.engine.googleCloud");
     if (draft.engineKind === "google-web") return t("presets.engine.googleWeb");
     return summarizePresetModels(draft.primaryModelId ? [draft.primaryModelId] : []);
@@ -245,6 +254,14 @@ export function PresetsPage(props: PresetsPageProps) {
     }
     if (field === "deeplKey") {
       queueMicrotask(() => deeplKeyInputRef?.focus());
+      return;
+    }
+    if (field === "deeplxEndpoint") {
+      queueMicrotask(() => deeplxEndpointInputRef?.focus());
+      return;
+    }
+    if (field === "deeplxToken") {
+      queueMicrotask(() => deeplxTokenInputRef?.focus());
       return;
     }
     if (field === "googleCloudKey") {
@@ -806,6 +823,12 @@ export function PresetsPage(props: PresetsPageProps) {
                   }}
                   onDeepLKeyRef={(node) => {
                     deeplKeyInputRef = node;
+                  }}
+                  onDeepLXEndpointRef={(node) => {
+                    deeplxEndpointInputRef = node;
+                  }}
+                  onDeepLXTokenRef={(node) => {
+                    deeplxTokenInputRef = node;
                   }}
                   onGoogleCloudKeyRef={(node) => {
                     googleCloudKeyInputRef = node;

@@ -9,6 +9,11 @@ import {
 import { resolveSavedModelRequest, type SavedModelRequestResolution } from "../models/store";
 import { createDeepLClient, type DeepLTranslateInput } from "../../modules/deepl/client";
 import {
+  createDeepLXClient,
+  type DeepLXTranslateInput,
+  type DeepLXTranslateOptions,
+} from "../../modules/deeplx/client";
+import {
   createGoogleCloudTranslateClient,
   type GoogleCloudTranslateInput,
 } from "../../modules/google-cloud-translation/client";
@@ -58,6 +63,13 @@ export interface TranslateWithPresetOptions {
   readDeepLCredential?: (presetId: string) => Promise<string | null>;
   /** DeepL transport seam for isolated tests; the production adapter is built on demand. */
   deepLTranslate?: (input: DeepLTranslateInput, options?: DeepLTranslateOptions) => Promise<string>;
+  /** Reads one DeepLX server token from the saved preset's reference. */
+  readDeepLXToken?: (credentialRef: string | null) => Promise<string | null>;
+  /** DeepLX transport seam for isolated tests; the production client is built on demand. */
+  deepLXTranslate?: (
+    input: DeepLXTranslateInput,
+    options?: DeepLXTranslateOptions,
+  ) => Promise<string>;
   /** Reads a Google Cloud preset's stored key; defaults to the shared Presets Store. */
   readGoogleCloudCredential?: (presetId: string) => Promise<string | null>;
   /** Google Cloud v2 transport seam for isolated tests; the production client is built on demand. */
@@ -222,6 +234,68 @@ async function translateWithDeepL(
 }
 
 /**
+ * Sends the caller's resolved pair and optional server token to a saved DeepLX endpoint.
+ * The result arrives whole: no model lookup, prompt rendering, or streaming.
+ */
+async function translateWithDeepLX(
+  preset: TranslationPreset,
+  input: TranslateWithPresetInput,
+  options: TranslateWithPresetOptions,
+): Promise<TranslateWithPresetResult> {
+  if (preset.engine.kind !== "deeplx") {
+    return failureResult(t("presets.error.engineUnsupported"));
+  }
+  const engine = preset.engine;
+
+  let token: string | null = null;
+  if (engine.credentialRef !== null) {
+    const readToken = options.readDeepLXToken ?? presetsStore.readDeepLXToken;
+    try {
+      token = await readToken(engine.credentialRef);
+    } catch (error) {
+      return failureResult(
+        error instanceof Error ? error.message : t("deeplx.error.tokenUnavailable"),
+      );
+    }
+    if (options.signal?.aborted) {
+      return cancelledResult();
+    }
+    if (token === null) {
+      return failureResult(t("deeplx.error.tokenUnavailable"));
+    }
+  }
+
+  const runTranslate = options.deepLXTranslate ?? createDeepLXClient().translate;
+  try {
+    const text = await runTranslate(
+      {
+        endpointUrl: engine.endpointUrl,
+        token,
+        text: input.sourceText,
+        sourceLanguage: input.sourceLanguage,
+        targetLanguage: input.targetLanguage,
+      },
+      { signal: options.signal, timeoutMs: options.timeoutMs },
+    );
+    if (options.signal?.aborted) {
+      return cancelledResult();
+    }
+    return { ok: true, text, modelId: null, templateId: null };
+  } catch (error) {
+    if (
+      options.signal?.aborted ||
+      (error instanceof ProviderProtocolError && error.kind === "cancelled")
+    ) {
+      return cancelledResult();
+    }
+    if (error instanceof ProviderProtocolError) {
+      return failureResult(error.message);
+    }
+    return failureResult(t("protocol.error.networkDefault"));
+  }
+}
+
+/**
  * Sends the caller's resolved pair and stored key to Google Cloud Translation v2.
  * The result arrives whole: no model lookup, prompt rendering, or streaming.
  */
@@ -348,6 +422,10 @@ export async function translateWithPreset(
 
   if (preset.engine.kind === "google-web") {
     return translateWithGoogleWeb(input, options);
+  }
+
+  if (preset.engine.kind === "deeplx") {
+    return translateWithDeepLX(preset, input, options);
   }
 
   const isBackTranslation = input.purpose === "back-translation";

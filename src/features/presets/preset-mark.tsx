@@ -11,7 +11,7 @@ interface PresetMarkProps {
   class?: string;
 }
 
-/** Leads a preset summary with its channel mark: DeepL, a Google service, or the primary model's channel. */
+/** Leads a preset summary with its channel mark: DeepL or DeepLX, a Google service, or the primary model's channel. */
 export function PresetMark(props: PresetMarkProps) {
   const iconClass = () => `overflow-hidden ${props.class ?? "size-3 shrink-0"}`;
   const providerPresentation = () => {

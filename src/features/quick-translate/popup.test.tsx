@@ -10,6 +10,7 @@ import { credentialStorageKey, MODELS_STORAGE_KEY, PROVIDERS_STORAGE_KEY } from 
 import { getLanguageLabel, getTargetLanguageLabel } from "../../framework/languages";
 import {
   deepLCredentialStorageKey,
+  deeplxTokenStorageKey,
   googleCloudCredentialStorageKey,
   PRESETS_STORAGE_KEY,
 } from "../presets/store";
@@ -2107,6 +2108,246 @@ test("DeepL card: a DeepL-only action translates without AI models", async () =>
   expect(requestsTo(app, DEEPL_URL)).toHaveLength(1);
   expect(requestsTo(app, TRANSLATE_URL)).toHaveLength(0);
   expect(requestsTo(app, DETECT_URL)).toHaveLength(0);
+});
+
+const DEEPLX_URL = "POST http://localhost:1188/translate";
+
+function makeDeepLXPreset(overrides: Partial<TranslationPreset> = {}): TranslationPreset {
+  return {
+    id: "preset-deeplx",
+    name: "DeepLX Card",
+    enabled: true,
+    createdAt: "2026-11-19T00:00:00.000Z",
+    updatedAt: "2026-11-19T00:00:00.000Z",
+    engine: {
+      kind: "deeplx",
+      endpointUrl: "http://localhost:1188/translate",
+      credentialRef: null,
+    },
+    ...overrides,
+  };
+}
+
+interface DeepLXSeedOptions {
+  sourceLanguage?: "auto" | "en";
+  targetLanguage?: "auto" | "zh" | "ja";
+  presets?: TranslationPreset[];
+  detector?: boolean;
+  tokens?: Record<string, string>;
+}
+
+/** Seeds DeepLX cards, their optional detector, and the popup's explicit language pair. */
+function seedDeepLX(options: DeepLXSeedOptions = {}): Record<string, string> {
+  const presets = options.presets ?? [makeDeepLXPreset()];
+  const cards = presets.map((preset, index) => ({
+    id: `card-${index + 1}`,
+    presetId: preset.id,
+    templateId: null,
+    collapsed: false,
+  }));
+  const detectChannel = makeChannel({
+    id: "ch-detect",
+    presetId: "openai",
+    adapterId: "openai-compatible",
+    baseUrl: "https://detect.example.com/v1",
+    displayName: "Detector",
+    enabled: true,
+    sortOrder: 0,
+  });
+  const detector = makeModel({
+    id: "det-1",
+    providerId: "ch-detect",
+    modelKey: "detect-mini",
+    enabled: true,
+  });
+  return makeSeedStorage({
+    ...(options.detector === false
+      ? {}
+      : {
+          channels: [detectChannel],
+          models: [detector],
+          credentials: { "ch-detect": "sk-detect" },
+        }),
+    extra: {
+      [PRESETS_STORAGE_KEY]: JSON.stringify({ version: 1, items: presets }),
+      [QUICK_TRANSLATE_PREFERENCES_KEY]: JSON.stringify({
+        version: 1,
+        doubleCopyEnabled: false,
+        autoTranslate: false,
+        sourceLanguage: options.sourceLanguage ?? "en",
+        targetLanguage: options.targetLanguage ?? "zh",
+        cards,
+      }),
+      ...(options.detector === false ? {} : detectionSeed({ aiEnabled: true })),
+      ...options.tokens,
+    },
+  });
+}
+
+test("DeepLX card: a saved endpoint translates without a detector, model, or template picker", async () => {
+  const app = await open(POPUP_HARNESS, {
+    ...viewport,
+    storage: seedDeepLX({ detector: false }),
+    network: {
+      [DEEPLX_URL]: { status: 200, body: { code: 200, data: "你好，团队" } },
+    },
+  });
+
+  await app.waitFor("id:quick-translate-card-card-1");
+  expect(app.shows("id:quick-translate-card-card-1 >> id:quick-translate-template")).toBe(false);
+
+  await app.type("id:quick-translate-source", "Hello team");
+  await app.keyboard.press("enter");
+  await app.waitFor("id:quick-translate-card-card-1 >> id:quick-translate-result-text");
+
+  expect(app.texts()).toContain("你好，团队");
+  const requests = requestsTo(app, DEEPLX_URL);
+  expect(requests).toHaveLength(1);
+  expect(requests[0]!.headers?.authorization).toBeUndefined();
+  expect(JSON.parse(requests[0]!.body!)).toEqual({
+    text: "Hello team",
+    source_lang: "EN",
+    target_lang: "ZH-HANS",
+  });
+  expect(app.requests()).toHaveLength(1);
+});
+
+test("DeepLX card: uses only its stored token and reports a missing one without a request", async () => {
+  const authenticated = makeDeepLXPreset({
+    engine: {
+      kind: "deeplx",
+      endpointUrl: "http://localhost:1188/translate",
+      credentialRef: "deeplx-ref-1",
+    },
+  });
+  const app = await open(POPUP_HARNESS, {
+    ...viewport,
+    storage: seedDeepLX({
+      detector: false,
+      presets: [authenticated],
+      tokens: { [deeplxTokenStorageKey("deeplx-ref-1")]: "server-token" },
+    }),
+    network: {
+      [DEEPLX_URL]: { status: 200, body: { code: 200, data: "你好" } },
+    },
+  });
+
+  await app.waitFor("id:quick-translate-card-card-1");
+  await app.type("id:quick-translate-source", "Hello");
+  await app.keyboard.press("enter");
+  await app.waitFor("id:quick-translate-card-card-1 >> id:quick-translate-result-text");
+
+  const requests = requestsTo(app, DEEPLX_URL);
+  expect(requests).toHaveLength(1);
+  expect(requests[0]!.headers?.authorization).toBe("Bearer server-token");
+  expect(JSON.stringify(JSON.parse(requests[0]!.body!))).not.toContain("server-token");
+
+  const missing = makeDeepLXPreset({
+    engine: {
+      kind: "deeplx",
+      endpointUrl: "http://localhost:1188/translate",
+      credentialRef: "deeplx-ref-missing",
+    },
+  });
+  const missingApp = await open(POPUP_HARNESS, {
+    ...viewport,
+    storage: seedDeepLX({ detector: false, presets: [missing] }),
+    network: {
+      [DEEPLX_URL]: { status: 200, body: { code: 200, data: "unexpected" } },
+    },
+  });
+  await missingApp.waitFor("id:quick-translate-card-card-1");
+  await missingApp.type("id:quick-translate-source", "Hello");
+  await missingApp.keyboard.press("enter");
+  await missingApp.waitUntil(() => missingApp.texts().includes(t("deeplx.error.tokenUnavailable")));
+  expect(requestsTo(missingApp, DEEPLX_URL)).toHaveLength(0);
+});
+
+test("DeepLX card: detection resolves an automatic pair and back-translation reverses it", async () => {
+  let translates = 0;
+  const app = await open(POPUP_HARNESS, {
+    ...viewport,
+    storage: seedDeepLX({ sourceLanguage: "auto", targetLanguage: "ja" }),
+    network: {
+      [DETECT_URL]: {
+        status: 200,
+        body: { choices: [{ message: { content: "fr" } }] },
+      },
+      [DEEPLX_URL]: () => {
+        translates += 1;
+        return {
+          status: 200,
+          body: { code: 200, data: translates === 1 ? "おはよう" : "Bonjour" },
+        };
+      },
+    },
+  });
+
+  await app.waitFor("id:quick-translate-card-card-1");
+  await app.type("id:quick-translate-source", "Bonjour");
+  await app.keyboard.press("enter");
+  await app.waitFor("id:quick-translate-card-card-1 >> id:quick-translate-result-text");
+
+  const forward = JSON.parse(requestsTo(app, DEEPLX_URL)[0]!.body!) as {
+    text: string;
+    source_lang: string;
+    target_lang: string;
+  };
+  expect(forward).toEqual({ text: "Bonjour", source_lang: "FR", target_lang: "JA" });
+
+  await app.press("id:quick-translate-card-card-1 >> id:quick-translate-back-translate");
+  await app.waitFor("id:quick-translate-card-card-1 >> id:quick-translate-back-translation-text");
+
+  const reverse = JSON.parse(requestsTo(app, DEEPLX_URL)[1]!.body!) as {
+    text: string;
+    source_lang: string;
+    target_lang: string;
+  };
+  expect(reverse).toEqual({ text: "おはよう", source_lang: "JA", target_lang: "FR" });
+  expect(requestsTo(app, DETECT_URL)).toHaveLength(1);
+});
+
+test("DeepLX card: a 429 fails only its card without a retry", async () => {
+  const ok = makeDeepLXPreset({
+    id: "preset-deeplx-ok",
+    name: "DeepLX OK",
+    engine: {
+      kind: "deeplx",
+      endpointUrl: "http://127.0.0.1:1188/translate",
+      credentialRef: null,
+    },
+  });
+  const limited = makeDeepLXPreset({
+    id: "preset-deeplx-limited",
+    name: "DeepLX Limited",
+    engine: {
+      kind: "deeplx",
+      endpointUrl: "http://localhost:1188/translate",
+      credentialRef: null,
+    },
+  });
+  const app = await open(POPUP_HARNESS, {
+    ...viewport,
+    storage: seedDeepLX({ detector: false, presets: [ok, limited] }),
+    network: {
+      "POST http://127.0.0.1:1188/translate": {
+        status: 200,
+        body: { code: 200, data: "成功" },
+      },
+      [DEEPLX_URL]: { status: 429, body: { code: 429, message: "slow down" } },
+    },
+  });
+
+  await app.waitFor("id:quick-translate-card-card-2");
+  await app.type("id:quick-translate-source", "Hello");
+  await app.keyboard.press("enter");
+
+  await app.waitFor("id:quick-translate-card-card-1 >> id:quick-translate-result-text");
+  await app.waitFor("id:quick-translate-card-card-2 >> id:quick-translate-error");
+  expect(app.texts()).toContain("成功");
+  expect(app.texts()).toContain(t("deeplx.error.rateLimited"));
+  expect(requestsTo(app, "POST http://127.0.0.1:1188/translate")).toHaveLength(1);
+  expect(requestsTo(app, DEEPLX_URL)).toHaveLength(1);
 });
 
 test("quick popup: separates header detection status from OCR status priority in the bottom-left toolbar", async () => {

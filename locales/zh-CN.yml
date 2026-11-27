@@ -679,6 +679,9 @@ presets:
     engineTypeLocked: 已保存的预设不能更换引擎类型。
     deeplKeyRequired: 请输入 DeepL API 密钥。
     deeplKeyInvalid: 请输入不含空格的 DeepL API 密钥。
+    deeplxEndpointInvalid: 请输入以 /translate 结尾的完整 http(s) 地址。
+    deeplxTokenInvalid: 服务访问令牌只能包含可见 ASCII 字符。
+    deeplxTokenUnreadable: 无法读取 DeepLX 服务访问令牌，请在预设中重新添加。
     googleCloudKeyRequired: 请输入 Google Cloud API 密钥。
     googleCloudKeyInvalid: 请输入不含空格的 Google Cloud API 密钥。
     googleCloudKeyUnreadable: 无法读取 Google Cloud API 密钥，请在预设中添加或替换。
@@ -733,6 +736,7 @@ presets:
   engine:
     ai: AI 翻译
     deepl: DeepL API
+    deeplx: DeepLX
     googleCloud: Google Cloud 翻译
     googleWeb: Google 网页翻译
   deepl:
@@ -748,6 +752,15 @@ presets:
       characters: 字符
       resets: "%{date}重置"
       keyUsage: 本密钥 %{count} 字符
+  deeplx:
+    endpointLabel: 服务地址
+    endpointPlaceholder: http://localhost:1188/translate
+    tokenLabel: 访问令牌（可选）
+    tokenPlaceholder: 粘贴服务访问令牌
+    tokenStored: 已保存令牌。输入新令牌可替换。
+    removeToken: 移除已保存令牌
+    tokenWillBeRemoved: 服务地址已更改。保存时将移除已保存的令牌，除非输入新令牌。
+    disclosure: 所配置的服务器会把文本发送给 DeepL。
   googleCloud:
     keyLabel: API 密钥
     keyPlaceholder: 粘贴 Google Cloud API 密钥
@@ -986,6 +999,19 @@ deepl:
     server: DeepL 当前不可用。
     invalidResponse: DeepL 返回了无法解析的响应。
     unsupportedLanguage: DeepL 不支持该语言。
+deeplx:
+  error:
+    invalidEndpoint: 请在预设中检查 DeepLX 服务地址。
+    tokenInvalid: 请输入有效的 DeepLX 服务访问令牌。
+    tokenUnavailable: 已保存的 DeepLX 服务访问令牌不可用，请在预设中重新添加。
+    unsupportedLanguage: DeepLX 不支持该语言。
+    tooLarge: 文本对于 DeepLX 来说过长。请缩短到 1500 个字符以内。
+    auth: DeepLX 服务器拒绝了访问，请检查服务访问令牌。
+    accessDenied: DeepLX 服务器或 DeepL 拒绝了此次请求。
+    rateLimited: DeepLX 正在限制翻译请求，请稍后重试。
+    rejected: DeepLX 拒绝了此次翻译请求。
+    server: DeepLX 当前不可用。
+    invalidResponse: DeepLX 返回了无法读取的响应。
 googleCloud:
   error:
     missingKey: 请在预设中添加 Google Cloud 翻译 API 密钥。

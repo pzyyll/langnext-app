@@ -7,6 +7,7 @@ import { Icon } from "../../components/ui/icon";
 import { Input } from "../../components/ui/input";
 import { Switch } from "../../components/ui/switch";
 import { toast } from "../../components/ui/toast";
+import { normalizeDeepLXEndpoint } from "../../modules/deeplx/endpoint";
 import { FormField } from "../../modules/ai/ui/form-field";
 import { DeepLUsageSection } from "./deepl-usage-section";
 import type { PresetDraft } from "./draft";
@@ -16,7 +17,16 @@ import { PromptTemplates, type TemplateEditableField } from "./prompt-templates"
 import type { ModelChoice, PresetValidationField, PromptTemplate } from "./types";
 
 export type FocusableEditorField =
-  | { kind: "name" | "temperature" | "maxOutputTokens" | "deeplKey" | "googleCloudKey" }
+  | {
+      kind:
+        | "name"
+        | "temperature"
+        | "maxOutputTokens"
+        | "deeplKey"
+        | "deeplxEndpoint"
+        | "deeplxToken"
+        | "googleCloudKey";
+    }
   | { kind: "template"; templateId: string; field: TemplateEditableField };
 
 interface PresetEditorProps {
@@ -41,6 +51,8 @@ interface PresetEditorProps {
   onNameRef: (node: InputRef) => void;
   onRenameButtonRef: (node: ViewRef) => void;
   onDeepLKeyRef: (node: InputRef) => void;
+  onDeepLXEndpointRef: (node: InputRef) => void;
+  onDeepLXTokenRef: (node: InputRef) => void;
   onGoogleCloudKeyRef: (node: InputRef) => void;
   onPrimaryModelRef: (node: ViewRef) => void;
   onFallbackRef: (index: number, node: ViewRef | null) => void;
@@ -66,6 +78,7 @@ export function PresetEditor(props: PresetEditorProps) {
     if (props.draft.sourceId === null) {
       if (
         props.draft.engineKind === "deepl" ||
+        props.draft.engineKind === "deeplx" ||
         props.draft.engineKind === "google-cloud" ||
         props.draft.engineKind === "google-web"
       ) {
@@ -78,9 +91,24 @@ export function PresetEditor(props: PresetEditorProps) {
 
   const isAi = () => props.draft.engineKind === "ai";
   const isDeepL = () => props.draft.engineKind === "deepl";
+  const isDeepLX = () => props.draft.engineKind === "deeplx";
   const isGoogleCloud = () => props.draft.engineKind === "google-cloud";
   const isGoogleWeb = () => props.draft.engineKind === "google-web";
   const isNew = () => props.draft.sourceId === null;
+
+  // A stored token belongs to its saved endpoint, so a change clears it unless one is typed.
+  const deepLXEndpointChanged = () => {
+    const saved = props.draft.deepLXEndpointSaved;
+    if (props.draft.engineKind !== "deeplx" || saved === null) return false;
+    const current = normalizeDeepLXEndpoint(props.draft.deepLXEndpointUrl);
+    return current !== null && current !== saved;
+  };
+
+  const showDeepLXTokenWarning = () =>
+    deepLXEndpointChanged() &&
+    props.draft.deepLXTokenStored &&
+    !props.draft.deepLXTokenRemoved &&
+    props.draft.deepLXToken.trim().length === 0;
 
   const canCancel = () => {
     if (props.saving) return false;
@@ -447,6 +475,69 @@ export function PresetEditor(props: PresetEditorProps) {
             <If when={props.draft.sourceId !== null}>
               <DeepLUsageSection presetId={props.draft.sourceId!} />
             </If>
+          </If>
+
+          <If when={isDeepLX()}>
+            <Card class={cardClass()}>
+              <FormField
+                label={t("presets.deeplx.endpointLabel")}
+                error={fieldError("deeplxEndpoint")}
+              >
+                <Input
+                  testID="preset-deeplx-endpoint"
+                  ref={(node) => props.onDeepLXEndpointRef(node)}
+                  value={props.draft.deepLXEndpointUrl}
+                  placeholder={t("presets.deeplx.endpointPlaceholder")}
+                  accessibilityLabel={t("presets.deeplx.endpointLabel")}
+                  disabled={props.saving}
+                  onFocus={() => props.onFieldFocus({ kind: "deeplxEndpoint" })}
+                  onChange={(deepLXEndpointUrl) => props.onChange({ deepLXEndpointUrl })}
+                />
+              </FormField>
+
+              <FormField label={t("presets.deeplx.tokenLabel")} error={fieldError("deeplxToken")}>
+                <Input
+                  testID="preset-deeplx-token"
+                  ref={(node) => props.onDeepLXTokenRef(node)}
+                  masked
+                  value={props.draft.deepLXToken}
+                  placeholder={
+                    props.draft.deepLXTokenStored && !props.draft.deepLXTokenRemoved
+                      ? t("presets.deeplx.tokenStored")
+                      : t("presets.deeplx.tokenPlaceholder")
+                  }
+                  accessibilityLabel={t("presets.deeplx.tokenLabel")}
+                  disabled={props.saving}
+                  onFocus={() => props.onFieldFocus({ kind: "deeplxToken" })}
+                  onChange={(deepLXToken) =>
+                    props.onChange({ deepLXToken, deepLXTokenRemoved: false })
+                  }
+                />
+              </FormField>
+
+              <If when={props.draft.deepLXTokenStored && !props.draft.deepLXTokenRemoved}>
+                <View class="flex-row">
+                  <Button
+                    testID="preset-deeplx-remove-token"
+                    variant="outline"
+                    size="sm"
+                    label={t("presets.deeplx.removeToken")}
+                    disabled={props.saving}
+                    onPress={() => props.onChange({ deepLXTokenRemoved: true, deepLXToken: "" })}
+                  />
+                </View>
+              </If>
+
+              <If when={showDeepLXTokenWarning()}>
+                <Text testID="preset-deeplx-token-warning" class="text-xs text-muted-foreground">
+                  {t("presets.deeplx.tokenWillBeRemoved")}
+                </Text>
+              </If>
+
+              <Text testID="preset-deeplx-disclosure" class="text-sm text-muted-foreground">
+                {t("presets.deeplx.disclosure")}
+              </Text>
+            </Card>
           </If>
         </View>
       </Scroll>

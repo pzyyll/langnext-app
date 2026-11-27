@@ -234,6 +234,7 @@ function PopupHarnessApp(props: {
     return translateWithPreset(input, {
       ...options,
       readDeepLCredential: (presetId) => store.readDeepLCredential(presetId),
+      readDeepLXToken: (credentialRef) => store.readDeepLXToken(credentialRef),
       readGoogleCloudCredential: (presetId) => store.readGoogleCloudCredential(presetId),
     });
   };

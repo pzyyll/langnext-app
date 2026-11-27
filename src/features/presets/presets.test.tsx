@@ -5,6 +5,8 @@ import { makeChannel, makeModel, makeSeedStorage } from "../models/__tests__/fix
 import { googleCloudUsageStorageKey, nextUsageReset, usageMonthKey } from "./google-cloud-usage";
 import {
   deepLCredentialStorageKey,
+  DEEPLX_TOKEN_KEY_PREFIX,
+  deeplxTokenStorageKey,
   googleCloudCredentialStorageKey,
   PRESETS_STORAGE_KEY,
 } from "./store";
@@ -39,7 +41,10 @@ function makeGoogleCloudPresetRecord(
 }
 
 /** Picks a preset type in the Add Preset picker and waits for the editor. */
-async function choosePresetType(app: App, kind: "ai" | "deepl" | "google-cloud" | "google-web") {
+async function choosePresetType(
+  app: App,
+  kind: "ai" | "deepl" | "deeplx" | "google-cloud" | "google-web",
+) {
   await app.waitFor("id:add-preset-dialog");
   await app.press(`id:preset-type-${kind}`);
   await app.waitUntil(() => !app.shows("id:add-preset-dialog"));
@@ -1602,4 +1607,217 @@ test("presets ui: rail summaries lead with the channel mark", async () => {
   await app.waitFor("role:option[DeepSeek · deepseek-chat]");
   await app.press("role:option[DeepSeek · deepseek-chat]");
   expect(app.shows("id:preset-draft-item >> id:preset-draft-mark")).toBe(true);
+});
+
+test("presets ui: DeepLX editor saves an endpoint without a token or network request", async () => {
+  const app = await open(APP_ENTRY, {
+    ...viewport,
+    locale: "en-US",
+    storage: makeSeedStorage({}),
+  });
+  await app.press("id:nav-presets");
+  await app.waitFor("id:empty-add-preset-button");
+  await app.press("id:empty-add-preset-button");
+  await app.waitFor("id:add-preset-dialog");
+  expect(app.shows("id:preset-type-deeplx")).toBe(true);
+  await choosePresetType(app, "deeplx");
+  await app.waitFor("id:preset-deeplx-endpoint");
+
+  // A DeepLX preset needs no model, prompt, usage, or server contact.
+  expect(app.shows("id:preset-primary-model")).toBe(false);
+  expect(app.shows("id:preset-temperature")).toBe(false);
+  expect(app.shows("id:preset-template-name")).toBe(false);
+  expect(app.shows("id:preset-manage-models")).toBe(false);
+  expect(app.shows("id:preset-deepl-usage")).toBe(false);
+  expect(app.shows("id:preset-google-cloud-usage")).toBe(false);
+  expect(app.value("id:preset-deeplx-endpoint")).toBe("");
+  expect(app.value("id:preset-deeplx-token")).toBe("");
+  expect(app.shows("id:preset-deeplx-remove-token")).toBe(false);
+  expect(app.texts()).toContain(t("presets.deeplx.endpointLabel"));
+  expect(app.texts()).toContain(t("presets.deeplx.tokenLabel"));
+  expect(app.texts()).toContain(t("presets.deeplx.disclosure"));
+
+  await app.type("id:preset-name", "DeepLX Local");
+
+  // A non-loopback HTTP URL fails, saves nothing, and focuses the endpoint field.
+  await app.type("id:preset-deeplx-endpoint", "http://example.com/translate");
+  await app.press("id:preset-save");
+  await app.waitUntil(() => app.texts().includes(t("presets.error.deeplxEndpointInvalid")));
+  expect(app.storage()[PRESETS_STORAGE_KEY]).toBeUndefined();
+  await app.keyboard.press("x");
+  expect(app.value("id:preset-deeplx-endpoint")).toBe("http://example.com/translatex");
+
+  // A fresh window types the canonical URL once, saves it, and reopens the record.
+  const saved = await open(APP_ENTRY, {
+    ...viewport,
+    locale: "en-US",
+    storage: makeSeedStorage({}),
+  });
+  await saved.press("id:nav-presets");
+  await saved.waitFor("id:empty-add-preset-button");
+  await saved.press("id:empty-add-preset-button");
+  await choosePresetType(saved, "deeplx");
+  await saved.waitFor("id:preset-deeplx-endpoint");
+  await saved.type("id:preset-name", "DeepLX Local");
+  await saved.type("id:preset-deeplx-endpoint", "http://localhost:1188/translate");
+  await saved.press("id:preset-save");
+  await saved.waitUntil(() => Boolean(saved.storage()[PRESETS_STORAGE_KEY]));
+  expect(saved.requests()).toHaveLength(0);
+
+  const items = JSON.parse(saved.storage()[PRESETS_STORAGE_KEY]!).items as TranslationPreset[];
+  expect(items[0]!.engine).toEqual({
+    kind: "deeplx",
+    endpointUrl: "http://localhost:1188/translate",
+    credentialRef: null,
+  });
+  expect(Object.keys(saved.storage()).some((key) => key.startsWith(DEEPLX_TOKEN_KEY_PREFIX))).toBe(
+    false,
+  );
+  expect(saved.texts()).toContain(t("presets.engine.deeplx"));
+
+  const reopened = await open(APP_ENTRY, {
+    ...viewport,
+    locale: "en-US",
+    storage: saved.storage(),
+  });
+  await reopened.press("id:nav-presets");
+  await reopened.waitFor("id:preset-deeplx-endpoint");
+  expect(reopened.value("id:preset-deeplx-endpoint")).toBe("http://localhost:1188/translate");
+  expect(reopened.value("id:preset-deeplx-token")).toBe("");
+  expect(reopened.shows("id:preset-deeplx-remove-token")).toBe(false);
+  expect(reopened.requests()).toHaveLength(0);
+});
+
+test("presets ui: DeepLX endpoint change warns and Cancel discards a token removal", async () => {
+  const preset: TranslationPreset = {
+    id: "p-deeplx",
+    name: "DeepLX Local",
+    enabled: true,
+    createdAt: "2026-01-01T00:00:00.000Z",
+    updatedAt: "2026-01-01T00:00:00.000Z",
+    engine: {
+      kind: "deeplx",
+      endpointUrl: "http://localhost:1188/translate",
+      credentialRef: "dlx-ref",
+    },
+  };
+  const app = await open(APP_ENTRY, {
+    ...viewport,
+    locale: "en-US",
+    storage: makeSeedStorage({
+      extra: {
+        [PRESETS_STORAGE_KEY]: JSON.stringify({ version: 1, items: [preset] }),
+        [deeplxTokenStorageKey("dlx-ref")]: "stored-token",
+      },
+    }),
+  });
+  await app.press("id:nav-presets");
+  await app.waitFor("id:preset-deeplx-endpoint");
+
+  // A stored token shows only its placeholder state and never the value.
+  expect(app.value("id:preset-deeplx-token")).toBe("");
+  expect(app.texts()).not.toContain("stored-token");
+  expect(app.shows("id:preset-deeplx-remove-token")).toBe(true);
+
+  await app.clear("id:preset-deeplx-endpoint");
+  await app.type("id:preset-deeplx-endpoint", "http://127.0.0.1:1188/translate");
+  await app.waitFor("id:preset-deeplx-token-warning");
+  expect(app.texts()).toContain(t("presets.deeplx.tokenWillBeRemoved"));
+
+  // Cancel restores the saved endpoint and drops the pending change.
+  await app.press("id:preset-cancel");
+  await app.waitFor("id:preset-discard-dialog");
+  await app.press("id:preset-discard-confirm");
+  await app.waitUntil(() => !app.shows("id:preset-discard-dialog"));
+  expect(app.value("id:preset-deeplx-endpoint")).toBe("http://localhost:1188/translate");
+  expect(app.shows("id:preset-deeplx-token-warning")).toBe(false);
+
+  // Removing the token changes the draft; Cancel commits nothing.
+  await app.press("id:preset-deeplx-remove-token");
+  await app.waitUntil(() => !app.shows("id:preset-deeplx-remove-token"));
+  await app.press("id:preset-cancel");
+  await app.waitFor("id:preset-discard-dialog");
+  await app.press("id:preset-discard-confirm");
+  await app.waitUntil(() => app.shows("id:preset-deeplx-remove-token"));
+  expect(app.storage()[deeplxTokenStorageKey("dlx-ref")]).toBe("stored-token");
+  expect(app.requests()).toHaveLength(0);
+});
+
+test("presets ui: DeepLX token removal, replacement, and endpoint change persist", async () => {
+  const preset: TranslationPreset = {
+    id: "p-deeplx",
+    name: "DeepLX Local",
+    enabled: true,
+    createdAt: "2026-01-01T00:00:00.000Z",
+    updatedAt: "2026-01-01T00:00:00.000Z",
+    engine: {
+      kind: "deeplx",
+      endpointUrl: "http://localhost:1188/translate",
+      credentialRef: "dlx-ref",
+    },
+  };
+  const app = await open(APP_ENTRY, {
+    ...viewport,
+    locale: "en-US",
+    storage: makeSeedStorage({
+      extra: {
+        [PRESETS_STORAGE_KEY]: JSON.stringify({ version: 1, items: [preset] }),
+        [deeplxTokenStorageKey("dlx-ref")]: "stored-token",
+      },
+    }),
+  });
+  await app.press("id:nav-presets");
+  await app.waitFor("id:preset-deeplx-endpoint");
+
+  // Remove saved token commits the record first, then drops the stored token.
+  await app.press("id:preset-deeplx-remove-token");
+  await app.press("id:preset-save");
+  await app.waitUntil(() => app.storage()[deeplxTokenStorageKey("dlx-ref")] === undefined);
+  let saved = JSON.parse(app.storage()[PRESETS_STORAGE_KEY]!).items as TranslationPreset[];
+  expect(saved[0]!.engine).toEqual({
+    kind: "deeplx",
+    endpointUrl: "http://localhost:1188/translate",
+    credentialRef: null,
+  });
+  expect(app.shows("id:preset-deeplx-remove-token")).toBe(false);
+
+  // A new token gets its own storage entry; the preset record keeps only the reference.
+  await app.type("id:preset-deeplx-token", "replacement-token");
+  await app.press("id:preset-save");
+  await app.waitUntil(() =>
+    Object.keys(app.storage()).some((key) => key.startsWith(DEEPLX_TOKEN_KEY_PREFIX)),
+  );
+  saved = JSON.parse(app.storage()[PRESETS_STORAGE_KEY]!).items as TranslationPreset[];
+  const firstEngine = saved[0]!.engine as { credentialRef: string | null };
+  expect(firstEngine.credentialRef).not.toBeNull();
+  expect(app.storage()[deeplxTokenStorageKey(firstEngine.credentialRef!)]).toBe(
+    "replacement-token",
+  );
+  expect(app.storage()[PRESETS_STORAGE_KEY]).not.toContain("replacement-token");
+
+  // Typing another token replaces the entry after the commit.
+  await app.type("id:preset-deeplx-token", "second-token");
+  await app.press("id:preset-save");
+  await app.waitUntil(() => {
+    const keys = Object.keys(app.storage()).filter((key) =>
+      key.startsWith(DEEPLX_TOKEN_KEY_PREFIX),
+    );
+    return keys.length === 1 && app.storage()[keys[0]!] === "second-token";
+  });
+
+  // A changed endpoint clears the stored token after the record commits.
+  await app.clear("id:preset-deeplx-endpoint");
+  await app.type("id:preset-deeplx-endpoint", "http://127.0.0.1:1188/translate");
+  await app.waitFor("id:preset-deeplx-token-warning");
+  await app.press("id:preset-save");
+  await app.waitUntil(() =>
+    Object.keys(app.storage()).every((key) => !key.startsWith(DEEPLX_TOKEN_KEY_PREFIX)),
+  );
+  saved = JSON.parse(app.storage()[PRESETS_STORAGE_KEY]!).items as TranslationPreset[];
+  expect(saved[0]!.engine).toEqual({
+    kind: "deeplx",
+    endpointUrl: "http://127.0.0.1:1188/translate",
+    credentialRef: null,
+  });
+  expect(app.requests()).toHaveLength(0);
 });

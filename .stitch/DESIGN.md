@@ -159,6 +159,17 @@ Recorded before editing the Presets and Quick Translate TSX. The picker, editor,
 | Editor disclosure, save, and reopen                            | The disclosure is static text in the existing editor card. Save, validation, focus, and toast reuse the Google Cloud preset editor states.      |
 | Card load, complete result, error, retry, and back-translation | Existing loading/result swap, retry button state, and embedded back-translation area. One whole result replaces loading; no progress animation. |
 
+### DeepLX translation preset and card
+
+Recorded before editing the remaining Presets and Quick Translate TSX. The picker, editor, and card reuse the Google Web states above; the change adds no motion, icon transition, or new surface.
+
+| State change                                                         | Tool and reduced motion                                                                                                                                  |
+| -------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Picker option, rail mark, card mark, and engine summary              | Static DeepL mark with the DeepLX label. Option press keeps `motion.pressScale`; reduced motion removes only the press scale.                            |
+| Endpoint and token fields, remove-token action, and endpoint warning | Existing editor field focus, validation, and label swap. The action and warning are static; saving reuses the preset save toast.                         |
+| Save, reopen, and token states                                       | Existing editor swap, field feedback, and save toast. A stored token shows only its placeholder; a removal is committed on Save and discarded on Cancel. |
+| Card load, complete result, error, and back-translation              | Existing loading/result swap, retry button state, and embedded back-translation area. One whole result replaces loading; no progress or retry animation. |
+
 ### Language Detection channels
 
 Recorded before editing the Language Detection TSX. Every entry reuses an existing token from `components/motion.ts` or native row drag timing; the change adds no decorative motion.

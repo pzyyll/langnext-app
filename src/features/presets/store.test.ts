@@ -5,6 +5,8 @@ import {
   createPresetsStore,
   DEEPL_CREDENTIAL_KEY_PREFIX,
   deepLCredentialStorageKey,
+  DEEPLX_TOKEN_KEY_PREFIX,
+  deeplxTokenStorageKey,
   GOOGLE_CLOUD_CREDENTIAL_KEY_PREFIX,
   googleCloudCredentialStorageKey,
   PRESETS_STORAGE_KEY,
@@ -90,6 +92,20 @@ function makeDeepLInput(overrides: Partial<SavePresetInput> = {}): SavePresetInp
 
 function deeplRef(preset: TranslationPreset): string {
   if (preset.engine.kind !== "deepl") throw new Error("expected a DeepL preset");
+  return preset.engine.credentialRef;
+}
+
+function makeDeepLXInput(overrides: Partial<SavePresetInput> = {}): SavePresetInput {
+  return {
+    name: "DeepLX Preset",
+    enabled: true,
+    engine: { kind: "deeplx", endpointUrl: "http://localhost:1188/translate" },
+    ...overrides,
+  };
+}
+
+function deeplxRef(preset: TranslationPreset): string | null {
+  if (preset.engine.kind !== "deeplx") throw new Error("expected a DeepLX preset");
   return preset.engine.credentialRef;
 }
 
@@ -1035,4 +1051,292 @@ test("presets store: Google Cloud keeps, replaces, and removes keys with the rec
   expect(store.records()).toEqual([]);
   expect(mem.backing[googleCloudCredentialStorageKey(secondRef)]).toBeUndefined();
   expect(mem.backing[usageKey]).toBeUndefined();
+});
+
+test("DeepLX preset: saves and reloads an endpoint without a model catalog or token", async () => {
+  const mem = createMemoryStorage();
+  let catalogReads = 0;
+  const store = createPresetsStore(mem.storage, () => {
+    catalogReads += 1;
+    throw new Error("Models must not be read for a DeepLX preset");
+  });
+  await store.load();
+
+  const saved = await store.save(
+    makeDeepLXInput({
+      name: "  DeepLX Local  ",
+      engine: { kind: "deeplx", endpointUrl: "  http://localhost:1188/dlx/translate/  " },
+    }),
+  );
+  expect(saved.name).toBe("DeepLX Local");
+  expect(saved.engine).toEqual({
+    kind: "deeplx",
+    endpointUrl: "http://localhost:1188/dlx/translate",
+    credentialRef: null,
+  });
+  expect(catalogReads).toBe(0);
+  expect(Object.keys(mem.backing)).toEqual([PRESETS_STORAGE_KEY]);
+  expect(mem.getSetCalls()).toBe(1);
+  expect(await store.readDeepLXToken(null)).toBeNull();
+  expect(await store.readDeepLXToken("missing-ref")).toBeNull();
+
+  const reloaded = createPresetsStore(mem.storage, () => []);
+  await reloaded.load();
+  expect(reloaded.status()).toEqual({ kind: "ready", skippedCount: 0 });
+  expect(reloaded.records()).toEqual([saved]);
+  expect(await reloaded.readDeepLXToken(null)).toBeNull();
+});
+
+test("DeepLX preset: keeps, replaces, and clears the token at a matching or changed endpoint", async () => {
+  const mem = createMemoryStorage();
+  const store = createPresetsStore(mem.storage, () => []);
+  await store.load();
+
+  const saved = await store.save(
+    makeDeepLXInput({
+      engine: {
+        kind: "deeplx",
+        endpointUrl: "http://localhost:1188/translate",
+        token: "  first-token  ",
+      },
+    }),
+  );
+  const firstRef = deeplxRef(saved)!;
+  expect(firstRef.length).toBeGreaterThan(0);
+  expect(mem.backing[deeplxTokenStorageKey(firstRef)]).toBe("first-token");
+  expect(await store.readDeepLXToken(firstRef)).toBe("first-token");
+
+  // An untouched token at the same normalized URL keeps its reference.
+  const kept = await store.save(
+    makeDeepLXInput({
+      id: saved.id,
+      name: "Renamed",
+      engine: { kind: "deeplx", endpointUrl: "http://localhost:1188/translate/" },
+    }),
+  );
+  expect(deeplxRef(kept)).toBe(firstRef);
+  expect(mem.backing[deeplxTokenStorageKey(firstRef)]).toBe("first-token");
+
+  // A replacement writes a new entry first and removes the old one after the commit.
+  const replaced = await store.save(
+    makeDeepLXInput({
+      id: saved.id,
+      engine: {
+        kind: "deeplx",
+        endpointUrl: "http://localhost:1188/translate",
+        token: "second-token",
+      },
+    }),
+  );
+  const secondRef = deeplxRef(replaced)!;
+  expect(secondRef).not.toBe(firstRef);
+  expect(await store.readDeepLXToken(secondRef)).toBe("second-token");
+  expect(mem.backing[deeplxTokenStorageKey(firstRef)]).toBeUndefined();
+
+  // An explicit null clears the token.
+  const cleared = await store.save(
+    makeDeepLXInput({
+      id: saved.id,
+      engine: {
+        kind: "deeplx",
+        endpointUrl: "http://localhost:1188/translate",
+        token: null,
+      },
+    }),
+  );
+  expect(deeplxRef(cleared)).toBeNull();
+  expect(mem.backing[deeplxTokenStorageKey(secondRef)]).toBeUndefined();
+
+  // A changed URL drops an untouched token and can authorize the new URL.
+  const authorized = await store.save(
+    makeDeepLXInput({
+      id: saved.id,
+      engine: {
+        kind: "deeplx",
+        endpointUrl: "http://localhost:1188/translate",
+        token: "third-token",
+      },
+    }),
+  );
+  const thirdRef = deeplxRef(authorized)!;
+  const moved = await store.save(
+    makeDeepLXInput({
+      id: saved.id,
+      engine: { kind: "deeplx", endpointUrl: "http://localhost:1188/dlx/translate" },
+    }),
+  );
+  expect(deeplxRef(moved)).toBeNull();
+  expect(mem.backing[deeplxTokenStorageKey(thirdRef)]).toBeUndefined();
+
+  // An explicit null at another new URL also clears and never authorizes it.
+  const authorizedMoved = await store.save(
+    makeDeepLXInput({
+      id: saved.id,
+      engine: {
+        kind: "deeplx",
+        endpointUrl: "http://localhost:1188/dlx/translate",
+        token: "fourth-token",
+      },
+    }),
+  );
+  const fourthRef = deeplxRef(authorizedMoved)!;
+  const movedAgain = await store.save(
+    makeDeepLXInput({
+      id: saved.id,
+      engine: {
+        kind: "deeplx",
+        endpointUrl: "https://example.com/translate",
+        token: null,
+      },
+    }),
+  );
+  expect(deeplxRef(movedAgain)).toBeNull();
+  expect(mem.backing[deeplxTokenStorageKey(fourthRef)]).toBeUndefined();
+});
+
+test("DeepLX preset: validates the endpoint and token and locks the engine type", async () => {
+  const mem = createMemoryStorage();
+  const store = createPresetsStore(mem.storage, () => [{ id: "m-1" }]);
+  await store.load();
+
+  for (const endpointUrl of [
+    "",
+    "not a url",
+    "http://example.com/translate",
+    "https://example.com/v2/translate",
+    "https://example.com/translate?token=x",
+  ]) {
+    await expect(
+      store.save(makeDeepLXInput({ engine: { kind: "deeplx", endpointUrl } })),
+    ).rejects.toMatchObject({ key: "deeplx_endpoint_invalid", field: "deeplxEndpoint" });
+  }
+  for (const token of ["", "   ", "has space", "café"]) {
+    await expect(
+      store.save(
+        makeDeepLXInput({
+          engine: {
+            kind: "deeplx",
+            endpointUrl: "https://example.com/translate",
+            token,
+          },
+        }),
+      ),
+    ).rejects.toMatchObject({ key: "deeplx_token_invalid", field: "deeplxToken" });
+  }
+  expect(mem.getSetCalls()).toBe(0);
+
+  const saved = await store.save(
+    makeDeepLXInput({
+      engine: {
+        kind: "deeplx",
+        endpointUrl: " https://example.com/dlx/translate/ ",
+        token: " token-1 ",
+      },
+    }),
+  );
+  expect(saved.engine).toMatchObject({
+    kind: "deeplx",
+    endpointUrl: "https://example.com/dlx/translate",
+  });
+  expect(await store.readDeepLXToken(deeplxRef(saved))).toBe("token-1");
+
+  // A saved preset keeps its engine type in both directions.
+  await expect(
+    store.save({ ...makeDeepLXInput({ id: saved.id }), engine: makeBaseInput().engine }),
+  ).rejects.toMatchObject({ key: "engine_type_locked" });
+  const ai = await store.save(makeBaseInput());
+  await expect(
+    store.save({ ...makeBaseInput({ id: ai.id }), engine: makeDeepLXInput().engine }),
+  ).rejects.toMatchObject({ key: "engine_type_locked" });
+});
+
+test("DeepLX preset: failed writes leave the prior endpoint and token usable", async () => {
+  const mem = createMemoryStorage();
+  const store = createPresetsStore(mem.storage, () => []);
+  await store.load();
+
+  const saved = await store.save(
+    makeDeepLXInput({
+      engine: {
+        kind: "deeplx",
+        endpointUrl: "https://example.com/translate",
+        token: "first-token",
+      },
+    }),
+  );
+  const firstRef = deeplxRef(saved)!;
+
+  // A failed token write leaves the record and its token untouched.
+  mem.setSetError(new Error("ERR_NSH_QUOTA_EXCEEDED"), (key) =>
+    key.startsWith(DEEPLX_TOKEN_KEY_PREFIX),
+  );
+  await expect(
+    store.save(
+      makeDeepLXInput({
+        id: saved.id,
+        engine: {
+          kind: "deeplx",
+          endpointUrl: "https://example.com/translate",
+          token: "second-token",
+        },
+      }),
+    ),
+  ).rejects.toMatchObject({ key: "storage_write_failed" });
+  expect(store.records()).toEqual([saved]);
+  expect(await store.readDeepLXToken(firstRef)).toBe("first-token");
+
+  // A failed record write removes the unused new token and keeps the old record usable.
+  mem.setSetError(new Error("ERR_DISK_LOCKED"), (key) => key === PRESETS_STORAGE_KEY);
+  await expect(
+    store.save(
+      makeDeepLXInput({
+        id: saved.id,
+        engine: {
+          kind: "deeplx",
+          endpointUrl: "https://example.com/translate",
+          token: "third-token",
+        },
+      }),
+    ),
+  ).rejects.toMatchObject({ key: "storage_write_failed" });
+  expect(store.records()).toEqual([saved]);
+  expect(await store.readDeepLXToken(firstRef)).toBe("first-token");
+  expect(Object.keys(mem.backing).filter((key) => key.startsWith(DEEPLX_TOKEN_KEY_PREFIX))).toEqual(
+    [deeplxTokenStorageKey(firstRef)],
+  );
+});
+
+test("DeepLX preset: reports an unreadable token with localized copy and deletes it with the record", async () => {
+  const mem = createMemoryStorage();
+  const store = createPresetsStore(mem.storage, () => []);
+  await store.load();
+
+  const saved = await store.save(
+    makeDeepLXInput({
+      engine: {
+        kind: "deeplx",
+        endpointUrl: "https://example.com/translate",
+        token: "token-1",
+      },
+    }),
+  );
+  const ref = deeplxRef(saved)!;
+
+  mem.setGetError(new Error("ERR_SECRET_READ_FAILED"));
+  let readError: unknown = null;
+  try {
+    await store.readDeepLXToken(ref);
+  } catch (error) {
+    readError = error;
+  }
+  expect(readError).toMatchObject({
+    key: "storage_read_failed",
+    message: t("presets.error.deeplxTokenUnreadable"),
+  });
+  expect((readError as Error).message).not.toContain("ERR_SECRET_READ_FAILED");
+  mem.setGetError(null);
+
+  await store.remove(saved.id);
+  expect(store.records()).toEqual([]);
+  expect(mem.backing[deeplxTokenStorageKey(ref)]).toBeUndefined();
 });

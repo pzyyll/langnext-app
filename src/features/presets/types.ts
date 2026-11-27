@@ -22,6 +22,13 @@ export interface DeepLPresetEngine {
   credentialRef: string;
 }
 
+/** DeepLX engine: a server endpoint plus an optional storage reference for its access token. */
+export interface DeepLXPresetEngine {
+  kind: "deeplx";
+  endpointUrl: string;
+  credentialRef: string | null;
+}
+
 /** Google Cloud Translation engine: stores only a storage reference; the API key never lives in preset JSON. */
 export interface GoogleCloudPresetEngine {
   kind: "google-cloud";
@@ -37,6 +44,7 @@ export interface GoogleWebPresetEngine {
 export type PresetEngine =
   | AiPresetEngine
   | DeepLPresetEngine
+  | DeepLXPresetEngine
   | GoogleCloudPresetEngine
   | GoogleWebPresetEngine;
 
@@ -65,6 +73,13 @@ export interface SaveDeepLPresetEngineInput {
   apiKey?: string | null;
 }
 
+export interface SaveDeepLXPresetEngineInput {
+  kind: "deeplx";
+  endpointUrl: string;
+  /** New or replacement token; undefined keeps a stored token at the same endpoint, null clears it. */
+  token?: string | null;
+}
+
 export interface SaveGoogleCloudPresetEngineInput {
   kind: "google-cloud";
   /** New or replacement key; a blank value on an edit keeps the stored key. */
@@ -78,6 +93,7 @@ export interface SaveGoogleWebPresetEngineInput {
 export type SavePresetEngineInput =
   | SaveAiPresetEngineInput
   | SaveDeepLPresetEngineInput
+  | SaveDeepLXPresetEngineInput
   | SaveGoogleCloudPresetEngineInput
   | SaveGoogleWebPresetEngineInput;
 
@@ -113,6 +129,8 @@ export type PresetErrorKey =
   | "engine_type_locked"
   | "deepl_key_required"
   | "deepl_key_invalid"
+  | "deeplx_endpoint_invalid"
+  | "deeplx_token_invalid"
   | "google_cloud_key_required"
   | "google_cloud_key_invalid"
   | "primary_model_required"
@@ -133,6 +151,8 @@ export type PresetErrorKey =
 export type PresetValidationField =
   | "name"
   | "deeplKey"
+  | "deeplxEndpoint"
+  | "deeplxToken"
   | "googleCloudKey"
   | "primaryModel"
   | "fallbackModel"
@@ -196,4 +216,6 @@ export interface PresetsStore {
   readDeepLCredential(presetId: string): Promise<string | null>;
   /** Reads a Google Cloud preset's stored key; returns null for other engines or a missing key. */
   readGoogleCloudCredential(presetId: string): Promise<string | null>;
+  /** Reads one DeepLX token by its stored reference; null when unset or missing. */
+  readDeepLXToken(credentialRef: string | null): Promise<string | null>;
 }
