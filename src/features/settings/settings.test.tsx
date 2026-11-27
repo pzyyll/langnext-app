@@ -266,12 +266,14 @@ test("settings ui: groups language under General and theme under Appearance in a
   expect(app.shows("id:settings-general-card")).toBe(true);
   expect(app.shows("id:settings-general-options-card")).toBe(true);
   expect(app.shows("id:language-system")).toBe(true);
+  expect(app.shows("id:settings-font-card")).toBe(false);
   expect(app.shows("id:settings-theme-card")).toBe(false);
   expect(app.shows("id:theme-dark")).toBe(false);
 
-  // Switching to Appearance shows Theme and transparency controls without Language.
+  // Switching to Appearance shows Theme, Font and transparency controls without Language.
   await app.press("id:settings-nav-appearance");
   expect(app.shows("id:settings-theme-card")).toBe(true);
+  expect(app.shows("id:settings-font-card")).toBe(true);
   expect(app.shows("id:settings-transparency-card")).toBe(true);
   expect(app.shows("id:theme-dark")).toBe(true);
   expect(app.shows("id:settings-general-card")).toBe(false);
@@ -300,6 +302,7 @@ test("settings ui: groups language under General and theme under Appearance in a
   await app.press("id:settings-nav-appearance");
   expect(app.texts()).toContain("外观");
   expect(app.texts()).toContain("主题");
+  expect(app.texts()).toContain("字体");
   expect(app.texts()).toContain("透明标题栏");
 });
 
@@ -4025,6 +4028,7 @@ test("font: applies the saved family to the window and saves a new choice", asyn
   });
 
   await app.press("id:nav-settings");
+  await app.press("id:settings-nav-appearance");
   await app.waitFor("id:settings-font");
 
   // The trigger names the saved font, and every text in the window inherits it.

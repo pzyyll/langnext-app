@@ -240,26 +240,6 @@ function GeneralSection(props: { compact: boolean; os: string }) {
         </If>
       </Card>
 
-      <Card testID="settings-font-card" class={props.compact ? "gap-4 p-4" : "gap-5 p-6"}>
-        <SectionHeading title={t("settings.font.title")} />
-        <Select
-          testID="settings-font"
-          items={fontItems()}
-          value={fontPreference()}
-          class="w-full"
-          triggerClass="w-full"
-          accessibilityLabel={t("settings.font.title")}
-          onChange={(value) => {
-            if (value !== null) void selectFont(value);
-          }}
-        />
-        <If when={fontError() !== null}>
-          <Text testID="settings-font-error" role="alert" class="text-sm text-destructive">
-            {fontError()}
-          </Text>
-        </If>
-      </Card>
-
       <Card
         testID="settings-general-options-card"
         class={props.compact ? "gap-2 p-2" : "gap-2 p-3"}
@@ -364,6 +344,26 @@ function AppearanceSection(props: { compact: boolean }) {
         <If when={appearanceError() !== null}>
           <Text role="alert" class="text-sm text-destructive">
             {appearanceError()}
+          </Text>
+        </If>
+      </Card>
+
+      <Card testID="settings-font-card" class={props.compact ? "gap-4 p-4" : "gap-5 p-6"}>
+        <SectionHeading title={t("settings.font.title")} />
+        <Select
+          testID="settings-font"
+          items={fontItems()}
+          value={fontPreference()}
+          class="w-full"
+          triggerClass="w-full"
+          accessibilityLabel={t("settings.font.title")}
+          onChange={(value) => {
+            if (value !== null) void selectFont(value);
+          }}
+        />
+        <If when={fontError() !== null}>
+          <Text testID="settings-font-error" role="alert" class="text-sm text-destructive">
+            {fontError()}
           </Text>
         </If>
       </Card>

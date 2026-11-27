@@ -128,7 +128,7 @@ While OCR recognizes a captured region, an empty source field displays two stagg
 
 ## Font Setting
 
-Settings → Application → General → Font picks the family every window draws in: the system font, a font the app ships, or one this system has installed. Windows lists its installed families under **Installed fonts**; other platforms offer the app's own faces only. A saved family the system no longer has returns to the system font at the next launch, and every choice falls back to the Windows Chinese UI font for characters the family lacks.
+Settings → Application → Appearance → Font picks the family every window draws in: the system font, a font the app ships, or one this system has installed. Windows lists its installed families under **Installed fonts**; other platforms offer the app's own faces only. A saved family the system no longer has returns to the system font at the next launch, and every choice falls back to the Windows Chinese UI font for characters the family lacks.
 
 ### Motion Inventory
 
