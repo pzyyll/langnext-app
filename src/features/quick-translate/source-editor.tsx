@@ -199,6 +199,9 @@ export function QuickTranslateSourceEditor(props: QuickTranslateSourceEditorProp
   let lastNormalizedValue = activeProjection.normalized;
   let syncingExternal = false;
   let editorRef: RichEditorRef | null = null;
+  // Captured keys are consumed natively and reported in a later JS turn, so the report can
+  // outlive this editor (the popup collapses or rebuilds it while the user keeps typing).
+  let disposed = false;
 
   const docRevision = signal(0);
   const editorFocused = signal(false);
@@ -218,7 +221,8 @@ export function QuickTranslateSourceEditor(props: QuickTranslateSourceEditorProp
 
   const enterPlugin = new RichEditorPlugin("quick-translate-source-enter");
   enterPlugin.captureKeys(["Enter"], (key) => {
-    if (key === "Enter" && !session.composing) {
+    if (disposed || key !== "Enter") return;
+    if (!session.composing) {
       props.onSubmitEditing?.();
     }
   });
@@ -346,6 +350,7 @@ export function QuickTranslateSourceEditor(props: QuickTranslateSourceEditorProp
   });
 
   cleanup(() => {
+    disposed = true;
     props.ref?.(null);
     session.dispose();
   });
