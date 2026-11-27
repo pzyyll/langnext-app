@@ -28,8 +28,17 @@ export interface GoogleCloudPresetEngine {
   credentialRef: string;
 }
 
+/** Google Web engine: the free undocumented endpoint needs no stored configuration. */
+export interface GoogleWebPresetEngine {
+  kind: "google-web";
+}
+
 /** Discriminated preset engine union; presets store engine configuration only. */
-export type PresetEngine = AiPresetEngine | DeepLPresetEngine | GoogleCloudPresetEngine;
+export type PresetEngine =
+  | AiPresetEngine
+  | DeepLPresetEngine
+  | GoogleCloudPresetEngine
+  | GoogleWebPresetEngine;
 
 export interface TranslationPreset {
   id: string;
@@ -62,10 +71,15 @@ export interface SaveGoogleCloudPresetEngineInput {
   apiKey?: string | null;
 }
 
+export interface SaveGoogleWebPresetEngineInput {
+  kind: "google-web";
+}
+
 export type SavePresetEngineInput =
   | SaveAiPresetEngineInput
   | SaveDeepLPresetEngineInput
-  | SaveGoogleCloudPresetEngineInput;
+  | SaveGoogleCloudPresetEngineInput
+  | SaveGoogleWebPresetEngineInput;
 
 export interface SavePresetInput {
   id?: string | null;

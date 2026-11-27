@@ -149,6 +149,16 @@ Recorded before editing the Presets and Quick Translate TSX. Every entry reuses 
 | Draft and saved editor, key placeholder, validation, save and delete | Existing editor swap, field feedback, and save toast (`motion.toastTransition`, `motion.toastStack`). Form layout and errors do not animate. Reduced motion removes toast movement.                 |
 | Card picker and translation result                                   | Existing Select popup transition and loading/result states. Loading is replaced by the complete result or inline error. No streaming, progress animation, gesture, sound, or new layout transition. |
 
+### Google Web translation preset and card
+
+Recorded before editing the Presets and Quick Translate TSX. The picker, editor, and card reuse the Google Cloud states above; the change adds no motion, icon transition, or new surface.
+
+| State change                                                   | Tool and reduced motion                                                                                                                         |
+| -------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------- |
+| Picker option, rail mark, card mark, and engine summary        | Static Google mark and text. Option press keeps `motion.pressScale`; reduced motion removes only the press scale.                               |
+| Editor disclosure, save, and reopen                            | The disclosure is static text in the existing editor card. Save, validation, focus, and toast reuse the Google Cloud preset editor states.      |
+| Card load, complete result, error, retry, and back-translation | Existing loading/result swap, retry button state, and embedded back-translation area. One whole result replaces loading; no progress animation. |
+
 ### Language Detection channels
 
 Recorded before editing the Language Detection TSX. Every entry reuses an existing token from `components/motion.ts` or native row drag timing; the change adds no decorative motion.

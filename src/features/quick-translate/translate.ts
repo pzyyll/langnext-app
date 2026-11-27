@@ -12,6 +12,11 @@ import {
   createGoogleCloudTranslateClient,
   type GoogleCloudTranslateInput,
 } from "../../modules/google-cloud-translation/client";
+import {
+  createGoogleWebTranslateClient,
+  type GoogleWebTranslateInput,
+  type GoogleWebTranslateOptions,
+} from "../../modules/google-web-translation/client";
 import { getLanguageLabel, type LanguageId } from "../../framework/languages";
 import { createLogger } from "../../services/log";
 import { countUsageCharacters, googleCloudUsageStore } from "../presets/google-cloud-usage";
@@ -59,6 +64,11 @@ export interface TranslateWithPresetOptions {
   googleCloudTranslate?: (
     input: GoogleCloudTranslateInput,
     options?: GoogleCloudTranslateOptions,
+  ) => Promise<string>;
+  /** Google Web transport seam for isolated tests; the production client is built on demand. */
+  googleWebTranslate?: (
+    input: GoogleWebTranslateInput,
+    options?: GoogleWebTranslateOptions,
   ) => Promise<string>;
   /** Adds a successful Google Cloud request's characters to the preset's local monthly usage. */
   recordGoogleCloudUsage?: (presetId: string, characters: number) => void | Promise<void>;
@@ -274,6 +284,42 @@ async function translateWithGoogleCloud(
 }
 
 /**
+ * Sends the caller's resolved pair to Google's free web endpoint.
+ * The result arrives whole: no credential, model lookup, prompt rendering, or streaming.
+ */
+async function translateWithGoogleWeb(
+  input: TranslateWithPresetInput,
+  options: TranslateWithPresetOptions,
+): Promise<TranslateWithPresetResult> {
+  const runTranslate = options.googleWebTranslate ?? createGoogleWebTranslateClient().translate;
+  try {
+    const text = await runTranslate(
+      {
+        text: input.sourceText,
+        sourceLanguage: input.sourceLanguage,
+        targetLanguage: input.targetLanguage,
+      },
+      { signal: options.signal, timeoutMs: options.timeoutMs },
+    );
+    if (options.signal?.aborted) {
+      return cancelledResult();
+    }
+    return { ok: true, text, modelId: null, templateId: null };
+  } catch (error) {
+    if (
+      options.signal?.aborted ||
+      (error instanceof ProviderProtocolError && error.kind === "cancelled")
+    ) {
+      return cancelledResult();
+    }
+    if (error instanceof ProviderProtocolError) {
+      return failureResult(error.message);
+    }
+    return failureResult(t("protocol.error.networkDefault"));
+  }
+}
+
+/**
  * Executes a saved preset's model chain in order with single-pass prompt rendering.
  */
 export async function translateWithPreset(
@@ -298,6 +344,10 @@ export async function translateWithPreset(
 
   if (preset.engine.kind === "google-cloud") {
     return translateWithGoogleCloud(preset, input, options);
+  }
+
+  if (preset.engine.kind === "google-web") {
+    return translateWithGoogleWeb(input, options);
   }
 
   const isBackTranslation = input.purpose === "back-translation";

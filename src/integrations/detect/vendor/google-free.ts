@@ -1,7 +1,11 @@
 // ABOUTME: Free Google Translate `translate_a/t` client used by the google detect channel.
 // ABOUTME: Undocumented and unkeyed: the sample travels in a form body and every failure maps to a code.
-import { DEFAULT_HTTP_TIMEOUT_MS } from "../../../modules/ai/runtime/http";
-import { createHttpFetch, type FetchLike } from "../../../services/http";
+import { ProviderProtocolError } from "../../../modules/ai/contracts/errors";
+import {
+  createGoogleWebTransport,
+  GOOGLE_WEB_TRANSLATE_URL,
+} from "../../../modules/google-web-translation/transport";
+import type { FetchLike } from "../../../services/http";
 import { isLanguageId, type LanguageId } from "../../../framework/languages";
 
 /**
@@ -9,8 +13,7 @@ import { isLanguageId, type LanguageId } from "../../../framework/languages";
  * support contract: no key, per-IP rate limits, and a plain-text refusal page under abuse.
  * The sample travels in a form body, so it never appears in a URL.
  */
-export const GOOGLE_DETECTION_URL =
-  "https://translate.googleapis.com/translate_a/t?client=gtx&sl=auto&tl=en";
+export const GOOGLE_DETECTION_URL = `${GOOGLE_WEB_TRANSLATE_URL}?client=gtx&sl=auto&tl=en`;
 
 /** Legacy codes Google still answers with for two supported languages. */
 const GOOGLE_CODE_ALIASES: Record<string, LanguageId> = { iw: "he", in: "id" };
@@ -89,46 +92,33 @@ export async function requestGoogleFreeDetection(
   sample: string,
   options: GoogleFreeDetectionOptions = {},
 ): Promise<GoogleFreeDetectionOutcome> {
-  const runFetch = createHttpFetch({ fetchImpl: options.fetchImpl, scope: "language-detection" });
-  const external = options.signal;
-  const controller = new AbortController();
-  const onExternalAbort = () => controller.abort();
-  external?.addEventListener("abort", onExternalAbort, { once: true });
-  const timer = setTimeout(() => controller.abort(), options.timeoutMs ?? DEFAULT_HTTP_TIMEOUT_MS);
+  const post = createGoogleWebTransport({
+    fetchImpl: options.fetchImpl,
+    scope: "language-detection",
+    redirect: "follow",
+  });
 
-  const requestBody = `q=${encodeURIComponent(sample)}`;
-
+  let payload: unknown;
   try {
-    let response: GoogleDetectionResponseLike;
-    try {
-      response = await runFetch(GOOGLE_DETECTION_URL, {
-        method: "POST",
-        headers: { "content-type": "application/x-www-form-urlencoded" },
-        body: requestBody,
-        signal: controller.signal,
-      });
-    } catch {
-      return external?.aborted ? { ok: false, code: "cancelled" } : { ok: false, code: "failed" };
+    payload = await post({
+      source: "auto",
+      target: "en",
+      text: sample,
+      signal: options.signal,
+      timeoutMs: options.timeoutMs,
+    });
+  } catch (error) {
+    if (options.signal?.aborted) return { ok: false, code: "cancelled" };
+    if (error instanceof ProviderProtocolError && error.kind === "cancelled") {
+      return { ok: false, code: "cancelled" };
     }
-
-    if (external?.aborted) return { ok: false, code: "cancelled" };
-    if (!response.ok || controller.signal.aborted) return { ok: false, code: "failed" };
-
-    let payload: unknown;
-    try {
-      payload = await response.json();
-    } catch {
-      return external?.aborted ? { ok: false, code: "cancelled" } : { ok: false, code: "failed" };
-    }
-
-    if (external?.aborted) return { ok: false, code: "cancelled" };
-
-    const code = readGoogleLanguageCode(payload);
-    if (code === null) return { ok: false, code: "unknown_language" };
-    const language = normalizeGoogleLanguageCode(code);
-    return language === null ? { ok: false, code: "unsupported_language" } : { ok: true, language };
-  } finally {
-    clearTimeout(timer);
-    external?.removeEventListener("abort", onExternalAbort);
+    return { ok: false, code: "failed" };
   }
+
+  if (options.signal?.aborted) return { ok: false, code: "cancelled" };
+
+  const code = readGoogleLanguageCode(payload);
+  if (code === null) return { ok: false, code: "unknown_language" };
+  const language = normalizeGoogleLanguageCode(code);
+  return language === null ? { ok: false, code: "unsupported_language" } : { ok: true, language };
 }

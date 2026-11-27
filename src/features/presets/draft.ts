@@ -149,6 +149,15 @@ export function draftToSaveInput(draft: PresetDraft): SavePresetInput {
     };
   }
 
+  if (draft.engineKind === "google-web") {
+    return {
+      id: draft.sourceId,
+      name: draft.name,
+      enabled: draft.enabled,
+      engine: { kind: "google-web" },
+    };
+  }
+
   // Keep the primary slot distinct even when the user has only chosen fallbacks.
   const modelIds = [draft.primaryModelId ?? "", ...draft.fallbackModelIds];
   return {

@@ -734,6 +734,7 @@ presets:
     ai: AI 翻译
     deepl: DeepL API
     googleCloud: Google Cloud 翻译
+    googleWeb: Google 网页翻译
   deepl:
     keyLabel: API 密钥
     keyPlaceholder: 粘贴 DeepL API 密钥
@@ -759,6 +760,8 @@ presets:
       characters: 字符
       resets: "%{date}重置"
       scope: 仅统计本应用通过此预设发送的字符。
+  googleWeb:
+    disclosure: 文本将发送到 Google 未公开的翻译接口。
   language:
     autoTarget: 自动
   languages:
@@ -995,3 +998,12 @@ googleCloud:
     quota: 该 Google Cloud 翻译配额已用完。
     server: Google Cloud 翻译当前不可用。
     invalidResponse: Google Cloud 翻译返回了无法读取的响应。
+googleWeb:
+  error:
+    unsupportedLanguage: Google 网页翻译不支持该语言。
+    accessDenied: Google 拒绝了此次翻译请求。请选择其他预设或稍后重试。
+    rateLimited: Google 正在限制翻译请求，请稍后重试。
+    tooLarge: 文本对于 Google 网页翻译来说过长。
+    rejected: Google 拒绝了此次翻译请求。
+    server: Google 网页翻译当前不可用。
+    invalidResponse: Google 网页翻译返回了无法读取的响应。

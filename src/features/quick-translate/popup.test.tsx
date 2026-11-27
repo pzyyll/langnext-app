@@ -3074,6 +3074,210 @@ test("Google Cloud card: a late result cannot replace a newer result or repopula
   expect(lateClose.shows("id:quick-translate-copy")).toBe(false);
 });
 
+const GOOGLE_WEB_URL = "https://translate.googleapis.com/translate_a/t";
+const GOOGLE_WEB_PRESET_ID = "preset-google-web";
+
+function makeGoogleWebPreset(overrides: Partial<TranslationPreset> = {}): TranslationPreset {
+  return {
+    id: GOOGLE_WEB_PRESET_ID,
+    name: "Google Web Card",
+    enabled: true,
+    createdAt: "2026-11-19T00:00:00.000Z",
+    updatedAt: "2026-11-19T00:00:00.000Z",
+    engine: { kind: "google-web" },
+    ...overrides,
+  };
+}
+
+/** `zh` is Simplified Chinese on the wire; every other language ID goes unchanged. */
+function googleWebWireLanguage(language: string): string {
+  return language === "zh" ? "zh-CN" : language;
+}
+
+function googleWebRequestUrl(source: string, target: string): string {
+  return `POST ${GOOGLE_WEB_URL}?client=gtx&sl=${googleWebWireLanguage(source)}&tl=${googleWebWireLanguage(target)}`;
+}
+
+interface GoogleWebCardSeedOptions {
+  sourceLanguage?: "auto" | "en";
+  targetLanguage?: "auto" | "ja" | "zh";
+  detectionMode?: "ai" | "off";
+  cards?: readonly ("web" | "deepl")[];
+  aiModels?: boolean;
+  extra?: Record<string, string>;
+}
+
+/** Seeds Google Web and DeepL cards with no Google Web credential and an optional AI detector. */
+function seedGoogleWebCards(options: GoogleWebCardSeedOptions = {}): Record<string, string> {
+  const detectChannel = makeChannel({
+    id: "ch-detect",
+    presetId: "openai",
+    adapterId: "openai-compatible",
+    baseUrl: "https://detect.example.com/v1",
+    displayName: "Detector",
+    enabled: true,
+    sortOrder: 0,
+  });
+  const detector = makeModel({
+    id: "det-1",
+    providerId: "ch-detect",
+    modelKey: "detect-mini",
+    enabled: true,
+  });
+  const webPreset = makeGoogleWebPreset();
+  const deeplPreset = makeDeepLPreset();
+  const cards = (options.cards ?? ["web"]).map((kind, index) => ({
+    id: `card-${index + 1}`,
+    presetId: kind === "web" ? webPreset.id : deeplPreset.id,
+    templateId: null,
+    collapsed: false,
+  }));
+  const storage = makeSeedStorage({
+    ...(options.aiModels === false ? {} : { channels: [detectChannel], models: [detector] }),
+    extra: {
+      [PRESETS_STORAGE_KEY]: JSON.stringify({
+        version: 1,
+        items: [webPreset, deeplPreset],
+      }),
+      [QUICK_TRANSLATE_PREFERENCES_KEY]: JSON.stringify({
+        version: 1,
+        doubleCopyEnabled: false,
+        autoTranslate: false,
+        sourceLanguage: options.sourceLanguage ?? "auto",
+        targetLanguage: options.targetLanguage ?? "zh",
+        cards,
+      }),
+      [deepLCredentialStorageKey("deepl-ref-1")]: "deepl-key:fx",
+      ...detectionSeed({ aiEnabled: (options.detectionMode ?? "ai") === "ai" }),
+      ...options.extra,
+    },
+  });
+  if (options.aiModels === false) {
+    delete storage[MODELS_STORAGE_KEY];
+    delete storage[PROVIDERS_STORAGE_KEY];
+  }
+  return storage;
+}
+
+test("Google Web card: a saved card sends the explicit pair as one form POST", async () => {
+  const app = await open(POPUP_HARNESS, {
+    ...viewport,
+    storage: seedGoogleWebCards({
+      cards: ["web"],
+      sourceLanguage: "en",
+      targetLanguage: "zh",
+      detectionMode: "off",
+      aiModels: false,
+    }),
+    network: {
+      [googleWebRequestUrl("en", "zh")]: {
+        status: 200,
+        body: ["您好。\n早上好。"],
+      },
+    },
+  });
+
+  await app.waitFor("id:quick-translate-card-card-1");
+  // The template selector stays AI-only, and the card leads with the Google mark.
+  expect(app.shows("id:quick-translate-card-card-1 >> id:quick-translate-template")).toBe(false);
+  expect(
+    app.shows("id:quick-translate-card-card-1 >> id:quick-translate-preset-mark-google-web"),
+  ).toBe(true);
+
+  await app.type("id:quick-translate-source", "Hello.");
+  await app.keyboard.press("shift+enter");
+  await app.type("id:quick-translate-source", "Good morning.");
+  await app.keyboard.press("enter");
+  await app.waitFor("id:quick-translate-card-card-1 >> id:quick-translate-result-text");
+  expect(app.texts()).toContain("您好。\n早上好。");
+
+  const requests = requestsTo(app, googleWebRequestUrl("en", "zh"));
+  expect(requests).toHaveLength(1);
+  expect(requests[0]!.headers?.["content-type"]).toBe("application/x-www-form-urlencoded");
+  const form = new URLSearchParams(requests[0]!.body!);
+  expect([...form.keys()]).toEqual(["q"]);
+  expect(form.get("q")).toBe("Hello.\nGood morning.");
+  expect(app.requests()).toHaveLength(1);
+});
+
+test("Google Web card: a 429 fails only its card while a DeepL card succeeds, and retry sends one new request", async () => {
+  let webCalls = 0;
+  const app = await open(POPUP_HARNESS, {
+    ...viewport,
+    storage: seedGoogleWebCards({
+      cards: ["web", "deepl"],
+      sourceLanguage: "en",
+      targetLanguage: "ja",
+      detectionMode: "off",
+      aiModels: false,
+    }),
+    network: {
+      [googleWebRequestUrl("en", "ja")]: () => {
+        webCalls += 1;
+        return webCalls === 1
+          ? { status: 429, body: "too many requests" }
+          : { status: 200, body: ["再試行"] };
+      },
+      [DEEPL_URL]: {
+        status: 200,
+        body: { translations: [{ detected_source_language: "EN", text: "DeepL 译文" }] },
+      },
+    },
+  });
+
+  await app.waitFor("id:quick-translate-card-card-2");
+  await app.type("id:quick-translate-source", "Good morning");
+  await app.keyboard.press("enter");
+  await app.waitFor("id:quick-translate-card-card-1 >> id:quick-translate-error");
+  expect(app.texts()).toContain(t("googleWeb.error.rateLimited"));
+  expect(app.texts()).not.toContain("too many requests");
+  expect(app.texts()).toContain("DeepL 译文");
+  expect(requestsTo(app, googleWebRequestUrl("en", "ja"))).toHaveLength(1);
+  expect(requestsTo(app, DEEPL_URL)).toHaveLength(1);
+
+  await app.press("id:quick-translate-card-card-1 >> id:quick-translate-retry");
+  await app.waitUntil(() => app.texts().includes("再試行"));
+  expect(requestsTo(app, googleWebRequestUrl("en", "ja"))).toHaveLength(2);
+  expect(requestsTo(app, DEEPL_URL)).toHaveLength(1);
+});
+
+test("Google Web card: automatic detection supplies the forward pair and back-translation reverses it", async () => {
+  const app = await open(POPUP_HARNESS, {
+    ...viewport,
+    storage: seedGoogleWebCards({
+      cards: ["web"],
+      sourceLanguage: "auto",
+      targetLanguage: "ja",
+      detectionMode: "ai",
+    }),
+    network: {
+      [DETECT_URL]: {
+        status: 200,
+        body: { choices: [{ message: { content: "fr" } }] },
+      },
+      [googleWebRequestUrl("fr", "ja")]: { status: 200, body: ["Bonjour 译文"] },
+      [googleWebRequestUrl("ja", "fr")]: { status: 200, body: ["Hello again"] },
+    },
+  });
+
+  await app.waitFor("id:quick-translate-card-card-1");
+  await app.type("id:quick-translate-source", "Bonjour");
+  await app.keyboard.press("enter");
+  await app.waitFor("id:quick-translate-card-card-1 >> id:quick-translate-result-text");
+  expect(app.texts()).toContain("Bonjour 译文");
+  expect(requestsTo(app, DETECT_URL)).toHaveLength(1);
+  expect(requestsTo(app, googleWebRequestUrl("fr", "ja"))).toHaveLength(1);
+
+  await app.waitFor("id:quick-translate-card-card-1 >> id:quick-translate-back-translate");
+  await app.press("id:quick-translate-card-card-1 >> id:quick-translate-back-translate");
+  await app.waitFor("id:quick-translate-card-card-1 >> id:quick-translate-back-translation-text");
+  expect(app.texts()).toContain("Hello again");
+  expect(requestsTo(app, DETECT_URL)).toHaveLength(1);
+
+  const reverse = requestsTo(app, googleWebRequestUrl("ja", "fr"));
+  expect(reverse).toHaveLength(1);
+  expect(new URLSearchParams(reverse[0]!.body!).get("q")).toBe("Bonjour 译文");
+});
 test("back-translation: request translates a completed AI result in reverse without the selected grammar template", async () => {
   const grammarPreset = makePreset({
     engine: {

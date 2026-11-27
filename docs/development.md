@@ -82,6 +82,15 @@ There is no local detector.
 - **Language mapping**: a regional Google code keeps its base language (`zh-CN` becomes `zh`, `pt-BR` becomes `pt`). Legacy `iw` and `in` map to Hebrew and Indonesian. Any other language is reported as unsupported. It is not translated as a guess.
 - **Privacy**: only settings, model IDs, and the stored API key are kept. The Google Cloud key is stored in its own storage entry, not in the detector record.
 
+## Google Web translation notes
+
+Google Web is an opt-in preset engine for the Demo build. It has no credential and no setup.
+
+- **Request shape**: one form-encoded `POST` to `https://translate.googleapis.com/translate_a/t` with ordered `client=gtx`, `sl`, and `tl` parameters and `q` as the only form field. The original text is sent unchanged. `zh` maps to `zh-CN`; every other supported app language ID goes as-is.
+- **Response shape**: a one-element JSON array whose entry is the translated string, newlines included. Any other shape is an unreadable response.
+- **Transport**: `src/modules/google-web-translation/transport.ts` is shared with the free Google detector. Translation refuses redirects, keeps request and response bodies out of the log, and maps `403`, `429`, `413`, other `4xx`, and `5xx` to localized errors. It never retries.
+- **Limits**: Google publishes no support, quota, or compatibility contract for the endpoint. A release check that finds a block or a changed response stops rollout; the code does not work around it.
+
 ## Checks before distribution
 
 The bundle identifier is a development placeholder. Set it before distribution.
