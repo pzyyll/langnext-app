@@ -501,6 +501,9 @@ dictionary:
   seeDictionary: 查询词典
   loading: 正在查词…
   lookUp: 查词
+  phonetic:
+    us: 美
+    uk: 英
   forms: 词形变化
   synonyms: 近义词
   back: 返回

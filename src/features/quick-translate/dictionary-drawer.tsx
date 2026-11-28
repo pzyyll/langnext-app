@@ -2,25 +2,19 @@ import { Scroll, Text, View } from "nsh";
 import { t } from "nsh/i18n";
 import { motion } from "../../components/motion";
 import { Button } from "../../components/ui/button";
-import { Icon, type IconName } from "../../components/ui/icon";
+import { Icon } from "../../components/ui/icon";
 import { Skeleton } from "../../components/ui/skeleton";
 import type { LanguageId } from "../../framework/languages";
 import type { DictionaryEntry } from "../../integrations/dictionary";
 import { AnkiAddButton, AnkiStatusText, type CardAnkiState } from "./anki-control";
-import { DictionaryEntryView } from "./dictionary-entry";
+import { DictionaryEntryView, type DictionarySpeakControlState } from "./dictionary-entry";
 import type {
   QuickTranslateSelectionMenu,
   QuickTranslateSelectionRegion,
   TextSelectionEventPayload,
 } from "./selection-types";
 
-export interface DictionarySpeakControlState {
-  disabled: boolean;
-  tooltip?: string;
-  label: string;
-  icon: IconName;
-  busy: boolean;
-}
+export type { DictionarySpeakControlState };
 
 export interface DictionaryDrawerQuery {
   term: string;
@@ -75,11 +69,6 @@ export function DockedDictionaryDrawer(props: DockedDictionaryDrawerProps) {
     return current?.status === "not_found" ? current : null;
   };
   const displayTerm = () => entryState()?.entry.term ?? active()?.query.term ?? "";
-  const primaryPhonetic = () => {
-    const item = entryState()?.entry.phonetics[0];
-    if (!item) return "";
-    return item.label ? `${item.label} ${item.ipa}` : item.ipa;
-  };
 
   return (
     <If when={props.state.open && active() !== null}>
@@ -88,7 +77,10 @@ export function DockedDictionaryDrawer(props: DockedDictionaryDrawerProps) {
         class="shrink-0 border-t border-border bg-surface-subtle/80"
         onLayout={({ bounds }) => props.onLayoutHeight?.(bounds.size.height)}
       >
-        <View class="flex-row items-center justify-between gap-2 border-b border-border/50 px-4 py-2">
+        <View
+          testID="quick-translate-dictionary-drawer-header"
+          class="flex-row items-center justify-between gap-2 px-4 pt-2 pb-1"
+        >
           <View class="min-w-0 flex-1 flex-row items-center gap-1.5">
             <If when={props.state.canGoBack}>
               <Button
@@ -109,26 +101,6 @@ export function DockedDictionaryDrawer(props: DockedDictionaryDrawerProps) {
             >
               {displayTerm()}
             </Text>
-            <If when={Boolean(primaryPhonetic())}>
-              <Text class="shrink-0 text-xs text-muted-foreground">{primaryPhonetic()}</Text>
-            </If>
-            <If when={entryState() !== null}>
-              <Button
-                testID="quick-translate-dictionary-drawer-speak"
-                variant="ghost"
-                size="icon-xs"
-                accessibilityLabel={props.speakControl.label}
-                tooltip={props.speakControl.tooltip}
-                disabled={props.speakControl.disabled}
-                onPress={props.onSpeak}
-              >
-                <Icon
-                  name={props.speakControl.icon}
-                  tone={props.speakControl.busy ? "brand" : "muted-foreground"}
-                  class="size-3.5"
-                />
-              </Button>
-            </If>
           </View>
 
           <View class="shrink-0 flex-row items-center gap-0.5">
@@ -181,7 +153,7 @@ export function DockedDictionaryDrawer(props: DockedDictionaryDrawerProps) {
         </If>
 
         <Scroll class="min-h-0 max-h-44">
-          <View class="px-4 py-2.5">
+          <View class="px-4 pt-1 pb-2.5">
             <If when={active()?.status === "loading"}>
               <View
                 testID="quick-translate-dictionary-drawer-loading"
@@ -225,7 +197,8 @@ export function DockedDictionaryDrawer(props: DockedDictionaryDrawerProps) {
                 testIdPrefix="quick-translate-dictionary-drawer"
                 entry={entryState()!.entry}
                 contextSentence={entryState()!.query.contextSentence}
-                extraPhoneticsFrom={1}
+                speakControl={props.speakControl}
+                onSpeak={props.onSpeak}
                 onLookupSynonym={props.onDrillDown}
                 onSelectionChange={props.onSelectionChange}
                 selectionMenu={props.selectionMenu}

@@ -1,25 +1,40 @@
 import { Text, View } from "nsh";
 import { t } from "nsh/i18n";
 import { Button } from "../../components/ui/button";
+import { Icon, type IconName } from "../../components/ui/icon";
 import type { DictionaryEntry } from "../../integrations/dictionary";
 import type { QuickTranslateSelectionMenu, TextSelectionEventPayload } from "./selection-types";
+
+export interface DictionarySpeakControlState {
+  disabled: boolean;
+  tooltip?: string;
+  label: string;
+  icon: IconName;
+  busy: boolean;
+}
 
 export interface DictionaryEntryViewProps {
   testIdPrefix: string;
   entry: DictionaryEntry;
   contextSentence?: string;
-  extraPhoneticsFrom?: number;
+  speakControl?: DictionarySpeakControlState;
+  onSpeak?: () => void;
   onLookupSynonym?: (term: string) => void;
   onSelectionChange?: (event: TextSelectionEventPayload, fullText: string) => void;
   selectionMenu?: QuickTranslateSelectionMenu;
 }
 
-/** Shared structured dictionary entry body used by both the inline band and docked drawer. */
+function formatPhoneticLabel(label: string): string {
+  const normalized = label.trim().toUpperCase();
+  if (normalized === "US") return t("dictionary.phonetic.us");
+  if (normalized === "UK") return t("dictionary.phonetic.uk");
+  return label;
+}
+
+/** Structured lexical dictionary entry body rendered inside the docked dictionary drawer. */
 export function DictionaryEntryView(props: DictionaryEntryViewProps) {
-  const phoneticsToShow = () => {
-    const startIndex = props.extraPhoneticsFrom ?? 0;
-    return props.entry.phonetics.slice(startIndex);
-  };
+  const phoneticsToShow = () => props.entry.phonetics;
+  const hasSpeakAction = () => Boolean(props.speakControl && props.onSpeak);
 
   const forms = () => props.entry.forms ?? [];
   const synonyms = () => props.entry.synonyms ?? [];
@@ -29,16 +44,38 @@ export function DictionaryEntryView(props: DictionaryEntryViewProps) {
 
   return (
     <View testID={`${props.testIdPrefix}-entry`} class="gap-2.5">
-      <If when={phoneticsToShow().length > 0}>
-        <View class="flex-row flex-wrap items-center gap-x-3 gap-y-1">
+      <If when={phoneticsToShow().length > 0 || hasSpeakAction()}>
+        <View
+          testID={`${props.testIdPrefix}-phonetics`}
+          class="flex-row flex-wrap items-center gap-x-2.5 gap-y-1"
+        >
           {phoneticsToShow().map((phonetic) => (
             <View class="flex-row items-center gap-1">
               <If when={Boolean(phonetic.label)}>
-                <Text class="text-xs font-medium text-muted-foreground">{phonetic.label}</Text>
+                <Text class="text-xs font-medium text-muted-foreground">
+                  {formatPhoneticLabel(phonetic.label)}
+                </Text>
               </If>
               <Text class="text-xs text-foreground">{phonetic.ipa}</Text>
             </View>
           ))}
+          <If when={hasSpeakAction()}>
+            <Button
+              testID={`${props.testIdPrefix}-speak`}
+              variant="ghost"
+              size="icon-xs"
+              accessibilityLabel={props.speakControl!.label}
+              tooltip={props.speakControl!.tooltip}
+              disabled={props.speakControl!.disabled}
+              onPress={() => props.onSpeak?.()}
+            >
+              <Icon
+                name={props.speakControl!.icon}
+                tone={props.speakControl!.busy ? "brand" : "muted-foreground"}
+                class="size-3.5"
+              />
+            </Button>
+          </If>
         </View>
       </If>
 

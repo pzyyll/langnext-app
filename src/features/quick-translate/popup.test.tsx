@@ -6140,11 +6140,37 @@ test("dictionary inline: shows phonetic and See dictionary in source toolbar and
     .filter((req) => req.url.includes("dict.test")).length;
   await app.press("role:link[See dictionary]");
   await app.waitFor("id:quick-translate-dictionary-drawer >> text:Fashion is by nature ephemeral.");
+  expect(app.shows("id:quick-translate-dictionary-drawer-header >> text:/ɪˈfɛmərəl/")).toBe(false);
+  expect(app.shows("id:quick-translate-dictionary-drawer-header >> text:US")).toBe(false);
+  expect(
+    app.shows(
+      "id:quick-translate-dictionary-drawer-header >> id:quick-translate-dictionary-drawer-speak",
+    ),
+  ).toBe(false);
+  expect(app.shows("id:quick-translate-dictionary-drawer-phonetics >> text:US")).toBe(true);
+  expect(app.shows("id:quick-translate-dictionary-drawer-phonetics >> text:UK")).toBe(true);
+  expect(app.shows("id:quick-translate-dictionary-drawer-phonetics >> text:/ɪˈfɛmərəl/")).toBe(
+    true,
+  );
+  expect(
+    app.shows(
+      "id:quick-translate-dictionary-drawer-phonetics >> id:quick-translate-dictionary-drawer-speak",
+    ),
+  ).toBe(true);
   expect(app.texts()).toContain("短生植物");
   expect(app.texts()).toContain("noun: ephemerality");
   expect(app.texts()).toContain("transient");
   expect(app.requests().filter((req) => req.url.includes("dict.test"))).toHaveLength(
     dictRequestsBeforeOpen,
+  );
+  const ttsCountBeforeDrawerSpeak = app
+    .requests()
+    .filter((request) => request.url === GOOGLE_CLOUD_TTS_URL).length;
+  await app.press("id:quick-translate-dictionary-drawer-speak");
+  await app.waitUntil(
+    () =>
+      app.requests().filter((request) => request.url === GOOGLE_CLOUD_TTS_URL).length ===
+      ttsCountBeforeDrawerSpeak + 1,
   );
 });
 
@@ -6206,7 +6232,7 @@ test("dictionary inline: hides link until entry resolves, hides silently on erro
   await app.waitFor("id:quick-translate-source-toolbar >> text:/ɪˈfɛmərəl/");
   expect(app.shows("role:link[See dictionary]")).toBe(true);
   await app.press("role:link[See dictionary]");
-  await app.waitFor("id:quick-translate-dictionary-drawer >> text:US /ɪˈfɛmərəl/");
+  await app.waitFor("id:quick-translate-dictionary-drawer-phonetics >> text:/ɪˈfɛmərəl/");
   await app.press("id:quick-translate-dictionary-drawer-close");
 
   // not_found hides See dictionary cleanly without showing error.
@@ -6371,11 +6397,11 @@ test("dictionary selection: shows 180ms pill for source, result, and back-transl
 
   // Synonym drill-down inside drawer pushes history; Alt+Left pops back.
   await app.press("id:quick-translate-dictionary-drawer-synonym-fleeting");
-  await app.waitFor("id:quick-translate-dictionary-drawer >> text:US /ˈfliːtɪŋ/");
+  await app.waitFor("id:quick-translate-dictionary-drawer-phonetics >> text:/ˈfliːtɪŋ/");
   expect(app.shows("id:quick-translate-dictionary-drawer-back")).toBe(true);
 
   await app.keyboard.press("alt+left");
-  await app.waitFor("id:quick-translate-dictionary-drawer >> text:US /ɪˈfɛmərəl/");
+  await app.waitFor("id:quick-translate-dictionary-drawer-phonetics >> text:/ɪˈfɛmərəl/");
   expect(app.shows("id:quick-translate-dictionary-drawer-back")).toBe(false);
 
   // Close drawer, select in forward result, and press Alt+D immediately without waiting debounce.
@@ -6387,7 +6413,7 @@ test("dictionary selection: shows 180ms pill for source, result, and back-transl
     y: 0,
   });
   await app.keyboard.press("alt+d");
-  await app.waitFor("id:quick-translate-dictionary-drawer >> text:US /ˈbjuːti/");
+  await app.waitFor("id:quick-translate-dictionary-drawer-phonetics >> text:/ˈbjuːti/");
 
   // Open back-translation and select text inside it -> pill lookup updates drawer.
   await app.press("id:quick-translate-card-card-1 >> id:quick-translate-back-translate");
@@ -6434,4 +6460,65 @@ test("dictionary selection: ignores long sentences, hides when unconfigured, and
   await sentenceApp.keyboard.press("ctrl+a");
   await sentenceApp.clock!.runFor(250);
   expect(sentenceApp.shows("id:quick-translate-dictionary-pill")).toBe(false);
+});
+
+test("dictionary drawer: localizes US/UK phonetic labels to zh-CN and renders speak icon beside body phonetics", async () => {
+  const app = await open(POPUP_HARNESS, {
+    ...viewport,
+    locale: "zh-CN",
+    storage: dictionarySeed(
+      { "settings.language": "zh-CN" },
+      { autoTranslate: false, withTts: true },
+    ),
+    network: {
+      "POST https://api.openai.com/v1/chat/completions": {
+        status: 200,
+        body: { choices: [{ message: { content: "你好" } }] },
+      },
+      [DICT_URL]: {
+        status: 200,
+        body: {
+          choices: [
+            {
+              message: {
+                content: JSON.stringify({
+                  found: true,
+                  term: "hello",
+                  phonetics: [
+                    { label: "US", ipa: "/həˈloʊ/" },
+                    { label: "UK", ipa: "/həˈləʊ/" },
+                  ],
+                  senses: [{ partOfSpeech: "int.", glosses: ["你好", "喂"] }],
+                }),
+              },
+            },
+          ],
+        },
+      },
+      [QUICK_TTS_URL]: { status: 200, body: QUICK_TTS_MP3 },
+    },
+  });
+
+  await app.waitFor("id:quick-translate-source");
+  await app.type("id:quick-translate-source", "hello");
+  await app.keyboard.press("enter");
+  await app.waitFor("id:quick-translate-source-toolbar >> text:/həˈloʊ/");
+
+  await app.press("role:link[查询词典]");
+  await app.waitFor("id:quick-translate-dictionary-drawer-phonetics >> text:/həˈləʊ/");
+  expect(app.shows("id:quick-translate-dictionary-drawer-header >> text:/həˈloʊ/")).toBe(false);
+  expect(
+    app.shows(
+      "id:quick-translate-dictionary-drawer-header >> id:quick-translate-dictionary-drawer-speak",
+    ),
+  ).toBe(false);
+  expect(app.shows("id:quick-translate-dictionary-drawer-phonetics >> text:美")).toBe(true);
+  expect(app.shows("id:quick-translate-dictionary-drawer-phonetics >> text:英")).toBe(true);
+  expect(app.shows("id:quick-translate-dictionary-drawer >> text:US")).toBe(false);
+  expect(app.shows("id:quick-translate-dictionary-drawer >> text:UK")).toBe(false);
+  expect(
+    app.shows(
+      "id:quick-translate-dictionary-drawer-phonetics >> id:quick-translate-dictionary-drawer-speak",
+    ),
+  ).toBe(true);
 });

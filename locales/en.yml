@@ -501,6 +501,9 @@ dictionary:
   seeDictionary: See dictionary
   loading: Looking up word…
   lookUp: Look up
+  phonetic:
+    us: US
+    uk: UK
   forms: Forms
   synonyms: Synonyms
   back: Back

@@ -4952,7 +4952,7 @@ test("quick anki dictionary: adds source dictionary entry via unified drawer, bl
   await app.waitFor("id:quick-translate-card-card-1 >> text:短暂的");
 
   await app.press("id:quick-translate-dictionary-open");
-  await app.waitFor("id:quick-translate-dictionary-drawer >> text:US /ɪˈfɛmərəl/");
+  await app.waitFor("id:quick-translate-dictionary-drawer-phonetics >> text:/ɪˈfɛmərəl/");
 
   await app.press("id:quick-translate-dictionary-drawer-add-anki");
   await app.waitUntil(
@@ -5015,7 +5015,7 @@ test("quick anki dictionary: adds drawer entry with context sentence, hides when
   await disabledApp.keyboard.press("enter");
   await disabledApp.waitFor("id:quick-translate-source-toolbar >> text:/ɪˈfɛmərəl/");
   await disabledApp.press("id:quick-translate-dictionary-open");
-  await disabledApp.waitFor("id:quick-translate-dictionary-drawer >> text:US /ɪˈfɛmərəl/");
+  await disabledApp.waitFor("id:quick-translate-dictionary-drawer-phonetics >> text:/ɪˈfɛmərəl/");
   expect(disabledApp.shows("id:quick-translate-dictionary-drawer-add-anki")).toBe(false);
 
   let createCalls = 0;
@@ -5088,7 +5088,7 @@ test("quick anki dictionary: adds drawer entry with context sentence, hides when
   );
   await app.waitFor("id:quick-translate-dictionary-pill");
   await app.press("id:quick-translate-dictionary-pill");
-  await app.waitFor("id:quick-translate-dictionary-drawer >> text:US /ɪˈfɛmərəl/");
+  await app.waitFor("id:quick-translate-dictionary-drawer-phonetics >> text:/ɪˈfɛmərəl/");
 
   await app.press("id:quick-translate-dictionary-drawer-add-anki");
   await app.waitFor(
