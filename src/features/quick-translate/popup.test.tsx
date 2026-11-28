@@ -6146,7 +6146,7 @@ test("dictionary inline: shows phonetic and See dictionary in source toolbar and
     app.shows(
       "id:quick-translate-dictionary-drawer-header >> id:quick-translate-dictionary-drawer-speak",
     ),
-  ).toBe(false);
+  ).toBe(true);
   expect(app.shows("id:quick-translate-dictionary-drawer-phonetics >> text:US")).toBe(true);
   expect(app.shows("id:quick-translate-dictionary-drawer-phonetics >> text:UK")).toBe(true);
   expect(app.shows("id:quick-translate-dictionary-drawer-phonetics >> text:/ɪˈfɛmərəl/")).toBe(
@@ -6156,7 +6156,7 @@ test("dictionary inline: shows phonetic and See dictionary in source toolbar and
     app.shows(
       "id:quick-translate-dictionary-drawer-phonetics >> id:quick-translate-dictionary-drawer-speak",
     ),
-  ).toBe(true);
+  ).toBe(false);
   expect(app.texts()).toContain("短生植物");
   expect(app.texts()).toContain("noun: ephemerality");
   expect(app.texts()).toContain("transient");
@@ -6237,6 +6237,7 @@ test("dictionary inline: hides link until entry resolves, hides silently on erro
 
   // not_found hides See dictionary cleanly without showing error.
   await app.press("id:quick-translate-clear");
+  await app.waitFor("id:quick-translate-source");
   await app.type("id:quick-translate-source", "zzz");
   await app.keyboard.press("enter");
   await app.waitUntil(() => dictCalls === 3);
@@ -6462,7 +6463,7 @@ test("dictionary selection: ignores long sentences, hides when unconfigured, and
   expect(sentenceApp.shows("id:quick-translate-dictionary-pill")).toBe(false);
 });
 
-test("dictionary drawer: localizes US/UK phonetic labels to zh-CN and renders speak icon beside body phonetics", async () => {
+test("dictionary drawer: localizes US/UK phonetic labels to zh-CN and renders speak icon beside drawer headword", async () => {
   const app = await open(POPUP_HARNESS, {
     ...viewport,
     locale: "zh-CN",
@@ -6511,7 +6512,7 @@ test("dictionary drawer: localizes US/UK phonetic labels to zh-CN and renders sp
     app.shows(
       "id:quick-translate-dictionary-drawer-header >> id:quick-translate-dictionary-drawer-speak",
     ),
-  ).toBe(false);
+  ).toBe(true);
   expect(app.shows("id:quick-translate-dictionary-drawer-phonetics >> text:美")).toBe(true);
   expect(app.shows("id:quick-translate-dictionary-drawer-phonetics >> text:英")).toBe(true);
   expect(app.shows("id:quick-translate-dictionary-drawer >> text:US")).toBe(false);
@@ -6520,5 +6521,5 @@ test("dictionary drawer: localizes US/UK phonetic labels to zh-CN and renders sp
     app.shows(
       "id:quick-translate-dictionary-drawer-phonetics >> id:quick-translate-dictionary-drawer-speak",
     ),
-  ).toBe(true);
+  ).toBe(false);
 });

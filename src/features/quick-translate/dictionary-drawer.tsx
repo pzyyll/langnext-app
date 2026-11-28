@@ -2,19 +2,25 @@ import { Scroll, Text, View } from "nsh";
 import { t } from "nsh/i18n";
 import { motion } from "../../components/motion";
 import { Button } from "../../components/ui/button";
-import { Icon } from "../../components/ui/icon";
+import { Icon, type IconName } from "../../components/ui/icon";
 import { Skeleton } from "../../components/ui/skeleton";
 import type { LanguageId } from "../../framework/languages";
 import type { DictionaryEntry } from "../../integrations/dictionary";
 import { AnkiAddButton, AnkiStatusText, type CardAnkiState } from "./anki-control";
-import { DictionaryEntryView, type DictionarySpeakControlState } from "./dictionary-entry";
+import { DictionaryEntryView } from "./dictionary-entry";
 import type {
   QuickTranslateSelectionMenu,
   QuickTranslateSelectionRegion,
   TextSelectionEventPayload,
 } from "./selection-types";
 
-export type { DictionarySpeakControlState };
+export interface DictionarySpeakControlState {
+  disabled: boolean;
+  tooltip?: string;
+  label: string;
+  icon: IconName;
+  busy: boolean;
+}
 
 export interface DictionaryDrawerQuery {
   term: string;
@@ -101,6 +107,23 @@ export function DockedDictionaryDrawer(props: DockedDictionaryDrawerProps) {
             >
               {displayTerm()}
             </Text>
+            <If when={entryState() !== null}>
+              <Button
+                testID="quick-translate-dictionary-drawer-speak"
+                variant="ghost"
+                size="icon-xs"
+                accessibilityLabel={props.speakControl.label}
+                tooltip={props.speakControl.tooltip}
+                disabled={props.speakControl.disabled}
+                onPress={props.onSpeak}
+              >
+                <Icon
+                  name={props.speakControl.icon}
+                  tone={props.speakControl.busy ? "brand" : "muted-foreground"}
+                  class="size-3.5"
+                />
+              </Button>
+            </If>
           </View>
 
           <View class="shrink-0 flex-row items-center gap-0.5">
@@ -197,8 +220,6 @@ export function DockedDictionaryDrawer(props: DockedDictionaryDrawerProps) {
                 testIdPrefix="quick-translate-dictionary-drawer"
                 entry={entryState()!.entry}
                 contextSentence={entryState()!.query.contextSentence}
-                speakControl={props.speakControl}
-                onSpeak={props.onSpeak}
                 onLookupSynonym={props.onDrillDown}
                 onSelectionChange={props.onSelectionChange}
                 selectionMenu={props.selectionMenu}
