@@ -19,11 +19,15 @@ test("dictionary selection native: emits selection text across source, output, a
   await app.chooseMenuItem("Look up");
   await app.waitUntil(() => app.texts().includes("menu:1"));
 
-  // 2. Plain TranslationOutput selection
+  // 2. Plain TranslationOutput selection + pressing DictionarySelectionPill on real desktop pointer
   await app.waitFor("id:seam-plain");
   await app.drag("id:seam-plain", { x: 90, y: 0 });
   await app.waitUntil(() => !app.texts().includes("plain:none"));
   expect(app.texts().find((line) => line.startsWith("plain:"))).toContain("|true");
+  await app.waitFor("id:quick-translate-dictionary-pill");
+  await app.press("id:quick-translate-dictionary-pill");
+  await app.waitUntil(() => app.texts().some((line) => line.startsWith("pill:result:")));
+  expect(app.shows("id:quick-translate-dictionary-pill")).toBe(false);
 
   // 3. Markdown TranslationOutput selection
   await app.waitFor("id:seam-md");
@@ -50,4 +54,10 @@ test("dictionary selection native: emits selection text across source, output, a
   await app.waitUntil(() =>
     app.texts().some((line) => line.startsWith("pressed:") && line.split(",").length >= 2),
   );
+
+  // 6. Source RichEditor selection + pressing DictionarySelectionPill on real desktop pointer
+  await app.drag("id:seam-source >> text:Hello ephemeral world.", { x: 80, y: 0 });
+  await app.waitFor("id:quick-translate-dictionary-pill");
+  await app.press("id:quick-translate-dictionary-pill");
+  await app.waitUntil(() => app.texts().some((line) => line.includes(",source:")));
 });

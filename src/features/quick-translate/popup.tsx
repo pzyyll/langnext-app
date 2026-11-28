@@ -58,6 +58,7 @@ import {
   type MarkdownComparisonSource,
 } from "./alignment-document";
 import { QuickTranslateHistoryResults } from "./history-results";
+import { DictionarySelectionPill } from "./dictionary-pill";
 import {
   createSentencePopoverTrace,
   type SentencePopoverDismissal,
@@ -2553,31 +2554,16 @@ export function QuickTranslatePopup(props: QuickTranslatePopupProps) {
           </View>
         </Scroll>
       </AnchoredPopover>
-      <AnchoredPopover
-        open={selection.pillAnchor() !== null}
+      <DictionarySelectionPill
         anchor={selection.pillAnchor()}
-        placement="top"
-        align="center"
-        offset={6}
-        margin={8}
-        testID="quick-translate-dictionary-pill-surface"
-        accessibilityLabel={t("dictionary.lookUp")}
-        class="rounded-full p-1"
-        onPressOutside={() => selection.clear()}
-        onCancel={() => selection.clear()}
-      >
-        <Button
-          testID="quick-translate-dictionary-pill"
-          variant="primary"
-          size="xs"
-          class="rounded-full"
-          label={t("dictionary.lookUp")}
-          onPress={() => {
-            closeSentencePopover("cancel");
-            void selection.triggerLookup();
-          }}
-        />
-      </AnchoredPopover>
+        onPressDown={() => selection.beginPillPress()}
+        onEndPress={() => selection.endPillPress()}
+        onPress={() => {
+          closeSentencePopover("cancel");
+          void selection.triggerLookup();
+        }}
+        onDismiss={() => selection.clear()}
+      />
       <View
         testID="quick-translate-sentence-announcement"
         role="summary"

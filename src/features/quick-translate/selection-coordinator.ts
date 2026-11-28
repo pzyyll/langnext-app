@@ -16,6 +16,7 @@ import type {
 import type { QuickTranslateSession } from "./session";
 
 const SELECTION_PILL_DEBOUNCE_MS = 180;
+const EMPTY_SELECTION_CLEAR_GRACE_MS = 220;
 
 export interface ActiveLookupSelection {
   region: QuickTranslateSelectionRegion | "drawer";
@@ -40,6 +41,8 @@ export interface DictionarySelectionCoordinator {
     },
   ) => void;
   selectionMenu: () => QuickTranslateSelectionMenu | undefined;
+  beginPillPress: () => void;
+  endPillPress: () => void;
   triggerLookup: () => boolean;
   clear: () => void;
   suppressPill: () => void;
@@ -49,11 +52,17 @@ export interface DictionarySelectionCoordinator {
 export function createDictionarySelectionCoordinator(options: {
   session: QuickTranslateSession;
   isSuppressed?: Accessor<boolean>;
+  isConfigured?: Accessor<boolean>;
   onBeforeLookup?: () => void;
 }): DictionarySelectionCoordinator {
   const activeSelection = signal<ActiveLookupSelection | null>(null);
   const pillVisible = signal(false);
   let debounceTimer: ReturnType<typeof setTimeout> | null = null;
+  let emptyClearTimer: ReturnType<typeof setTimeout> | null = null;
+  let pillPressed = false;
+
+  const configured = () =>
+    options.isConfigured ? options.isConfigured() : isDictionaryConfigured(dictionaryChannels);
 
   const clearTimer = () => {
     if (debounceTimer !== null) {
@@ -62,8 +71,17 @@ export function createDictionarySelectionCoordinator(options: {
     }
   };
 
+  const clearEmptyTimer = () => {
+    if (emptyClearTimer !== null) {
+      clearTimeout(emptyClearTimer);
+      emptyClearTimer = null;
+    }
+  };
+
   const suppressPill = () => {
     clearTimer();
+    clearEmptyTimer();
+    pillPressed = false;
     if (untracked(pillVisible)) pillVisible.set(false);
   };
 
@@ -78,23 +96,49 @@ export function createDictionarySelectionCoordinator(options: {
 
   cleanup(() => {
     clearTimer();
+    clearEmptyTimer();
     options.session.notifyOverlayOpenChange("dictionary-pill", false);
   });
+
+  const scheduleEmptyClear = () => {
+    if (emptyClearTimer !== null) return;
+    emptyClearTimer = setTimeout(() => {
+      emptyClearTimer = null;
+      if (!pillPressed) clear();
+    }, EMPTY_SELECTION_CLEAR_GRACE_MS);
+  };
+
+  const beginPillPress = () => {
+    if (!untracked(pillVisible)) return;
+    pillPressed = true;
+    clearEmptyTimer();
+  };
+
+  const endPillPress = () => {
+    if (!pillPressed) return;
+    pillPressed = false;
+    scheduleEmptyClear();
+  };
 
   const handleSelection: DictionarySelectionCoordinator["handleSelection"] = (
     region,
     event,
     meta,
   ) => {
-    if (!isDictionaryConfigured(dictionaryChannels)) {
+    if (!configured()) {
       clear();
       return;
     }
-    if (!event || !event.text || !isSelectionLookupCandidate(event.text)) {
-      clear();
+    if (!event || !event.text) {
+      // Desktop pointer-down on the floating pill clears native selection before onPress fires.
+      if (!untracked(pillVisible)) {
+        clear();
+        return;
+      }
+      if (!pillPressed) scheduleEmptyClear();
       return;
     }
-    if (options.isSuppressed?.()) {
+    if (!isSelectionLookupCandidate(event.text) || options.isSuppressed?.()) {
       clear();
       return;
     }
@@ -119,6 +163,8 @@ export function createDictionarySelectionCoordinator(options: {
     const pageBounds = event.pageBounds ?? null;
 
     clearTimer();
+    clearEmptyTimer();
+    pillPressed = false;
     pillVisible.set(false);
     activeSelection.set({
       region,
@@ -139,7 +185,7 @@ export function createDictionarySelectionCoordinator(options: {
 
   const triggerLookup = () => {
     const selection = activeSelection();
-    if (!selection || !isDictionaryConfigured(dictionaryChannels)) return false;
+    if (!selection || !configured()) return false;
     options.onBeforeLookup?.();
     clear();
     options.session.handleLookupSelection(
@@ -155,7 +201,7 @@ export function createDictionarySelectionCoordinator(options: {
   };
 
   const selectionMenu = () => {
-    if (!isDictionaryConfigured(dictionaryChannels)) return undefined;
+    if (!configured()) return undefined;
     return [
       {
         label: t("dictionary.lookUp"),
@@ -172,6 +218,8 @@ export function createDictionarySelectionCoordinator(options: {
     pillAnchor: () => (pillVisible() ? (activeSelection()?.pageBounds ?? null) : null),
     handleSelection,
     selectionMenu,
+    beginPillPress,
+    endPillPress,
     triggerLookup,
     clear,
     suppressPill,
