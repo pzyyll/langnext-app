@@ -6158,7 +6158,8 @@ test("dictionary inline: shows phonetic and See dictionary in source toolbar and
     ),
   ).toBe(false);
   expect(app.texts()).toContain("短生植物");
-  expect(app.texts()).toContain("noun: ephemerality");
+  expect(app.shows("id:quick-translate-dictionary-drawer-forms >> text:noun")).toBe(true);
+  expect(app.shows("id:quick-translate-dictionary-drawer-forms >> text:ephemerality")).toBe(true);
   expect(app.texts()).toContain("transient");
   expect(app.requests().filter((req) => req.url.includes("dict.test"))).toHaveLength(
     dictRequestsBeforeOpen,
@@ -6490,6 +6491,10 @@ test("dictionary drawer: localizes US/UK phonetic labels to zh-CN and renders sp
                     { label: "UK", ipa: "/həˈləʊ/" },
                   ],
                   senses: [{ partOfSpeech: "int.", glosses: ["你好", "喂"] }],
+                  forms: [
+                    { label: "third-person singular", value: "produces" },
+                    { label: "past", value: "produced" },
+                  ],
                 }),
               },
             },
@@ -6522,4 +6527,18 @@ test("dictionary drawer: localizes US/UK phonetic labels to zh-CN and renders sp
       "id:quick-translate-dictionary-drawer-phonetics >> id:quick-translate-dictionary-drawer-speak",
     ),
   ).toBe(false);
+  expect(app.shows("id:quick-translate-dictionary-drawer-forms >> text:词形变化")).toBe(true);
+  expect(app.shows("id:quick-translate-dictionary-drawer-forms >> text:第三人称")).toBe(true);
+  expect(app.shows("id:quick-translate-dictionary-drawer-forms >> text:produces")).toBe(true);
+  expect(app.shows("id:quick-translate-dictionary-drawer-forms >> text:过去式")).toBe(true);
+  expect(app.shows("id:quick-translate-dictionary-drawer-forms >> text:produced")).toBe(true);
+  expect(app.shows("id:quick-translate-dictionary-drawer >> text:third-person singular")).toBe(
+    false,
+  );
+  expect(app.shows("id:quick-translate-dictionary-drawer >> text:past")).toBe(false);
+  const firstFormLayout = app.layout("id:quick-translate-dictionary-drawer-forms >> text:第三人称");
+  const secondFormLayout = app.layout("id:quick-translate-dictionary-drawer-forms >> text:过去式");
+  expect(firstFormLayout).not.toBeNull();
+  expect(secondFormLayout).not.toBeNull();
+  expect(secondFormLayout!.y).toBeGreaterThan(firstFormLayout!.y);
 });

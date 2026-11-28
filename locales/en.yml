@@ -505,6 +505,19 @@ dictionary:
     us: US
     uk: UK
   forms: Forms
+  form:
+    plural: plural
+    singular: singular
+    past: past
+    pastParticiple: past participle
+    presentParticiple: present participle
+    thirdPerson: third-person singular
+    comparative: comparative
+    superlative: superlative
+    noun: noun
+    verb: verb
+    adjective: adjective
+    adverb: adverb
   synonyms: Synonyms
   back: Back
   close: Close

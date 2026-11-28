@@ -505,6 +505,19 @@ dictionary:
     us: 美
     uk: 英
   forms: 词形变化
+  form:
+    plural: 复数
+    singular: 单数
+    past: 过去式
+    pastParticiple: 过去分词
+    presentParticiple: 现在分词
+    thirdPerson: 第三人称
+    comparative: 比较级
+    superlative: 最高级
+    noun: 名词
+    verb: 动词
+    adjective: 形容词
+    adverb: 副词
   synonyms: 近义词
   back: 返回
   close: 关闭

@@ -13,11 +13,46 @@ export interface DictionaryEntryViewProps {
   selectionMenu?: QuickTranslateSelectionMenu;
 }
 
+const FORM_LABEL_KEYS: Readonly<Record<string, string>> = {
+  plural: "dictionary.form.plural",
+  singular: "dictionary.form.singular",
+  past: "dictionary.form.past",
+  "past tense": "dictionary.form.past",
+  "past simple": "dictionary.form.past",
+  "past participle": "dictionary.form.pastParticiple",
+  "present participle": "dictionary.form.presentParticiple",
+  gerund: "dictionary.form.presentParticiple",
+  "third person singular": "dictionary.form.thirdPerson",
+  "third person": "dictionary.form.thirdPerson",
+  "3rd person singular": "dictionary.form.thirdPerson",
+  "3rd person": "dictionary.form.thirdPerson",
+  "present tense third person singular": "dictionary.form.thirdPerson",
+  comparative: "dictionary.form.comparative",
+  superlative: "dictionary.form.superlative",
+  noun: "dictionary.form.noun",
+  verb: "dictionary.form.verb",
+  adjective: "dictionary.form.adjective",
+  adj: "dictionary.form.adjective",
+  adverb: "dictionary.form.adverb",
+  adv: "dictionary.form.adverb",
+};
+
 function formatPhoneticLabel(label: string): string {
   const normalized = label.trim().toUpperCase();
   if (normalized === "US") return t("dictionary.phonetic.us");
   if (normalized === "UK") return t("dictionary.phonetic.uk");
   return label;
+}
+
+function formatFormLabel(label: string): string {
+  const normalized = label
+    .trim()
+    .replace(/[:：]$/, "")
+    .toLowerCase()
+    .replace(/[_-]+/g, " ")
+    .replace(/\s+/g, " ");
+  const key = FORM_LABEL_KEYS[normalized];
+  return key ? t(key) : label.trim();
 }
 
 /** Structured lexical dictionary entry body rendered inside the docked dictionary drawer. */
@@ -123,11 +158,25 @@ export function DictionaryEntryView(props: DictionaryEntryViewProps) {
       </View>
 
       <If when={forms().length > 0}>
-        <View class="flex-row flex-wrap items-center gap-x-2.5 gap-y-1">
+        <View testID={`${props.testIdPrefix}-forms`} class="gap-1">
           <Text class="text-xs font-medium text-muted-foreground">{t("dictionary.forms")}</Text>
-          {forms().map((form) => (
-            <Text class="text-xs text-foreground">{`${form.label}: ${form.value}`}</Text>
-          ))}
+          <View class="gap-1">
+            {forms().map((form) => (
+              <View class="flex-row items-baseline gap-3">
+                <Text class="min-w-20 shrink-0 text-xs text-muted-foreground">
+                  {formatFormLabel(form.label)}
+                </Text>
+                <View
+                  selectable
+                  class="min-w-0 flex-1"
+                  onSelectionChange={(event) => props.onSelectionChange?.(event, form.value)}
+                  selectionMenu={props.selectionMenu}
+                >
+                  <Text class="text-xs text-foreground">{form.value}</Text>
+                </View>
+              </View>
+            ))}
+          </View>
         </View>
       </If>
 
