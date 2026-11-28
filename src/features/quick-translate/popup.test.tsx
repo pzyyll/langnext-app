@@ -6173,6 +6173,20 @@ test("dictionary inline: shows phonetic and See dictionary in source toolbar and
       app.requests().filter((request) => request.url === GOOGLE_CLOUD_TTS_URL).length ===
       ttsCountBeforeDrawerSpeak + 1,
   );
+
+  await app.waitFor("label:Resize dictionary panel");
+  const initialDrawer = app.layout("id:quick-translate-dictionary-drawer")!;
+  await app.drag("label:Resize dictionary panel", { y: 70 });
+  await app.waitUntil(
+    () =>
+      (app.layout("id:quick-translate-dictionary-drawer")?.height ?? initialDrawer.height) <
+      initialDrawer.height - 30,
+  );
+  const shrunkHeight = app.layout("id:quick-translate-dictionary-drawer")!.height;
+  await app.drag("label:Resize dictionary panel", { y: -70 });
+  await app.waitUntil(
+    () => (app.layout("id:quick-translate-dictionary-drawer")?.height ?? 0) > shrunkHeight + 30,
+  );
 });
 
 test("dictionary inline: hides link until entry resolves, hides silently on error/not_found, and discards stale responses after clear", async () => {

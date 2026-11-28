@@ -1,6 +1,5 @@
 import {
   mount,
-  Scroll,
   signal,
   Storage,
   Text,
@@ -52,6 +51,7 @@ import { QuickTranslateFooter, QuickTranslatePopup, type QuickTranslateOcrStatus
 import { createDictionarySelectionCoordinator } from "../selection-coordinator";
 import { createQuickTranslateSession, type QuickTranslateSessionOptions } from "../session";
 import { createQuickSpeechCoordinator } from "../speech";
+import { MIN_DICTIONARY_DRAWER_HEIGHT, QuickTranslateSplitLayout } from "../split-layout";
 
 export type HarnessMode =
   | "live"
@@ -94,7 +94,13 @@ function PopupSessionView(
   const speech = createQuickSpeechCoordinator({ session });
   const selection = createDictionarySelectionCoordinator({ session });
   const scrollRevision = signal(0);
+  const naturalDrawerHeight = signal(MIN_DICTIONARY_DRAWER_HEIGHT);
+  const manualDrawerHeight = signal<number | null>(null);
   let lastScrollOffset = { x: 0, y: 0 };
+  const isDrawerOpen = () => {
+    const drawer = session.dictionaryDrawer();
+    return drawer.open && drawer.active !== null;
+  };
   return (
     <Card class="min-h-0 flex-1 gap-0 overflow-hidden p-0">
       <View class="shrink-0 flex-row items-center justify-between border-b border-border px-4 py-2">
@@ -110,41 +116,47 @@ function PopupSessionView(
           onTargetOpenChange={(open) => session.notifyOverlayOpenChange("target-language", open)}
         />
       </View>
-      <Scroll
-        testID="harness-popup-scroll"
-        class="min-h-0 flex-1"
+      <QuickTranslateSplitLayout
+        scrollTestID="harness-popup-scroll"
         onScroll={({ offset }) => {
           if (offset.x === lastScrollOffset.x && offset.y === lastScrollOffset.y) return;
           lastScrollOffset = offset;
           scrollRevision.update((revision) => revision + 1);
         }}
-      >
-        <QuickTranslatePopup
-          session={session}
-          markdownEnabled={props.preferences?.preferences().markdownEnabled ?? false}
-          ocrState={props.ocrState}
-          scrollRevision={() => scrollRevision()}
-          windowVisible={props.windowVisible}
-          speech={speech}
-          selection={selection}
-        />
-      </Scroll>
-      <DockedDictionaryDrawer
-        state={session.dictionaryDrawer()}
-        speech={speech}
-        onBack={session.handleLookupBack}
-        onPromote={session.handlePromoteDictionaryTerm}
-        onClose={session.handleCloseDictionaryDrawer}
-        onRetry={session.handleRetryDictionaryDrawer}
-        ankiEnabled={session.ankiEnabled()}
-        onAddToAnki={session.handleAddDrawerDictionaryToAnki}
-        onDrillDown={(term) =>
-          session.handleLookupSelection({ term, region: "drawer" }, { drillDown: true })
+        content={
+          <QuickTranslatePopup
+            session={session}
+            markdownEnabled={props.preferences?.preferences().markdownEnabled ?? false}
+            ocrState={props.ocrState}
+            scrollRevision={() => scrollRevision()}
+            windowVisible={props.windowVisible}
+            speech={speech}
+            selection={selection}
+          />
         }
-        onSelectionChange={(event, fullText) =>
-          selection.handleSelection("drawer", event, { fullText })
+        drawerOpen={isDrawerOpen()}
+        drawerSize={manualDrawerHeight() ?? naturalDrawerHeight()}
+        onDrawerResize={(height) => manualDrawerHeight.set(height)}
+        drawer={
+          <DockedDictionaryDrawer
+            state={session.dictionaryDrawer()}
+            speech={speech}
+            onBack={session.handleLookupBack}
+            onPromote={session.handlePromoteDictionaryTerm}
+            onClose={session.handleCloseDictionaryDrawer}
+            onRetry={session.handleRetryDictionaryDrawer}
+            ankiEnabled={session.ankiEnabled()}
+            onAddToAnki={session.handleAddDrawerDictionaryToAnki}
+            onDrillDown={(term) =>
+              session.handleLookupSelection({ term, region: "drawer" }, { drillDown: true })
+            }
+            onSelectionChange={(event, fullText) =>
+              selection.handleSelection("drawer", event, { fullText })
+            }
+            selectionMenu={selection.selectionMenu()}
+            onLayoutHeight={(height) => naturalDrawerHeight.set(height)}
+          />
         }
-        selectionMenu={selection.selectionMenu()}
       />
       <QuickTranslateFooter session={session} />
     </Card>

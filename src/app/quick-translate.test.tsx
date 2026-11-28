@@ -4839,6 +4839,21 @@ test("dictionary window: docks drawer between scroll and footer, supports histor
   const winState = app.window("quick-translate").state()!;
   expect(winState.contentBounds.size.height).toBeLessThanOrEqual(760);
 
+  await app.waitFor("label:Resize dictionary panel");
+  const initialDrawerHeight = app.layout("id:quick-translate-dictionary-drawer")!.height;
+  await app.drag("label:Resize dictionary panel", { y: -70 });
+  await app.waitUntil(
+    () =>
+      (app.layout("id:quick-translate-dictionary-drawer")?.height ?? 0) > initialDrawerHeight + 30,
+  );
+  const tallerDrawerHeight = app.layout("id:quick-translate-dictionary-drawer")!.height;
+  await app.drag("label:Resize dictionary panel", { y: 110 });
+  await app.waitUntil(
+    () =>
+      (app.layout("id:quick-translate-dictionary-drawer")?.height ?? tallerDrawerHeight) <
+      tallerDrawerHeight - 30,
+  );
+
   // Layered Escape: closes drawer first while window remains visible, then next Escape closes window.
   await app.keyboard.press("escape");
   await app.waitUntil(() => !app.shows("id:quick-translate-dictionary-drawer"));

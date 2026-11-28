@@ -522,6 +522,7 @@ dictionary:
   back: Back
   close: Close
   promoteToSource: Look up in main view
+  resizeDrawer: Resize dictionary panel
   notFound: 'No entry found for "%{term}".'
   error:
     unconfigured: Configure a dictionary model in Settings.

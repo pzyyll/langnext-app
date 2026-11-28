@@ -1,4 +1,4 @@
-import { Scroll, Text, View } from "nsh";
+import { effect, Scroll, signal, Text, View } from "nsh";
 import { t } from "nsh/i18n";
 import { motion } from "../../components/motion";
 import { Button } from "../../components/ui/button";
@@ -15,6 +15,10 @@ import type {
 } from "./selection-types";
 import { SpeakerButton } from "./speaker-button";
 import type { QuickSpeechCoordinator } from "./speech";
+import { DEFAULT_DICTIONARY_DRAWER_HEIGHT, MIN_DICTIONARY_DRAWER_HEIGHT } from "./split-layout";
+
+const INITIAL_DRAWER_TOP_HEIGHT = 34;
+const INITIAL_DRAWER_BODY_HEIGHT = 54;
 
 export interface DictionaryDrawerQuery {
   term: string;
@@ -67,102 +71,117 @@ export function DockedDictionaryDrawer(props: DockedDictionaryDrawerProps) {
     return current?.status === "not_found" ? current : null;
   };
   const displayTerm = () => entryState()?.entry.term ?? active()?.query.term ?? "";
+  const topSectionHeight = signal(INITIAL_DRAWER_TOP_HEIGHT);
+  const bodyContentHeight = signal(INITIAL_DRAWER_BODY_HEIGHT);
+
+  effect(() => {
+    if (!props.state.open || active() === null) return;
+    const clamped = Math.max(
+      MIN_DICTIONARY_DRAWER_HEIGHT,
+      Math.min(
+        DEFAULT_DICTIONARY_DRAWER_HEIGHT,
+        Math.ceil(topSectionHeight() + bodyContentHeight()),
+      ),
+    );
+    props.onLayoutHeight?.(clamped);
+  });
 
   return (
     <If when={props.state.open && active() !== null}>
-      <View
-        testID="quick-translate-dictionary-drawer"
-        class="shrink-0 border-t border-border bg-surface-subtle/80"
-        onLayout={({ bounds }) => props.onLayoutHeight?.(bounds.size.height)}
-      >
-        <View
-          testID="quick-translate-dictionary-drawer-header"
-          class="flex-row items-center justify-between gap-2 px-4 pt-2 pb-1"
-        >
-          <View class="min-w-0 flex-1 flex-row items-center gap-1.5">
-            <If when={props.state.canGoBack}>
+      <View testID="quick-translate-dictionary-drawer" class="min-h-0 flex-1 bg-surface-subtle/80">
+        <View class="shrink-0" onLayout={({ bounds }) => topSectionHeight.set(bounds.size.height)}>
+          <View
+            testID="quick-translate-dictionary-drawer-header"
+            class="flex-row items-center justify-between gap-2 px-4 pt-2 pb-1"
+          >
+            <View class="min-w-0 flex-1 flex-row items-center gap-1.5">
+              <If when={props.state.canGoBack}>
+                <Button
+                  testID="quick-translate-dictionary-drawer-back"
+                  variant="ghost"
+                  size="icon-xs"
+                  accessibilityLabel={t("dictionary.back")}
+                  tooltip={t("dictionary.back")}
+                  onPress={props.onBack}
+                >
+                  <Icon name="mdi:arrow-left" tone="muted-foreground" class="size-3.5" />
+                </Button>
+              </If>
+              <Icon
+                name="mdi:book-open-variant-outline"
+                tone="muted-foreground"
+                class="size-3.5 shrink-0"
+              />
+              <Text
+                testID="quick-translate-dictionary-drawer-term"
+                class="min-w-0 shrink truncate text-sm font-semibold text-foreground"
+              >
+                {displayTerm()}
+              </Text>
+              <If when={entryState() !== null}>
+                <SpeakerButton
+                  testID="quick-translate-dictionary-drawer-speak"
+                  control={props.speech.control("drawer-dictionary")}
+                  onPress={() => props.speech.toggle("drawer-dictionary")}
+                />
+              </If>
+            </View>
+
+            <View class="shrink-0 flex-row items-center gap-0.5">
               <Button
-                testID="quick-translate-dictionary-drawer-back"
+                testID="quick-translate-dictionary-drawer-promote"
                 variant="ghost"
                 size="icon-xs"
-                accessibilityLabel={t("dictionary.back")}
-                tooltip={t("dictionary.back")}
-                onPress={props.onBack}
+                accessibilityLabel={t("dictionary.promoteToSource")}
+                tooltip={t("dictionary.promoteToSource")}
+                onPress={props.onPromote}
               >
-                <Icon name="mdi:arrow-left" tone="muted-foreground" class="size-3.5" />
+                <Icon name="mdi:arrow-top-left" tone="muted-foreground" class="size-3.5" />
               </Button>
-            </If>
-            <Icon
-              name="mdi:book-open-variant-outline"
-              tone="muted-foreground"
-              class="size-3.5 shrink-0"
-            />
-            <Text
-              testID="quick-translate-dictionary-drawer-term"
-              class="min-w-0 shrink truncate text-sm font-semibold text-foreground"
-            >
-              {displayTerm()}
-            </Text>
-            <If when={entryState() !== null}>
-              <SpeakerButton
-                testID="quick-translate-dictionary-drawer-speak"
-                control={props.speech.control("drawer-dictionary")}
-                onPress={() => props.speech.toggle("drawer-dictionary")}
-              />
-            </If>
+              <If when={Boolean(props.ankiEnabled && props.onAddToAnki && entryState() !== null)}>
+                <AnkiAddButton
+                  testID="quick-translate-dictionary-drawer-add-anki"
+                  anki={entryState()!.anki}
+                  onPress={() => props.onAddToAnki?.()}
+                />
+              </If>
+              <Button
+                testID="quick-translate-dictionary-drawer-close"
+                variant="ghost"
+                size="icon-xs"
+                accessibilityLabel={t("dictionary.close")}
+                tooltip={t("dictionary.close")}
+                onPress={props.onClose}
+              >
+                <Icon name="mdi:close" tone="muted-foreground" class="size-3.5" />
+              </Button>
+            </View>
           </View>
 
-          <View class="shrink-0 flex-row items-center gap-0.5">
-            <Button
-              testID="quick-translate-dictionary-drawer-promote"
-              variant="ghost"
-              size="icon-xs"
-              accessibilityLabel={t("dictionary.promoteToSource")}
-              tooltip={t("dictionary.promoteToSource")}
-              onPress={props.onPromote}
+          <If when={entryState() !== null && entryState()!.anki.status === "error"}>
+            <AnkiStatusText
+              testID="quick-translate-dictionary-drawer-anki-status"
+              anki={entryState()!.anki}
+              class="px-4 pt-1.5"
+            />
+          </If>
+
+          <If when={props.speech.drawerDictionaryError() !== null}>
+            <Text
+              testID="quick-translate-dictionary-drawer-speak-error"
+              role="alert"
+              class="px-4 pt-1.5 text-xs text-destructive"
             >
-              <Icon name="mdi:arrow-top-left" tone="muted-foreground" class="size-3.5" />
-            </Button>
-            <If when={Boolean(props.ankiEnabled && props.onAddToAnki && entryState() !== null)}>
-              <AnkiAddButton
-                testID="quick-translate-dictionary-drawer-add-anki"
-                anki={entryState()!.anki}
-                onPress={() => props.onAddToAnki?.()}
-              />
-            </If>
-            <Button
-              testID="quick-translate-dictionary-drawer-close"
-              variant="ghost"
-              size="icon-xs"
-              accessibilityLabel={t("dictionary.close")}
-              tooltip={t("dictionary.close")}
-              onPress={props.onClose}
-            >
-              <Icon name="mdi:close" tone="muted-foreground" class="size-3.5" />
-            </Button>
-          </View>
+              {props.speech.drawerDictionaryError() ?? ""}
+            </Text>
+          </If>
         </View>
 
-        <If when={entryState() !== null && entryState()!.anki.status === "error"}>
-          <AnkiStatusText
-            testID="quick-translate-dictionary-drawer-anki-status"
-            anki={entryState()!.anki}
-            class="px-4 pt-1.5"
-          />
-        </If>
-
-        <If when={props.speech.drawerDictionaryError() !== null}>
-          <Text
-            testID="quick-translate-dictionary-drawer-speak-error"
-            role="alert"
-            class="px-4 pt-1.5 text-xs text-destructive"
+        <Scroll class="min-h-0 flex-1">
+          <View
+            class="px-4 pt-1 pb-2.5"
+            onLayout={({ bounds }) => bodyContentHeight.set(bounds.size.height)}
           >
-            {props.speech.drawerDictionaryError() ?? ""}
-          </Text>
-        </If>
-
-        <Scroll class="min-h-0 max-h-44">
-          <View class="px-4 pt-1 pb-2.5">
             <If when={active()?.status === "loading"}>
               <View
                 testID="quick-translate-dictionary-drawer-loading"

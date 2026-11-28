@@ -4,9 +4,9 @@ import {
   computed,
   effect,
   platform,
-  Scroll,
   signal,
   token,
+  untracked,
   View,
   type ViewRef,
 } from "nsh";
@@ -23,6 +23,13 @@ import { DockedDictionaryDrawer } from "../features/quick-translate/dictionary-d
 import { QuickTranslateFooter, QuickTranslatePopup } from "../features/quick-translate/popup";
 import { createDictionarySelectionCoordinator } from "../features/quick-translate/selection-coordinator";
 import { createQuickSpeechCoordinator } from "../features/quick-translate/speech";
+import {
+  DEFAULT_DICTIONARY_DRAWER_HEIGHT,
+  MAX_DICTIONARY_DRAWER_HEIGHT,
+  MIN_DICTIONARY_DRAWER_HEIGHT,
+  MIN_STREAM_PANEL_HEIGHT,
+  QuickTranslateSplitLayout,
+} from "../features/quick-translate/split-layout";
 import {
   autoTranslatePreference,
   doubleCopyEnabled,
@@ -192,7 +199,8 @@ function QuickTranslateWindowBody(props: {
   const isCurrentWindow = computed(() => props.controller.attachedWindow() === win);
   const headerHeight = signal(0);
   const contentHeight = signal(0);
-  const drawerHeight = signal(0);
+  const naturalDrawerHeight = signal(MIN_DICTIONARY_DRAWER_HEIGHT);
+  const manualDrawerHeight = signal<number | null>(null);
   const footerHeight = signal(0);
   const scrollRevision = signal(0);
   const headerOverlays = signal<Readonly<Record<string, boolean>>>({});
@@ -208,11 +216,22 @@ function QuickTranslateWindowBody(props: {
     playbackAllowed: () => props.controller.attachedWindow()?.state()?.visible === true,
   });
   const selection = createDictionarySelectionCoordinator({ session });
-  effect(() => {
-    if (!session.dictionaryDrawer().open && drawerHeight() !== 0) {
-      drawerHeight.set(0);
-    }
-  });
+  const isDrawerOpen = () => {
+    const drawer = session.dictionaryDrawer();
+    return drawer.open && drawer.active !== null;
+  };
+  const maxDrawerHeight = () => {
+    const workHeight = win.state()?.display?.visibleBounds.size.height;
+    if (!workHeight) return MAX_DICTIONARY_DRAWER_HEIGHT;
+    return Math.max(
+      DEFAULT_DICTIONARY_DRAWER_HEIGHT,
+      Math.min(
+        MAX_DICTIONARY_DRAWER_HEIGHT,
+        Math.floor(workHeight - headerHeight() - footerHeight() - MIN_STREAM_PANEL_HEIGHT),
+      ),
+    );
+  };
+  const activeDrawerSize = () => manualDrawerHeight() ?? naturalDrawerHeight();
   let lastScrollOffset = { x: 0, y: 0 };
   let fitId = 0;
   const markdownActionLabel = () =>
@@ -261,7 +280,7 @@ function QuickTranslateWindowBody(props: {
     if (!isCurrentWindow()) return;
     const header = headerHeight();
     const content = contentHeight();
-    const drawer = session.dictionaryDrawer().open ? drawerHeight() : 0;
+    const drawer = isDrawerOpen() ? (untracked(manualDrawerHeight) ?? naturalDrawerHeight()) : 0;
     const footer = footerHeight();
     const ready = readyToFit();
     if (!ready || header <= 0 || content <= 0 || footer <= 0) {
@@ -425,24 +444,19 @@ function QuickTranslateWindowBody(props: {
           </If>
         </View>
       </View>
-      <Scroll
-        testID="quick-translate-scroll"
-        class="min-h-0 flex-1"
+      <QuickTranslateSplitLayout
+        scrollTestID="quick-translate-scroll"
         onScroll={({ offset }) => {
           if (offset.x === lastScrollOffset.x && offset.y === lastScrollOffset.y) return;
           lastScrollOffset = offset;
           scrollRevision.update((revision) => revision + 1);
         }}
-      >
-        {/* Measure the natural content height, not the scroll viewport. */}
-        <View
-          class="shrink-0"
-          onLayout={({ bounds }) => {
-            if (!isCurrentWindow()) return;
-            props.controller.traceHeightFit("content-layout", { size: bounds.size });
-            contentHeight.set(bounds.size.height);
-          }}
-        >
+        onContentLayout={(bounds) => {
+          if (!isCurrentWindow()) return;
+          props.controller.traceHeightFit("content-layout", { size: bounds.size });
+          contentHeight.set(bounds.size.height);
+        }}
+        content={
           <QuickTranslatePopup
             session={session}
             markdownEnabled={markdownEnabledPreference()}
@@ -466,25 +480,31 @@ function QuickTranslateWindowBody(props: {
             selection={selection}
             externalOverlayOpen={() => Object.values(headerOverlays()).some(Boolean)}
           />
-        </View>
-      </Scroll>
-      <DockedDictionaryDrawer
-        state={session.dictionaryDrawer()}
-        speech={speech}
-        onBack={session.handleLookupBack}
-        onPromote={session.handlePromoteDictionaryTerm}
-        onClose={session.handleCloseDictionaryDrawer}
-        onRetry={session.handleRetryDictionaryDrawer}
-        ankiEnabled={session.ankiEnabled()}
-        onAddToAnki={session.handleAddDrawerDictionaryToAnki}
-        onDrillDown={(term) =>
-          session.handleLookupSelection({ term, region: "drawer" }, { drillDown: true })
         }
-        onSelectionChange={(event, fullText) =>
-          selection.handleSelection("drawer", event, { fullText })
+        drawerOpen={isDrawerOpen()}
+        drawerSize={activeDrawerSize()}
+        maxDrawerHeight={maxDrawerHeight()}
+        onDrawerResize={(height) => manualDrawerHeight.set(height)}
+        drawer={
+          <DockedDictionaryDrawer
+            state={session.dictionaryDrawer()}
+            speech={speech}
+            onBack={session.handleLookupBack}
+            onPromote={session.handlePromoteDictionaryTerm}
+            onClose={session.handleCloseDictionaryDrawer}
+            onRetry={session.handleRetryDictionaryDrawer}
+            ankiEnabled={session.ankiEnabled()}
+            onAddToAnki={session.handleAddDrawerDictionaryToAnki}
+            onDrillDown={(term) =>
+              session.handleLookupSelection({ term, region: "drawer" }, { drillDown: true })
+            }
+            onSelectionChange={(event, fullText) =>
+              selection.handleSelection("drawer", event, { fullText })
+            }
+            selectionMenu={selection.selectionMenu()}
+            onLayoutHeight={(height) => naturalDrawerHeight.set(height)}
+          />
         }
-        selectionMenu={selection.selectionMenu()}
-        onLayoutHeight={(height) => drawerHeight.set(height)}
       />
       <View class="shrink-0" onLayout={({ bounds }) => footerHeight.set(bounds.size.height)}>
         <QuickTranslateFooter session={session} />
