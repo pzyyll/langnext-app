@@ -24,7 +24,7 @@ export function AnkiAddButton(props: { testID: string; anki: CardAnkiState; onPr
       size="icon-xs"
       variant="ghost"
       tooltip={tooltip()}
-      accessibilityLabel={t("quickTranslate.ankiAdd")}
+      accessibilityLabel={tooltip()}
       onPress={props.onPress}
     >
       <Icon

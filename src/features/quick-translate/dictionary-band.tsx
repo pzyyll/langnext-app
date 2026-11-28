@@ -163,7 +163,7 @@ export function InlineDictionaryBand(props: InlineDictionaryBandProps) {
               </Button>
             </View>
 
-            <If when={entryState()!.anki.status !== "idle"}>
+            <If when={entryState()!.anki.status === "error"}>
               <AnkiStatusText
                 testID="quick-translate-dictionary-inline-anki-status"
                 anki={entryState()!.anki}

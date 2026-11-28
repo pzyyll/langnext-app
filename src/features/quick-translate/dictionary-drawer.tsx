@@ -155,7 +155,7 @@ export function DockedDictionaryDrawer(props: DockedDictionaryDrawerProps) {
           </View>
         </View>
 
-        <If when={entryState() !== null && entryState()!.anki.status !== "idle"}>
+        <If when={entryState() !== null && entryState()!.anki.status === "error"}>
           <AnkiStatusText
             testID="quick-translate-dictionary-drawer-anki-status"
             anki={entryState()!.anki}
