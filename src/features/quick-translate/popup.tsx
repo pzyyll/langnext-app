@@ -2069,7 +2069,7 @@ export function QuickTranslatePopup(props: QuickTranslatePopupProps) {
     isDictionaryConfigured(dictionaryChannels) &&
     !showingHistory() &&
     isInlineLexicalQuery(sourceText()) &&
-    props.session.sourceDictionary().status !== "not_found" &&
+    props.session.sourceDictionary().status === "entry" &&
     sourceSpeechError() === null &&
     !hasToolbarStatus();
   const hasSourceToolbar = () => hasSourceText() || hasToolbarStatus();
@@ -2140,19 +2140,22 @@ export function QuickTranslatePopup(props: QuickTranslatePopupProps) {
                 {sourceDictionaryPhonetic()}
               </Text>
             </If>
-            <Button
+            <View
               testID="quick-translate-dictionary-open"
-              variant="brand-ghost"
-              size="xs"
-              class="shrink-0 px-1.5"
-              label={t("dictionary.seeDictionary")}
+              role="link"
+              focusable
               accessibilityLabel={t("dictionary.seeDictionary")}
+              class={`shrink-0 cursor-pointer rounded-sm px-0.5 py-0.5 hover:opacity-80 active:opacity-65 focus-visible:ring-2 focus-visible:ring-ring ${motion.navigationFeedback}`}
               onPress={() => {
                 closeSentencePopover("cancel");
                 selection.clear();
                 props.session.handleOpenSourceDictionary();
               }}
-            />
+            >
+              <Text class="text-xs font-medium text-brand underline">
+                {t("dictionary.seeDictionary")}
+              </Text>
+            </View>
           </View>
         </If>
         <If when={showOcrError()}>

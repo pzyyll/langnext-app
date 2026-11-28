@@ -6109,10 +6109,18 @@ test("dictionary inline: shows phonetic and See dictionary in source toolbar and
 
   await app.waitFor("id:quick-translate-source");
   await app.type("id:quick-translate-source", "ephemeral");
+  // Not shown before dictionary lookup confirms a valid word.
+  expect(app.shows("id:quick-translate-dictionary-open")).toBe(false);
+  expect(app.shows("id:quick-translate-source-phonetic")).toBe(false);
   await app.keyboard.press("enter");
 
   await app.waitFor("id:quick-translate-source-toolbar >> text:US /ɪˈfɛmərəl/");
   expect(app.shows("id:quick-translate-source-toolbar >> id:quick-translate-dictionary-open")).toBe(
+    true,
+  );
+  expect(app.shows("role:link[See dictionary]")).toBe(true);
+  expect(app.shows("role:button[See dictionary]")).toBe(false);
+  expect(app.spanStyle("id:quick-translate-dictionary-open >> text:See dictionary").underline).toBe(
     true,
   );
   expect(app.shows("id:quick-translate-dictionary-drawer")).toBe(false);
@@ -6126,7 +6134,7 @@ test("dictionary inline: shows phonetic and See dictionary in source toolbar and
   const dictRequestsBeforeOpen = app
     .requests()
     .filter((req) => req.url.includes("dict.test")).length;
-  await app.press("id:quick-translate-dictionary-open");
+  await app.press("role:link[See dictionary]");
   await app.waitFor("id:quick-translate-dictionary-drawer >> text:Fashion is by nature ephemeral.");
   expect(app.texts()).toContain("短生植物");
   expect(app.texts()).toContain("noun: ephemerality");
@@ -6136,7 +6144,7 @@ test("dictionary inline: shows phonetic and See dictionary in source toolbar and
   );
 });
 
-test("dictionary inline: hides silently on not_found, retries via drawer on error, and discards stale responses after clear", async () => {
+test("dictionary inline: hides link until entry resolves, hides silently on error/not_found, and discards stale responses after clear", async () => {
   let dictCalls = 0;
   const app = await open(POPUP_HARNESS, {
     ...viewport,
@@ -6182,15 +6190,18 @@ test("dictionary inline: hides silently on not_found, retries via drawer on erro
 
   await app.waitFor("id:quick-translate-source");
   await app.type("id:quick-translate-source", "ephemeral");
+  expect(app.shows("id:quick-translate-dictionary-open")).toBe(false);
   await app.keyboard.press("enter");
 
   await app.waitUntil(() => dictCalls === 1);
-  expect(app.shows("id:quick-translate-dictionary-open")).toBe(true);
+  expect(app.shows("id:quick-translate-dictionary-open")).toBe(false);
   expect(app.shows("id:quick-translate-source-phonetic")).toBe(false);
 
-  // Clicking See dictionary opens the drawer cleanly and shows recovered entry once retried.
-  await app.press("id:quick-translate-dictionary-open");
+  // Resubmitting recovers the entry, revealing phonetic and See dictionary together.
+  await app.keyboard.press("enter");
   await app.waitFor("id:quick-translate-source-toolbar >> text:US /ɪˈfɛmərəl/");
+  expect(app.shows("role:link[See dictionary]")).toBe(true);
+  await app.press("role:link[See dictionary]");
   await app.waitFor("id:quick-translate-dictionary-drawer >> text:US /ɪˈfɛmərəl/");
   await app.press("id:quick-translate-dictionary-drawer-close");
 
@@ -6203,7 +6214,7 @@ test("dictionary inline: hides silently on not_found, retries via drawer on erro
   expect(app.shows("id:quick-translate-dictionary-open")).toBe(false);
   expect(app.shows("id:quick-translate-source-phonetic")).toBe(false);
 
-  // Stale in-flight response arriving after source clear is discarded.
+  // Stale in-flight response arriving after source clear is discarded, and loading does not flash the link.
   const deferredApp = await open(POPUP_HARNESS, {
     ...viewport,
     storage: dictionarySeed(
@@ -6220,7 +6231,7 @@ test("dictionary inline: hides silently on not_found, retries via drawer on erro
   await deferredApp.waitFor("id:quick-translate-source");
   await deferredApp.type("id:quick-translate-source", "ephemeral");
   await deferredApp.keyboard.press("enter");
-  await deferredApp.waitFor("id:quick-translate-dictionary-open");
+  expect(deferredApp.shows("id:quick-translate-dictionary-open")).toBe(false);
 
   await deferredApp.press("id:quick-translate-clear");
   expect(deferredApp.shows("id:quick-translate-dictionary-open")).toBe(false);

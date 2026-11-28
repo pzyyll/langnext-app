@@ -144,7 +144,7 @@ Settings → Application → Appearance → Font picks the family every window d
 
 Quick Translate supports two dictionary entry points backed by **Settings → Integrations → Dictionary**, unified in a single non-modal docked drawer:
 
-1. **Whole-word source queries:** Displays the primary phonetic beside `[🔊]` and `[See dictionary]` (`查询词典`) inside the source toolbar without repeating the headword below the input; clicking opens the docked drawer with the full structured entry (zero extra request when already cached/loaded).
+1. **Whole-word source queries:** Displays the primary phonetic beside `[🔊]` and an underlined `[See dictionary]` (`查询词典`) link inside the source toolbar only once a valid dictionary word entry resolves, without repeating the headword below the input; clicking opens the docked drawer with the full structured entry (zero extra request).
 2. **In-text selection lookups:** Highlighting a word or short phrase across the source editor, translation output, back-translation, restored history, or drawer glosses triggers a 180 ms `[Look up]` pill, `Alt+D` shortcut, or native context menu opening the same docked drawer. Settings → Dictionary reuses the shared CapabilitySection layout, breadcrumb, and `popup`/`popupHidden` add-channel dialog transitions.
 
 ### Motion Inventory
