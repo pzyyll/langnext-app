@@ -1,5 +1,9 @@
 import { Text, View } from "nsh";
 import { TextView } from "nsh/base";
+import type {
+  QuickTranslateSelectionMenu,
+  TextSelectionEventPayload,
+} from "../../features/quick-translate/selection-types";
 
 export type TranslationOutputSize = "default" | "sm";
 
@@ -18,28 +22,40 @@ export function TranslationOutput(props: {
   markdownEnabled: boolean;
   streaming: boolean;
   size?: TranslationOutputSize;
+  onSelectionChange?: (event: TextSelectionEventPayload) => void;
+  selectionMenu?: QuickTranslateSelectionMenu;
 }) {
   const outputClass = () => translationOutputClass(props.size);
   return (
     <If
       when={props.markdownEnabled}
       else={
-        <View selectable>
+        <View
+          selectable
+          onSelectionChange={props.onSelectionChange}
+          selectionMenu={props.selectionMenu}
+        >
           <Text testID={props.testID} class={outputClass()}>
             {props.text}
           </Text>
         </View>
       }
     >
-      <TextView
-        testID={props.testID}
-        class={outputClass()}
-        markdown={props.text}
-        options={{ streaming: props.streaming, html: false, math: false }}
+      <View
         selectable
-        links="report"
-        renderImage={({ alt }) => <Text>{alt}</Text>}
-      />
+        onSelectionChange={props.onSelectionChange}
+        selectionMenu={props.selectionMenu}
+      >
+        <TextView
+          testID={props.testID}
+          class={outputClass()}
+          markdown={props.text}
+          options={{ streaming: props.streaming, html: false, math: false }}
+          selectable
+          links="report"
+          renderImage={({ alt }) => <Text>{alt}</Text>}
+        />
+      </View>
     </If>
   );
 }

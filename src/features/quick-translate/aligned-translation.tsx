@@ -5,6 +5,7 @@ import {
   type TextViewDocument,
   type TextViewLinkPressEvent,
 } from "nsh/base";
+import type { QuickTranslateSelectionMenu, TextSelectionEventPayload } from "./selection-types";
 import {
   translationOutputClass,
   type TranslationOutputSize,
@@ -37,6 +38,8 @@ export interface AlignedTranslationProps {
   onHoverLeaveSegment?: (segmentId: string) => void;
   onPressSegment?: (segmentId: string, event: PressEvent) => void;
   onLinkPress?: (event: TextViewLinkPressEvent) => void;
+  onSelectionChange?: (event: TextSelectionEventPayload) => void;
+  selectionMenu?: QuickTranslateSelectionMenu;
 }
 
 interface TextPiece {
@@ -185,7 +188,12 @@ export function AlignedTranslation(props: AlignedTranslationProps) {
     <If
       when={Boolean(props.document)}
       else={
-        <View testID={props.testID ? `${props.testID}-container` : undefined} selectable>
+        <View
+          testID={props.testID ? `${props.testID}-container` : undefined}
+          selectable
+          onSelectionChange={props.onSelectionChange}
+          selectionMenu={props.selectionMenu}
+        >
           <Text testID={props.testID} class={textClass()}>
             {pieces().map((piece) => {
               const fragment = piece.fragment;
@@ -214,16 +222,23 @@ export function AlignedTranslation(props: AlignedTranslationProps) {
         </View>
       }
     >
-      <TextView
-        testID={props.testID}
-        class={textClass()}
-        document={props.document}
+      <View
+        testID={props.testID ? `${props.testID}-container` : undefined}
         selectable
-        links="report"
-        renderImage={({ alt }) => <Text>{alt}</Text>}
-        onLinkPress={props.onLinkPress}
-        renderCustom={renderCustomSegment}
-      />
+        onSelectionChange={props.onSelectionChange}
+        selectionMenu={props.selectionMenu}
+      >
+        <TextView
+          testID={props.testID}
+          class={textClass()}
+          document={props.document}
+          selectable
+          links="report"
+          renderImage={({ alt }) => <Text>{alt}</Text>}
+          onLinkPress={props.onLinkPress}
+          renderCustom={renderCustomSegment}
+        />
+      </View>
     </If>
   );
 }

@@ -10,7 +10,9 @@ import {
   history,
   keymap,
 } from "nsh/base";
-import { View, cleanup, effect, fontScale, keymap as appKeymap, signal } from "nsh";
+import { View, cleanup, effect, fontScale, keymap as appKeymap, signal, type Bounds } from "nsh";
+import { Menu } from "nsh/desktop";
+import type { QuickTranslateSelectionMenu, QuickTranslateTextSelection } from "./selection-types";
 import {
   FONT_FIT_SLACK_POINTS,
   FONT_SIZE_STEPS,
@@ -64,6 +66,8 @@ export interface QuickTranslateSourceEditorProps {
   onFocus?: () => void;
   onBlur?: () => void;
   onSelectionChange?: (selection?: { anchor: number; head: number; empty: boolean }) => void;
+  onTextSelectionChange?: (selection: QuickTranslateTextSelection | null) => void;
+  selectionMenu?: QuickTranslateSelectionMenu;
   onCompositionChange?: (composing: boolean) => void;
   onFontStepChange?: (stepIndex: number) => void;
 }
@@ -193,12 +197,60 @@ function readSessionPlainText(session: RichEditorSession): string {
   return session.textBetween(undefined, undefined, "\n");
 }
 
+interface RawPageBox {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
+function readPageBox(value: unknown): RawPageBox | null {
+  if (!value || typeof value !== "object") return null;
+  const candidate = value as Record<string, unknown>;
+  const { x, y, width, height } = candidate;
+  if (
+    typeof x === "number" &&
+    typeof y === "number" &&
+    typeof width === "number" &&
+    typeof height === "number" &&
+    Number.isFinite(x) &&
+    Number.isFinite(y) &&
+    Number.isFinite(width) &&
+    Number.isFinite(height)
+  ) {
+    return { x, y, width, height };
+  }
+  return null;
+}
+
+function unionPageBounds(fromRaw: unknown, toRaw: unknown): Bounds | null {
+  const from = readPageBox(fromRaw);
+  const to = readPageBox(toRaw);
+  if (from && to) {
+    const left = Math.min(from.x, to.x);
+    const top = Math.min(from.y, to.y);
+    const right = Math.max(from.x + from.width, to.x + to.width);
+    const bottom = Math.max(from.y + from.height, to.y + to.height);
+    return {
+      origin: { x: left, y: top },
+      size: { width: Math.max(1, right - left), height: Math.max(1, bottom - top) },
+    };
+  }
+  const single = from ?? to;
+  if (!single) return null;
+  return {
+    origin: { x: single.x, y: single.y },
+    size: { width: Math.max(1, single.width), height: Math.max(1, single.height) },
+  };
+}
+
 export function QuickTranslateSourceEditor(props: QuickTranslateSourceEditorProps) {
   let activeProjection = buildSourceProjection(props.value);
   let lastRawValue = props.value;
   let lastNormalizedValue = activeProjection.normalized;
   let syncingExternal = false;
   let editorRef: RichEditorRef | null = null;
+  let hasNonEmptySelection = false;
   // Captured keys are consumed natively and reported in a later JS turn, so the report can
   // outlive this editor (the popup collapses or rebuilds it while the user keeps typing).
   let disposed = false;
@@ -466,13 +518,39 @@ export function QuickTranslateSourceEditor(props: QuickTranslateSourceEditorProp
             contentHeight.set(contentSize.height);
           }
         }}
-        onSelectionChange={({ selection }) =>
+        onSelectionChange={({ selection }) => {
           props.onSelectionChange?.({
             anchor: selection.anchor,
             head: selection.head,
             empty: selection.empty,
-          })
-        }
+          });
+          if (selection.empty) {
+            hasNonEmptySelection = false;
+            props.onTextSelectionChange?.(null);
+            return;
+          }
+          const from = Math.min(selection.anchor, selection.head);
+          const to = Math.max(selection.anchor, selection.head);
+          const text = session.textBetween(from, to, "\n");
+          hasNonEmptySelection = text.length > 0;
+          if (!props.onTextSelectionChange) return;
+          if (!text) {
+            props.onTextSelectionChange(null);
+            return;
+          }
+          const start = session.textBetween(0, from, "\n").length;
+          props.onTextSelectionChange({
+            text,
+            start,
+            end: start + text.length,
+            pageBounds: unionPageBounds(session.pageCoordsAtPos(from), session.pageCoordsAtPos(to)),
+          });
+        }}
+        onContextMenu={(event) => {
+          if (hasNonEmptySelection && props.selectionMenu && props.selectionMenu.length > 0) {
+            void Menu.popup(props.selectionMenu, event.pagePosition);
+          }
+        }}
         onFocus={() => {
           editorFocused.set(true);
           props.onFocus?.();
