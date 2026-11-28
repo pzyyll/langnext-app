@@ -9,8 +9,8 @@ import { synthesizeSpeech } from "../tts/channels";
 import { playMp3Bytes } from "../tts/playback";
 import { prepareQuickSpeech, quickSpeechFailureMessage } from "../tts/quick-speech";
 import { ttsChannels } from "../tts/store";
-import type { DictionarySpeakControlState } from "./dictionary-drawer";
 import type { QuickTranslateSession } from "./session";
+import type { SpeakControlState } from "./speaker-button";
 
 type SpeechOwner =
   | { kind: "source"; text: string; selection: SourceLanguageId }
@@ -25,7 +25,8 @@ export type SpeechControlTarget =
 
 export interface QuickSpeechCoordinator {
   cancel: () => void;
-  control: (target: SpeechControlTarget) => DictionarySpeakControlState;
+  control: (target: SpeechControlTarget) => SpeakControlState;
+  toggle: (target: SpeechControlTarget) => void;
   speakSource: () => void;
   speakDrawerDictionary: () => void;
   speakResult: (cardId: string) => void;
@@ -299,11 +300,13 @@ export function createQuickSpeechCoordinator(options: {
     const drawer = session.dictionaryDrawer();
     if (!drawer.open || drawer.active?.status !== "entry") return;
     const srcLang = drawer.active.query.sourceLanguage;
+    const matchesSource =
+      drawer.active.entry.term.trim().toLowerCase() === session.sourceText().trim().toLowerCase();
     void runSpeech({
       owner: { kind: "dictionary", term: drawer.active.entry.term },
       text: drawer.active.entry.term,
       language: srcLang && srcLang !== AUTO_LANGUAGE ? srcLang : null,
-      detectStandalone: true,
+      detectStandalone: !matchesSource,
       report: (message) => drawerDictionarySpeechError.set(message),
     });
   };
@@ -348,7 +351,7 @@ export function createQuickSpeechCoordinator(options: {
     });
   };
 
-  const control = (target: SpeechControlTarget): DictionarySpeakControlState => {
+  const control = (target: SpeechControlTarget): SpeakControlState => {
     const owner = speechOwner();
     const mine =
       owner !== null &&
@@ -390,9 +393,21 @@ export function createQuickSpeechCoordinator(options: {
     };
   };
 
+  const toggle = (target: SpeechControlTarget) => {
+    if (control(target).busy) {
+      cancel();
+      return;
+    }
+    if (target === "source") speakSource();
+    else if (target === "drawer-dictionary") speakDrawerDictionary();
+    else if (target.kind === "result") speakResult(target.cardId);
+    else speakBackTranslation(target.cardId);
+  };
+
   return {
     cancel,
     control,
+    toggle,
     speakSource,
     speakDrawerDictionary,
     speakResult,

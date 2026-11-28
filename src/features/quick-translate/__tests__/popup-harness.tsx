@@ -131,12 +131,7 @@ function PopupSessionView(
       </Scroll>
       <DockedDictionaryDrawer
         state={session.dictionaryDrawer()}
-        speakControl={speech.control("drawer-dictionary")}
-        speechError={speech.drawerDictionaryError()}
-        onSpeak={() => {
-          if (speech.control("drawer-dictionary").busy) speech.cancel();
-          else speech.speakDrawerDictionary();
-        }}
+        speech={speech}
         onBack={session.handleLookupBack}
         onPromote={session.handlePromoteDictionaryTerm}
         onClose={session.handleCloseDictionaryDrawer}

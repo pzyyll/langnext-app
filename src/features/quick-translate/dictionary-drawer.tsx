@@ -2,7 +2,7 @@ import { Scroll, Text, View } from "nsh";
 import { t } from "nsh/i18n";
 import { motion } from "../../components/motion";
 import { Button } from "../../components/ui/button";
-import { Icon, type IconName } from "../../components/ui/icon";
+import { Icon } from "../../components/ui/icon";
 import { Skeleton } from "../../components/ui/skeleton";
 import type { LanguageId } from "../../framework/languages";
 import type { DictionaryEntry } from "../../integrations/dictionary";
@@ -13,14 +13,8 @@ import type {
   QuickTranslateSelectionRegion,
   TextSelectionEventPayload,
 } from "./selection-types";
-
-export interface DictionarySpeakControlState {
-  disabled: boolean;
-  tooltip?: string;
-  label: string;
-  icon: IconName;
-  busy: boolean;
-}
+import { SpeakerButton } from "./speaker-button";
+import type { QuickSpeechCoordinator } from "./speech";
 
 export interface DictionaryDrawerQuery {
   term: string;
@@ -44,9 +38,7 @@ export interface DictionaryDrawerState {
 
 export interface DockedDictionaryDrawerProps {
   state: DictionaryDrawerState;
-  speakControl: DictionarySpeakControlState;
-  speechError: string | null;
-  onSpeak: () => void;
+  speech: QuickSpeechCoordinator;
   onBack: () => void;
   onPromote: () => void;
   onClose: () => void;
@@ -100,7 +92,11 @@ export function DockedDictionaryDrawer(props: DockedDictionaryDrawerProps) {
                 <Icon name="mdi:arrow-left" tone="muted-foreground" class="size-3.5" />
               </Button>
             </If>
-            <Icon name="mdi:book-open-variant-outline" tone="brand" class="size-3.5 shrink-0" />
+            <Icon
+              name="mdi:book-open-variant-outline"
+              tone="muted-foreground"
+              class="size-3.5 shrink-0"
+            />
             <Text
               testID="quick-translate-dictionary-drawer-term"
               class="min-w-0 shrink truncate text-sm font-semibold text-foreground"
@@ -108,21 +104,11 @@ export function DockedDictionaryDrawer(props: DockedDictionaryDrawerProps) {
               {displayTerm()}
             </Text>
             <If when={entryState() !== null}>
-              <Button
+              <SpeakerButton
                 testID="quick-translate-dictionary-drawer-speak"
-                variant="ghost"
-                size="icon-xs"
-                accessibilityLabel={props.speakControl.label}
-                tooltip={props.speakControl.tooltip}
-                disabled={props.speakControl.disabled}
-                onPress={props.onSpeak}
-              >
-                <Icon
-                  name={props.speakControl.icon}
-                  tone={props.speakControl.busy ? "brand" : "muted-foreground"}
-                  class="size-3.5"
-                />
-              </Button>
+                control={props.speech.control("drawer-dictionary")}
+                onPress={() => props.speech.toggle("drawer-dictionary")}
+              />
             </If>
           </View>
 
@@ -165,13 +151,13 @@ export function DockedDictionaryDrawer(props: DockedDictionaryDrawerProps) {
           />
         </If>
 
-        <If when={props.speechError !== null}>
+        <If when={props.speech.drawerDictionaryError() !== null}>
           <Text
             testID="quick-translate-dictionary-drawer-speak-error"
             role="alert"
             class="px-4 pt-1.5 text-xs text-destructive"
           >
-            {props.speechError ?? ""}
+            {props.speech.drawerDictionaryError() ?? ""}
           </Text>
         </If>
 

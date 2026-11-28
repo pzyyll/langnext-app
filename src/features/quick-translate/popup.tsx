@@ -27,7 +27,7 @@ import { t } from "nsh/i18n";
 import { motion } from "../../components/motion";
 import { Button, KeyboardButton } from "../../components/ui/button";
 import { LARGEST_FONT_STEP } from "../../components/ui/font-step";
-import { Icon, type IconName } from "../../components/ui/icon";
+import { Icon } from "../../components/ui/icon";
 import { Kbd } from "../../components/ui/kbd";
 import { Menu, MenuItem } from "../../components/ui/menu";
 import { AnchoredPopover } from "../../components/ui/popover";
@@ -68,6 +68,7 @@ import {
   type DictionarySelectionCoordinator,
 } from "./selection-coordinator";
 import type { QuickTranslateSelectionMenu, TextSelectionEventPayload } from "./selection-types";
+import { SpeakerButton, type SpeakControlState } from "./speaker-button";
 import { createQuickSpeechCoordinator, type QuickSpeechCoordinator } from "./speech";
 import {
   QuickTranslateSourceEditor,
@@ -135,29 +136,6 @@ function RetryIconButton(props: { testID: string; label?: string; onPress: () =>
       onPress={() => props.onPress()}
     >
       <Icon name="mdi:refresh" tone="muted-foreground" class="size-3.5" />
-    </Button>
-  );
-}
-
-function SpeakerButton(props: {
-  testID: string;
-  disabled: boolean;
-  tooltip?: string;
-  label: string;
-  icon: IconName;
-  onPress: () => void;
-}) {
-  return (
-    <Button
-      testID={props.testID}
-      size="icon-xs"
-      variant="ghost"
-      disabled={props.disabled}
-      tooltip={props.tooltip}
-      accessibilityLabel={props.label}
-      onPress={() => props.onPress()}
-    >
-      <Icon name={props.icon} tone="muted-foreground" class="size-3.5" />
     </Button>
   );
 }
@@ -520,20 +498,10 @@ interface PresetCardRowProps {
   onCloseBackTranslation: (cardId: string) => void;
   onRetryBackTranslation: (cardId: string) => void;
   onCopyBackTranslation: (cardId: string) => void;
-  speakState: Accessor<{
-    disabled: boolean;
-    tooltip?: string;
-    label: string;
-    icon: IconName;
-  }>;
+  speakState: Accessor<SpeakControlState>;
   speakError: Accessor<string | null>;
   onSpeak: () => void;
-  backTranslationSpeakState: Accessor<{
-    disabled: boolean;
-    tooltip?: string;
-    label: string;
-    icon: IconName;
-  }>;
+  backTranslationSpeakState: Accessor<SpeakControlState>;
   backTranslationSpeakError: Accessor<string | null>;
   onSpeakBackTranslation: () => void;
   onResultSelectionChange?: (
@@ -803,10 +771,7 @@ function PresetCardRow(props: PresetCardRowProps) {
                     >
                       <SpeakerButton
                         testID="quick-translate-speak-back-translation"
-                        disabled={props.backTranslationSpeakState().disabled}
-                        tooltip={props.backTranslationSpeakState().tooltip}
-                        label={props.backTranslationSpeakState().label}
-                        icon={props.backTranslationSpeakState().icon}
+                        control={props.backTranslationSpeakState()}
                         onPress={() => props.onSpeakBackTranslation()}
                       />
                       <Button
@@ -960,10 +925,7 @@ function PresetCardRow(props: PresetCardRowProps) {
                 >
                   <SpeakerButton
                     testID="quick-translate-speak-result"
-                    disabled={props.speakState().disabled}
-                    tooltip={props.speakState().tooltip}
-                    label={props.speakState().label}
-                    icon={props.speakState().icon}
+                    control={props.speakState()}
                     onPress={() => props.onSpeak()}
                   />
                 </If>
@@ -1916,11 +1878,8 @@ export function QuickTranslatePopup(props: QuickTranslatePopupProps) {
     );
   });
 
-  const cancelSpeech = speech.cancel;
   const speechControl = speech.control;
-  const speakSource = speech.speakSource;
-  const speakResult = speech.speakResult;
-  const speakBackTranslation = speech.speakBackTranslation;
+  const toggleSpeech = speech.toggle;
   const sourceSpeechError = speech.sourceError;
   const resultSpeechError = speech.resultError;
   const backTranslationSpeechError = speech.backTranslationError;
@@ -2108,14 +2067,8 @@ export function QuickTranslatePopup(props: QuickTranslatePopupProps) {
           <View class="-ml-1 shrink-0">
             <SpeakerButton
               testID="quick-translate-speak-source"
-              disabled={speechControl("source").disabled}
-              tooltip={speechControl("source").tooltip}
-              label={speechControl("source").label}
-              icon={speechControl("source").icon}
-              onPress={() => {
-                if (speechControl("source").busy) cancelSpeech();
-                else speakSource();
-              }}
+              control={speechControl("source")}
+              onPress={() => toggleSpeech("source")}
             />
           </View>
           <If when={sourceSpeechError() !== null}>
@@ -2534,37 +2487,16 @@ export function QuickTranslatePopup(props: QuickTranslatePopupProps) {
                     onCloseBackTranslation={(id) => props.session.handleCloseBackTranslation(id)}
                     onRetryBackTranslation={(id) => props.session.handleRetryBackTranslation(id)}
                     onCopyBackTranslation={(id) => props.session.handleCopyBackTranslation(id)}
-                    speakState={() => {
-                      const state = speechControl({ kind: "result", cardId: card().id });
-                      return {
-                        disabled: state.disabled,
-                        tooltip: state.tooltip,
-                        label: state.label,
-                        icon: state.icon,
-                      };
-                    }}
+                    speakState={() => speechControl({ kind: "result", cardId: card().id })}
                     speakError={() => resultSpeechError(card().id)}
-                    onSpeak={() => {
-                      if (speechControl({ kind: "result", cardId: card().id }).busy) cancelSpeech();
-                      else speakResult(card().id);
-                    }}
-                    backTranslationSpeakState={() => {
-                      const state = speechControl({ kind: "back-translation", cardId: card().id });
-                      return {
-                        disabled: state.disabled,
-                        tooltip: state.tooltip,
-                        label: state.label,
-                        icon: state.icon,
-                      };
-                    }}
+                    onSpeak={() => toggleSpeech({ kind: "result", cardId: card().id })}
+                    backTranslationSpeakState={() =>
+                      speechControl({ kind: "back-translation", cardId: card().id })
+                    }
                     backTranslationSpeakError={() => backTranslationSpeechError(card().id)}
-                    onSpeakBackTranslation={() => {
-                      if (speechControl({ kind: "back-translation", cardId: card().id }).busy) {
-                        cancelSpeech();
-                      } else {
-                        speakBackTranslation(card().id);
-                      }
-                    }}
+                    onSpeakBackTranslation={() =>
+                      toggleSpeech({ kind: "back-translation", cardId: card().id })
+                    }
                     onResultSelectionChange={(event, fullText, lang) => {
                       if (sentencePopover() !== null) {
                         selection.clear();
