@@ -760,7 +760,6 @@ presets:
     tokenStored: A token is stored. Enter a new token to replace it.
     removeToken: Remove saved token
     tokenWillBeRemoved: The endpoint changed. The saved token will be removed on save unless you enter a new one.
-    disclosure: The configured server sends the text to DeepL.
   googleCloud:
     keyLabel: API key
     keyPlaceholder: Paste your Google Cloud API key

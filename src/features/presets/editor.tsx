@@ -533,10 +533,6 @@ export function PresetEditor(props: PresetEditorProps) {
                   {t("presets.deeplx.tokenWillBeRemoved")}
                 </Text>
               </If>
-
-              <Text testID="preset-deeplx-disclosure" class="text-sm text-muted-foreground">
-                {t("presets.deeplx.disclosure")}
-              </Text>
             </Card>
           </If>
         </View>

@@ -760,7 +760,6 @@ presets:
     tokenStored: 已保存令牌。输入新令牌可替换。
     removeToken: 移除已保存令牌
     tokenWillBeRemoved: 服务地址已更改。保存时将移除已保存的令牌，除非输入新令牌。
-    disclosure: 所配置的服务器会把文本发送给 DeepL。
   googleCloud:
     keyLabel: API 密钥
     keyPlaceholder: 粘贴 Google Cloud API 密钥

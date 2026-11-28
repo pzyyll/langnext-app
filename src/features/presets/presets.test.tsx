@@ -1635,7 +1635,7 @@ test("presets ui: DeepLX editor saves an endpoint without a token or network req
   expect(app.shows("id:preset-deeplx-remove-token")).toBe(false);
   expect(app.texts()).toContain(t("presets.deeplx.endpointLabel"));
   expect(app.texts()).toContain(t("presets.deeplx.tokenLabel"));
-  expect(app.texts()).toContain(t("presets.deeplx.disclosure"));
+  expect(app.shows("id:preset-deeplx-disclosure")).toBe(false);
 
   await app.type("id:preset-name", "DeepLX Local");
 
