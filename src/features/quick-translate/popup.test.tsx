@@ -6216,3 +6216,193 @@ test("dictionary inline: hides silently on not_found, retries errors, and discar
   await deferredApp.press("id:harness-resolve-dict");
   expect(deferredApp.shows("id:quick-translate-dictionary-inline")).toBe(false);
 });
+
+test("dictionary selection: shows 180ms pill for source, result, and back-translation, supports Alt+D, drill-down, Alt+Left back, and promote", async () => {
+  const dictRequests: string[] = [];
+  let translateCount = 0;
+
+  const app = await open(POPUP_HARNESS, {
+    ...viewport,
+    clock: {},
+    storage: dictionarySeed({}, { autoTranslate: false }),
+    network: {
+      "POST https://api.openai.com/v1/chat/completions": () => {
+        translateCount += 1;
+        if (translateCount === 1) {
+          return {
+            status: 200,
+            body: { choices: [{ message: { content: "Beauty radiates eternal grace softly" } }] },
+          };
+        }
+        if (translateCount === 2) {
+          return {
+            status: 200,
+            body: { choices: [{ message: { content: "Fleeting spring beauty radiates softly" } }] },
+          };
+        }
+        return {
+          status: 200,
+          body: { choices: [{ message: { content: "短暂的" } }] },
+        };
+      },
+      [DICT_URL]: (request) => {
+        dictRequests.push(request.body ?? "");
+        const parsed = JSON.parse(request.body ?? "{}") as {
+          messages?: { role?: string; content?: string }[];
+        };
+        const userMsg = parsed.messages?.[parsed.messages.length - 1]?.content ?? "";
+        if (userMsg.includes("fleeting") && !userMsg.includes("Fleeting spring beauty")) {
+          return {
+            status: 200,
+            body: {
+              choices: [
+                {
+                  message: {
+                    content: JSON.stringify({
+                      found: true,
+                      term: "fleeting",
+                      phonetics: [{ label: "US", ipa: "/ˈfliːtɪŋ/" }],
+                      senses: [{ partOfSpeech: "adj.", glosses: ["飞逝的", "短暂的"] }],
+                    }),
+                  },
+                },
+              ],
+            },
+          };
+        }
+        if (userMsg.includes("Beauty radiates eternal grace softly")) {
+          return {
+            status: 200,
+            body: {
+              choices: [
+                {
+                  message: {
+                    content: JSON.stringify({
+                      found: true,
+                      term: "beauty",
+                      phonetics: [{ label: "US", ipa: "/ˈbjuːti/" }],
+                      senses: [{ partOfSpeech: "n.", glosses: ["美", "美人"] }],
+                    }),
+                  },
+                },
+              ],
+            },
+          };
+        }
+        return {
+          status: 200,
+          body: {
+            choices: [
+              {
+                message: {
+                  content: JSON.stringify({
+                    found: true,
+                    term: "ephemeral",
+                    phonetics: [{ label: "US", ipa: "/ɪˈfɛmərəl/" }],
+                    senses: [
+                      {
+                        partOfSpeech: "adj.",
+                        glosses: ["短暂的", "转瞬即逝的"],
+                      },
+                    ],
+                    synonyms: ["fleeting"],
+                    contextSenseSummary: "此处意为“短暂易逝的”。",
+                    contextNote: "修饰抽象事物（如美丽或名誉）。",
+                  }),
+                },
+              },
+            ],
+          },
+        };
+      },
+    },
+  });
+
+  await app.waitFor("id:quick-translate-source");
+  await app.type("id:quick-translate-source", "Fame and beauty feel ephemeral right now");
+  await app.keyboard.press("shift+enter");
+  await app.type("id:quick-translate-source", "Second sentence here.");
+  await app.keyboard.press("enter");
+  await app.waitFor("id:quick-translate-card-card-1 >> text:Beauty radiates eternal grace softly");
+
+  // Select inside source: pill stays hidden before 180ms debounce, then appears.
+  await app.drag(
+    "id:quick-translate-source >> text:Fame and beauty feel ephemeral right now >> nth=0",
+    { x: -80, y: 0 },
+  );
+  await app.clock!.runFor(100);
+  expect(app.shows("id:quick-translate-dictionary-pill")).toBe(false);
+  await app.clock!.runFor(100);
+  await app.waitFor("id:quick-translate-dictionary-pill");
+
+  await app.press("id:quick-translate-dictionary-pill");
+  await app.waitFor("id:quick-translate-dictionary-drawer");
+  expect(app.texts()).toContain("ephemeral");
+  expect(app.texts()).toContain("此处意为“短暂易逝的”。");
+  expect(app.texts()).toContain("Fame and beauty feel ephemeral right now");
+
+  // Synonym drill-down inside drawer pushes history; Alt+Left pops back.
+  await app.press("id:quick-translate-dictionary-drawer-synonym-fleeting");
+  await app.waitFor("id:quick-translate-dictionary-drawer >> text:US /ˈfliːtɪŋ/");
+  expect(app.shows("id:quick-translate-dictionary-drawer-back")).toBe(true);
+
+  await app.keyboard.press("alt+left");
+  await app.waitFor("id:quick-translate-dictionary-drawer >> text:US /ɪˈfɛmərəl/");
+  expect(app.shows("id:quick-translate-dictionary-drawer-back")).toBe(false);
+
+  // Close drawer, select in forward result, and press Alt+D immediately without waiting debounce.
+  await app.press("id:quick-translate-dictionary-drawer-close");
+  await app.waitUntil(() => !app.shows("id:quick-translate-dictionary-drawer"));
+
+  await app.drag("id:quick-translate-card-card-1 >> id:quick-translate-result-text", {
+    x: -80,
+    y: 0,
+  });
+  await app.keyboard.press("alt+d");
+  await app.waitFor("id:quick-translate-dictionary-drawer >> text:US /ˈbjuːti/");
+
+  // Open back-translation and select text inside it -> pill lookup updates drawer.
+  await app.press("id:quick-translate-card-card-1 >> id:quick-translate-back-translate");
+  await app.waitFor(
+    "id:quick-translate-card-card-1 >> text:Fleeting spring beauty radiates softly",
+  );
+  await app.drag("id:quick-translate-card-card-1 >> id:quick-translate-back-translation-text", {
+    x: -80,
+    y: 0,
+  });
+  await app.clock!.runFor(200);
+  await app.waitFor("id:quick-translate-dictionary-pill");
+  await app.press("id:quick-translate-dictionary-pill");
+  await app.waitFor("id:quick-translate-dictionary-drawer");
+
+  // Promote active drawer entry into source input -> closes drawer, translates, shows inline band.
+  await app.press("id:quick-translate-dictionary-drawer-promote");
+  await app.waitUntil(() => !app.shows("id:quick-translate-dictionary-drawer"));
+  await app.waitFor("id:quick-translate-dictionary-inline");
+  await app.waitFor("id:quick-translate-card-card-1 >> text:短暂的");
+  expect(dictRequests.length).toBeGreaterThanOrEqual(3);
+});
+
+test("dictionary selection: ignores long sentences, hides when unconfigured, and stays mutually exclusive with sentence popover", async () => {
+  const unconfigured = await open(POPUP_HARNESS, {
+    ...viewport,
+    clock: {},
+    storage: seedWithPresets([makePreset()]),
+  });
+  await unconfigured.waitFor("id:quick-translate-source");
+  await unconfigured.type("id:quick-translate-source", "ephemeral");
+  await unconfigured.drag("id:quick-translate-source >> text:ephemeral >> nth=0", { x: 40, y: 0 });
+  await unconfigured.clock!.runFor(250);
+  expect(unconfigured.shows("id:quick-translate-dictionary-pill")).toBe(false);
+
+  const sentenceApp = await open(POPUP_HARNESS, {
+    ...viewport,
+    clock: {},
+    storage: dictionarySeed({}, { autoTranslate: false }),
+  });
+  await sentenceApp.waitFor("id:quick-translate-source");
+  await sentenceApp.type("id:quick-translate-source", "This sentence has far too many words.");
+  await sentenceApp.keyboard.press("ctrl+a");
+  await sentenceApp.clock!.runFor(250);
+  expect(sentenceApp.shows("id:quick-translate-dictionary-pill")).toBe(false);
+});

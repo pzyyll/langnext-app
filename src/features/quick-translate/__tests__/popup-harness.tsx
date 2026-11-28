@@ -46,9 +46,12 @@ import type {
   TranslateWithPresetResult,
 } from "../translate";
 import { translateWithPreset } from "../translate";
+import { DockedDictionaryDrawer } from "../dictionary-drawer";
 import { QuickTranslateLanguageBar } from "../language-menu";
 import { QuickTranslateFooter, QuickTranslatePopup, type QuickTranslateOcrStatus } from "../popup";
+import { createDictionarySelectionCoordinator } from "../selection-coordinator";
 import { createQuickTranslateSession, type QuickTranslateSessionOptions } from "../session";
+import { createQuickSpeechCoordinator } from "../speech";
 
 export type HarnessMode =
   | "live"
@@ -88,6 +91,8 @@ function PopupSessionView(
   },
 ) {
   const session = createQuickTranslateSession(props);
+  const speech = createQuickSpeechCoordinator({ session });
+  const selection = createDictionarySelectionCoordinator({ session });
   const scrollRevision = signal(0);
   let lastScrollOffset = { x: 0, y: 0 };
   return (
@@ -120,8 +125,30 @@ function PopupSessionView(
           ocrState={props.ocrState}
           scrollRevision={() => scrollRevision()}
           windowVisible={props.windowVisible}
+          speech={speech}
+          selection={selection}
         />
       </Scroll>
+      <DockedDictionaryDrawer
+        state={session.dictionaryDrawer()}
+        speakControl={speech.control("drawer-dictionary")}
+        speechError={speech.drawerDictionaryError()}
+        onSpeak={() => {
+          if (speech.control("drawer-dictionary").busy) speech.cancel();
+          else speech.speakDrawerDictionary();
+        }}
+        onBack={session.handleLookupBack}
+        onPromote={session.handlePromoteDictionaryTerm}
+        onClose={session.handleCloseDictionaryDrawer}
+        onRetry={session.handleRetryDictionaryDrawer}
+        onDrillDown={(term) =>
+          session.handleLookupSelection({ term, region: "drawer" }, { drillDown: true })
+        }
+        onSelectionChange={(event, fullText) =>
+          selection.handleSelection("drawer", event, { fullText })
+        }
+        selectionMenu={selection.selectionMenu()}
+      />
       <QuickTranslateFooter session={session} />
     </Card>
   );

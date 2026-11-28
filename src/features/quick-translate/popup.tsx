@@ -19,7 +19,6 @@ import {
   type Placement,
   type Point,
   type PressEvent,
-  type Signal,
   type ViewRef,
 } from "nsh";
 import { SentenceAlignmentNative, type SentenceAlignmentPair } from "langnext-native";
@@ -43,14 +42,9 @@ import googleCloudIcon from "../../../assets/icons/google-cloud.svg";
 import googleIcon from "../../../assets/icons/google.svg";
 import { ProviderMark } from "../../modules/ai/ui/provider-mark";
 import { createLogger } from "../../services/log";
-import { languageResolutionErrorMessage } from "../language-detection/messages";
-import { AUTO_LANGUAGE, type LanguageId, type SourceLanguageId } from "../../framework/languages";
+import { isLanguageId, type LanguageId } from "../../framework/languages";
 import { presetChannelMark } from "../presets/model-choices";
 import type { TranslationPreset } from "../presets/types";
-import { synthesizeSpeech } from "../tts/channels";
-import { playMp3Bytes } from "../tts/playback";
-import { prepareQuickSpeech, quickSpeechFailureMessage } from "../tts/quick-speech";
-import { ttsChannels } from "../tts/store";
 import { AlignedTranslation, type SentenceSegment } from "./aligned-translation";
 import {
   finalizeMarkdownAlignment,
@@ -65,7 +59,13 @@ import {
   type SentencePopoverDismissal,
 } from "./sentence-popover-trace";
 import type { CardResultState, CardViewItem, QuickTranslateSession } from "./session";
-import { InlineDictionaryBand, type DictionarySpeakControlState } from "./dictionary-band";
+import { InlineDictionaryBand } from "./dictionary-band";
+import {
+  createDictionarySelectionCoordinator,
+  type DictionarySelectionCoordinator,
+} from "./selection-coordinator";
+import type { QuickTranslateSelectionMenu, TextSelectionEventPayload } from "./selection-types";
+import { createQuickSpeechCoordinator, type QuickSpeechCoordinator } from "./speech";
 import {
   QuickTranslateSourceEditor,
   type SourceHighlightRange,
@@ -106,6 +106,9 @@ export interface QuickTranslatePopupProps {
   /** True after the user has installed the offline model. */
   semanticModelReady?: Accessor<boolean>;
   onAttachSourceInput?: (input: SourceInputHandle | null) => void;
+  speech?: QuickSpeechCoordinator;
+  selection?: DictionarySelectionCoordinator;
+  externalOverlayOpen?: Accessor<boolean>;
 }
 
 function buildTemplateItems(preset: TranslationPreset | null): SelectItem[] {
@@ -403,6 +406,8 @@ function SentenceAlignedOutput(props: {
   alignment: CardSentenceAlignment | null;
   comparison?: ResultComparison | null;
   comparesTranslation?: boolean;
+  onSelectionChange?: (event: TextSelectionEventPayload) => void;
+  selectionMenu?: QuickTranslateSelectionMenu;
 }) {
   let previewNode: ViewRef | null = null;
   const keyboardValue = () => props.alignment?.keyboardValue();
@@ -417,6 +422,8 @@ function SentenceAlignedOutput(props: {
           markdownEnabled={props.markdownEnabled}
           streaming={props.streaming}
           size={props.size}
+          onSelectionChange={props.onSelectionChange}
+          selectionMenu={props.selectionMenu}
         />
       }
     >
@@ -481,6 +488,8 @@ function SentenceAlignedOutput(props: {
           onPressSegment={(segmentId, event) =>
             props.alignment?.onPressSegment(segmentId, event, previewNode)
           }
+          onSelectionChange={props.onSelectionChange}
+          selectionMenu={props.selectionMenu}
         />
       </View>
     </If>
@@ -524,6 +533,17 @@ interface PresetCardRowProps {
   }>;
   backTranslationSpeakError: Accessor<string | null>;
   onSpeakBackTranslation: () => void;
+  onResultSelectionChange?: (
+    event: TextSelectionEventPayload,
+    fullText: string,
+    targetLanguage?: LanguageId,
+  ) => void;
+  onBackTranslationSelectionChange?: (
+    event: TextSelectionEventPayload,
+    fullText: string,
+    sourceLanguage: LanguageId,
+  ) => void;
+  selectionMenu?: QuickTranslateSelectionMenu;
 }
 
 function PresetCardRow(props: PresetCardRowProps) {
@@ -723,6 +743,15 @@ function PresetCardRow(props: PresetCardRowProps) {
                 streaming={streaming()}
                 alignment={props.sentenceAlignment("result")}
                 comparison={props.resultComparison()}
+                onSelectionChange={(event) => {
+                  const res = result();
+                  if (res.status === "success") {
+                    props.onResultSelectionChange?.(event, res.text, res.targetLanguage);
+                  } else if (hasOutput()) {
+                    props.onResultSelectionChange?.(event, outputText());
+                  }
+                }}
+                selectionMenu={props.selectionMenu}
               />
             </If>
             <If when={failed()}>
@@ -862,6 +891,18 @@ function PresetCardRow(props: PresetCardRowProps) {
                       })()}
                       markdownEnabled={props.markdownEnabled}
                       streaming={false}
+                      onSelectionChange={(event) => {
+                        const bt = backTranslation();
+                        const res = result();
+                        if (bt.status === "success" && res.status === "success") {
+                          props.onBackTranslationSelectionChange?.(
+                            event,
+                            bt.text,
+                            res.sourceLanguage,
+                          );
+                        }
+                      }}
+                      selectionMenu={props.selectionMenu}
                     />
                   </If>
                   <If when={backTranslation().status === "error"}>
@@ -1829,332 +1870,94 @@ export function QuickTranslatePopup(props: QuickTranslatePopupProps) {
     input.setSelection(end, end);
   });
 
-  type SpeechOwner =
-    | { kind: "source"; text: string; selection: SourceLanguageId }
-    | { kind: "dictionary"; slot: "inline"; term: string }
-    | { kind: "result"; cardId: string; text: string; language: string }
-    | { kind: "back-translation"; cardId: string; text: string; language: string };
+  const speech =
+    props.speech ??
+    createQuickSpeechCoordinator({
+      session: props.session,
+      playbackAllowed: props.playbackAllowed,
+    });
+  const selection =
+    props.selection ??
+    createDictionarySelectionCoordinator({
+      session: props.session,
+      isSuppressed: () => sentencePopover() !== null,
+      onBeforeLookup: () => closeSentencePopover("cancel"),
+    });
+  const cardOverlays = signal<Readonly<Record<string, boolean>>>({});
+  const hasCardOverlayOpen = () => Object.values(cardOverlays()).some(Boolean);
 
-  const sourceSpeechError = signal<string | null>(null);
-  const inlineDictionarySpeechError = signal<string | null>(null);
-  const resultSpeechErrors = signal<Readonly<Record<string, string>>>({});
-  const backTranslationSpeechErrors = signal<Readonly<Record<string, string>>>({});
-  const speechPhase = signal<"idle" | "loading" | "playing">("idle");
-  const speechOwner = signal<SpeechOwner | null>(null);
-  let speechToken = 0;
-  let speechAbort: AbortController | null = null;
-  let stopSpeech: (() => void) | null = null;
-  let activeCredential = "";
-  const activeSpeech = () => ttsChannels.activeChannel();
-  const speakEnabled = () => activeSpeech() !== null;
-  const credentialSignature = () => {
-    const active = activeSpeech();
-    if (active === null) return "";
-    const signature = ttsChannels.definition(active.id)?.signature?.(active.binding) ?? "";
-    return `${active.id}\0${active.binding.credentialRef ?? ""}\0${signature}`;
-  };
-
-  const cancelSpeech = () => {
-    speechToken += 1;
-    speechAbort?.abort();
-    speechAbort = null;
-    stopSpeech?.();
-    stopSpeech = null;
-    speechPhase.set("idle");
-    speechOwner.set(null);
-  };
-
-  cleanup(cancelSpeech);
+  let lastSelectionScrollRevision = props.scrollRevision?.() ?? 0;
 
   effect(() => {
-    const owner = speechOwner();
-    if (owner?.kind !== "source" || speechPhase() === "idle") return;
-    if (owner.text !== sourceText() || owner.selection !== props.session.sourceLanguage()) {
-      cancelSpeech();
-    }
+    if (sentencePopover() !== null) selection.suppressPill();
   });
 
   effect(() => {
-    const owner = speechOwner();
-    if (owner?.kind !== "dictionary" || speechPhase() === "idle") return;
-    const inline = props.session.inlineDictionary();
-    const currentTerm = inline.status === "entry" ? inline.entry.term : "";
-    if (currentTerm !== owner.term) cancelSpeech();
+    const rev = props.scrollRevision?.() ?? 0;
+    if (rev === lastSelectionScrollRevision) return;
+    lastSelectionScrollRevision = rev;
+    selection.suppressPill();
   });
 
   effect(() => {
-    const inline = props.session.inlineDictionary();
-    if (inline.status !== "entry") inlineDictionarySpeechError.set(null);
+    if (props.windowVisible && !props.windowVisible()) selection.clear();
   });
 
   effect(() => {
-    const owner = speechOwner();
-    if (owner?.kind !== "result" || speechPhase() === "idle") return;
-    const card = props.session.cards().find((item) => item.id === owner.cardId);
-    const result = card?.result;
-    const current =
-      card !== undefined && !card.collapsed && result?.status === "success"
-        ? `${result.text}\0${result.targetLanguage}`
-        : "";
-    if (current !== `${owner.text}\0${owner.language}`) cancelSpeech();
-  });
-
-  effect(() => {
-    const owner = speechOwner();
-    if (owner?.kind !== "back-translation" || speechPhase() === "idle") return;
-    const card = props.session.cards().find((item) => item.id === owner.cardId);
-    const current =
-      card !== undefined &&
-      !card.collapsed &&
-      card.result.status === "success" &&
-      card.backTranslation.status === "success"
-        ? `${card.backTranslation.text}\0${card.result.sourceLanguage}`
-        : "";
-    if (current !== `${owner.text}\0${owner.language}`) cancelSpeech();
-  });
-
-  effect(() => {
-    const cards = props.session.cards();
-    const errors = backTranslationSpeechErrors();
-    const keys = Object.keys(errors);
-    if (keys.length === 0) return;
-    const byId = new Map(cards.map((card) => [card.id, card]));
-    let changed = false;
-    const next: Record<string, string> = {};
-    for (const cardId of keys) {
-      const card = byId.get(cardId);
-      if (card !== undefined && !card.collapsed && card.backTranslation.status === "success") {
-        next[cardId] = errors[cardId]!;
-      } else {
-        changed = true;
-      }
-    }
-    if (changed) backTranslationSpeechErrors.set(next);
-  });
-
-  effect(() => {
-    if (speechPhase() !== "idle" && credentialSignature() !== activeCredential) cancelSpeech();
-  });
-
-  effect(() => {
-    if (props.playbackAllowed && !props.playbackAllowed() && speechPhase() !== "idle") {
-      cancelSpeech();
-    }
-  });
-
-  const setCardSpeechError = (
-    store: Signal<Readonly<Record<string, string>>>,
-    cardId: string,
-    message: string | null,
-  ) => {
-    const next = { ...store() };
-    if (message === null) delete next[cardId];
-    else next[cardId] = message;
-    store.set(next);
-  };
-
-  const mountedSpeech = (token: number) => token === speechToken;
-
-  const finishSpeech = (token: number) => {
-    if (!mountedSpeech(token)) return;
-    stopSpeech = null;
-    speechPhase.set("idle");
-    speechOwner.set(null);
-  };
-
-  const runSpeech = async (input: {
-    owner: SpeechOwner;
-    text: string;
-    /** Null asks for an Automatic source detection before synthesis. */
-    language: LanguageId | null;
-    report: (message: string | null) => void;
-  }) => {
-    const token = ++speechToken;
-    speechAbort?.abort();
-    stopSpeech?.();
-    stopSpeech = null;
-    const controller = new AbortController();
-    speechAbort = controller;
-    activeCredential = credentialSignature();
-    speechOwner.set(input.owner);
-    speechPhase.set("loading");
-    input.report(null);
-    if (!speakEnabled()) {
-      finishSpeech(token);
-      input.report(t("quickTranslate.speakOff"));
-      return;
-    }
-    let language = input.language;
-    if (language === null) {
-      const detected = await props.session.detectSourceLanguage(controller.signal);
-      if (!mountedSpeech(token)) return;
-      if (controller.signal.aborted || detected === null) {
-        finishSpeech(token);
-        return;
-      }
-      if (!detected.ok) {
-        finishSpeech(token);
-        if (detected.code !== "cancelled") {
-          input.report(
-            detected.code === "unconfigured"
-              ? t("quickTranslate.speakChooseSource")
-              : languageResolutionErrorMessage(detected.code),
-          );
-        }
-        return;
-      }
-      language = detected.language;
-    }
-    const prepared = await prepareQuickSpeech({ text: input.text, language });
-    if (!mountedSpeech(token)) return;
-    if (!prepared.ok) {
-      finishSpeech(token);
-      input.report(prepared.message);
-      return;
-    }
-    const speech = prepared.speech;
-    if (!mountedSpeech(token) || credentialSignature() !== activeCredential) {
-      finishSpeech(token);
-      return;
-    }
-    const synthesized = await synthesizeSpeech(speech, { signal: controller.signal });
-    if (!mountedSpeech(token)) return;
-    if (controller.signal.aborted || synthesized.status === "cancelled") {
-      finishSpeech(token);
-      return;
-    }
-    if (credentialSignature() !== activeCredential) {
-      finishSpeech(token);
-      return;
-    }
-    if (synthesized.status === "failed") {
-      finishSpeech(token);
-      input.report(quickSpeechFailureMessage(synthesized.failure, speech.channel));
-      return;
-    }
-    const playback = playMp3Bytes(synthesized.audio, {
-      onPlaying: () => {
-        if (!mountedSpeech(token)) {
-          playback.stop();
-          return;
-        }
-        speechPhase.set("playing");
+    if (selection.activeSelection() === null) return;
+    return appKeymap.bind(
+      {
+        "alt+d": () => {
+          if (sentencePopover() !== null) closeSentencePopover("cancel");
+          selection.triggerLookup();
+        },
       },
-    });
-    stopSpeech = () => playback.stop();
-    const played = await playback.result;
-    if (!mountedSpeech(token)) return;
-    finishSpeech(token);
-    if (played.status === "failed") input.report(t("quickTranslate.speakPlayback"));
-  };
+      { when: "always", overFocused: true },
+    );
+  });
 
-  const speakSource = () => {
-    const selected = props.session.sourceLanguage();
-    void runSpeech({
-      owner: { kind: "source", text: sourceText(), selection: selected },
-      text: sourceText(),
-      language: selected === AUTO_LANGUAGE ? null : selected,
-      report: (message) => sourceSpeechError.set(message),
-    });
-  };
-
-  const speakInlineDictionary = () => {
-    const inline = props.session.inlineDictionary();
-    if (inline.status !== "entry") return;
-    const selected = props.session.sourceLanguage();
-    void runSpeech({
-      owner: { kind: "dictionary", slot: "inline", term: inline.entry.term },
-      text: inline.entry.term,
-      language: selected === AUTO_LANGUAGE ? null : selected,
-      report: (message) => inlineDictionarySpeechError.set(message),
-    });
-  };
-
-  const speakResult = (cardId: string) => {
-    const card = props.session.cards().find((item) => item.id === cardId);
-    if (card === undefined || card.result.status !== "success") return;
-    void runSpeech({
-      owner: {
-        kind: "result",
-        cardId,
-        text: card.result.text,
-        language: card.result.targetLanguage,
+  effect(() => {
+    const drawer = props.session.dictionaryDrawer();
+    if (!drawer.open || !drawer.canGoBack) return;
+    return appKeymap.bind(
+      {
+        "alt+left": () => props.session.handleLookupBack(),
       },
-      text: card.result.text,
-      language: card.result.targetLanguage,
-      report: (message) => setCardSpeechError(resultSpeechErrors, cardId, message),
-    });
-  };
+      { when: "always", overFocused: true },
+    );
+  });
 
-  const speakBackTranslation = (cardId: string) => {
-    const card = props.session.cards().find((item) => item.id === cardId);
-    if (
-      card === undefined ||
-      card.collapsed ||
-      card.result.status !== "success" ||
-      card.backTranslation.status !== "success" ||
-      card.backTranslation.text.trim().length === 0
-    ) {
-      return;
-    }
-    void runSpeech({
-      owner: {
-        kind: "back-translation",
-        cardId,
-        text: card.backTranslation.text,
-        language: card.result.sourceLanguage,
+  effect(() => {
+    const pillOpen = selection.pillVisible();
+    const drawerOpen = props.session.dictionaryDrawer().open;
+    if (!pillOpen && !drawerOpen) return;
+    if (sentencePopover() !== null || hasCardOverlayOpen() || props.externalOverlayOpen?.()) return;
+    return appKeymap.bind(
+      {
+        escape: () => {
+          if (selection.pillVisible()) {
+            selection.clear();
+            return;
+          }
+          if (props.session.dictionaryDrawer().open) {
+            props.session.handleCloseDictionaryDrawer();
+          }
+        },
       },
-      text: card.backTranslation.text,
-      language: card.result.sourceLanguage,
-      report: (message) => setCardSpeechError(backTranslationSpeechErrors, cardId, message),
-    });
-  };
+      { when: "always", overFocused: true },
+    );
+  });
 
-  const speechControl = (
-    target:
-      | "source"
-      | "inline-dictionary"
-      | { kind: "result" | "back-translation"; cardId: string },
-  ): DictionarySpeakControlState => {
-    const owner = speechOwner();
-    const mine =
-      owner !== null &&
-      (target === "source"
-        ? owner.kind === "source"
-        : target === "inline-dictionary"
-          ? owner.kind === "dictionary" && owner.slot === "inline"
-          : owner.kind === target.kind && owner.cardId === target.cardId);
-    const phase = mine ? speechPhase() : "idle";
-    if (phase === "loading") {
-      return {
-        disabled: false,
-        tooltip: t("common.cancel"),
-        label: t("common.cancel"),
-        icon: "mdi:close-circle" as const,
-        busy: true,
-      };
-    }
-    if (phase === "playing") {
-      return {
-        disabled: false,
-        tooltip: t("settings.tts.stop"),
-        label: t("settings.tts.stop"),
-        icon: "mdi:stop-circle-outline" as const,
-        busy: true,
-      };
-    }
-    const readyLabel =
-      typeof target !== "string" && target.kind === "back-translation"
-        ? t("quickTranslate.speakBackTranslation")
-        : t("quickTranslate.speak");
-    return {
-      disabled: !speakEnabled(),
-      tooltip: speakEnabled() ? undefined : t("quickTranslate.speakOff"),
-      label: speakEnabled() ? readyLabel : t("quickTranslate.speakOff"),
-      icon: "mdi:volume-high" as const,
-      busy: false,
-    };
-  };
+  const cancelSpeech = speech.cancel;
+  const speechControl = speech.control;
+  const speakSource = speech.speakSource;
+  const speakInlineDictionary = speech.speakInlineDictionary;
+  const speakResult = speech.speakResult;
+  const speakBackTranslation = speech.speakBackTranslation;
+  const sourceSpeechError = speech.sourceError;
+  const inlineDictionarySpeechError = speech.inlineDictionaryError;
+  const resultSpeechError = speech.resultError;
+  const backTranslationSpeechError = speech.backTranslationError;
 
   const draggingCardId = signal<string | null>(null);
   const settlingCards = signal(false);
@@ -2516,12 +2319,29 @@ export function QuickTranslatePopup(props: QuickTranslatePopupProps) {
                         props.session.handleSourceSubmit();
                       }}
                       onCompositionChange={(composing) => isComposing.set(composing)}
-                      onSelectionChange={(selection) => {
-                        if (selection && !selection.empty) {
+                      onSelectionChange={(rawSelection) => {
+                        if (rawSelection && !rawSelection.empty) {
                           if (activeMatch() !== null) clearActiveMatch();
                           closeSentencePopover("source-selection");
                         }
                       }}
+                      onTextSelectionChange={(sel) => {
+                        if (sentencePopover() !== null) {
+                          selection.clear();
+                          return;
+                        }
+                        selection.handleSelection(
+                          "source",
+                          sel ? { text: sel.text, pageBounds: sel.pageBounds ?? undefined } : null,
+                          {
+                            fullText: sourceText(),
+                            start: sel?.start,
+                            end: sel?.end,
+                            sourceLanguage: props.session.sourceLanguage(),
+                          },
+                        );
+                      }}
+                      selectionMenu={selection.selectionMenu()}
                       ref={(node) => {
                         sourceInputRef.set(node);
                         props.onAttachSourceInput?.(node);
@@ -2639,6 +2459,15 @@ export function QuickTranslatePopup(props: QuickTranslatePopupProps) {
           }}
           onToggleExpand={props.session.handleToggleInlineDictionaryExpanded}
           onRetry={props.session.handleRetryInlineDictionary}
+          onLookupSynonym={(term) => {
+            closeSentencePopover("cancel");
+            selection.clear();
+            props.session.handleLookupSelection({
+              term,
+              sourceLanguage: props.session.sourceLanguage(),
+              region: "source",
+            });
+          }}
         />
       </If>
 
@@ -2646,6 +2475,19 @@ export function QuickTranslatePopup(props: QuickTranslatePopupProps) {
         <QuickTranslateHistoryResults
           snapshot={props.session.historySnapshot()}
           markdownEnabled={props.markdownEnabled ?? false}
+          onSelectionChange={(event, result) => {
+            if (sentencePopover() !== null) {
+              selection.clear();
+              return;
+            }
+            selection.handleSelection("history", event, {
+              fullText: result.text,
+              sourceLanguage: isLanguageId(result.targetLanguage)
+                ? result.targetLanguage
+                : undefined,
+            });
+          }}
+          selectionMenu={selection.selectionMenu()}
         />
       </If>
 
@@ -2685,9 +2527,13 @@ export function QuickTranslatePopup(props: QuickTranslatePopupProps) {
                     resultComparison={() => buildResultComparison(card())}
                     presets={props.session.enabledPresets}
                     presetItems={props.session.presetItems}
-                    onOverlayOpenChange={(menuId, open) =>
-                      props.session.notifyOverlayOpenChange(menuId, open)
-                    }
+                    onOverlayOpenChange={(menuId, open) => {
+                      const next = { ...cardOverlays() };
+                      if (open) next[menuId] = true;
+                      else delete next[menuId];
+                      cardOverlays.set(next);
+                      props.session.notifyOverlayOpenChange(menuId, open);
+                    }}
                     onSelectPreset={(targetId, presetId) =>
                       props.session.handleSelectCardPreset(targetId, presetId)
                     }
@@ -2713,7 +2559,7 @@ export function QuickTranslatePopup(props: QuickTranslatePopupProps) {
                         icon: state.icon,
                       };
                     }}
-                    speakError={() => resultSpeechErrors()[card().id] ?? null}
+                    speakError={() => resultSpeechError(card().id)}
                     onSpeak={() => {
                       if (speechControl({ kind: "result", cardId: card().id }).busy) cancelSpeech();
                       else speakResult(card().id);
@@ -2727,9 +2573,7 @@ export function QuickTranslatePopup(props: QuickTranslatePopupProps) {
                         icon: state.icon,
                       };
                     }}
-                    backTranslationSpeakError={() =>
-                      backTranslationSpeechErrors()[card().id] ?? null
-                    }
+                    backTranslationSpeakError={() => backTranslationSpeechError(card().id)}
                     onSpeakBackTranslation={() => {
                       if (speechControl({ kind: "back-translation", cardId: card().id }).busy) {
                         cancelSpeech();
@@ -2737,6 +2581,27 @@ export function QuickTranslatePopup(props: QuickTranslatePopupProps) {
                         speakBackTranslation(card().id);
                       }
                     }}
+                    onResultSelectionChange={(event, fullText, lang) => {
+                      if (sentencePopover() !== null) {
+                        selection.clear();
+                        return;
+                      }
+                      selection.handleSelection("result", event, {
+                        fullText,
+                        sourceLanguage: lang ?? props.session.targetLanguage(),
+                      });
+                    }}
+                    onBackTranslationSelectionChange={(event, fullText, lang) => {
+                      if (sentencePopover() !== null) {
+                        selection.clear();
+                        return;
+                      }
+                      selection.handleSelection("back-translation", event, {
+                        fullText,
+                        sourceLanguage: lang,
+                      });
+                    }}
+                    selectionMenu={selection.selectionMenu()}
                   />
                 </View>
               );
@@ -2771,6 +2636,31 @@ export function QuickTranslatePopup(props: QuickTranslatePopupProps) {
             </Text>
           </View>
         </Scroll>
+      </AnchoredPopover>
+      <AnchoredPopover
+        open={selection.pillAnchor() !== null}
+        anchor={selection.pillAnchor()}
+        placement="top"
+        align="center"
+        offset={6}
+        margin={8}
+        testID="quick-translate-dictionary-pill-surface"
+        accessibilityLabel={t("dictionary.lookUp")}
+        class="rounded-full p-1"
+        onPressOutside={() => selection.clear()}
+        onCancel={() => selection.clear()}
+      >
+        <Button
+          testID="quick-translate-dictionary-pill"
+          variant="primary"
+          size="xs"
+          class="rounded-full"
+          label={t("dictionary.lookUp")}
+          onPress={() => {
+            closeSentencePopover("cancel");
+            void selection.triggerLookup();
+          }}
+        />
       </AnchoredPopover>
       <View
         testID="quick-translate-sentence-announcement"

@@ -15,6 +15,12 @@ import {
 import { dictionaryChannels } from "../dictionary/store";
 import { language as activeLanguagePreference } from "../settings/language";
 import type { InlineDictionaryViewState } from "./dictionary-band";
+import type {
+  DictionaryDrawerEntryState,
+  DictionaryDrawerQuery,
+  DictionaryDrawerState,
+} from "./dictionary-drawer";
+import type { QuickTranslateSelectionRegion } from "./selection-types";
 import type { LanguageDetectionResult } from "../language-detection/detect";
 import { languageResolutionErrorMessage } from "../language-detection/messages";
 import {
@@ -254,6 +260,20 @@ export interface QuickTranslateSession {
   inlineDictionary: Accessor<InlineDictionaryState>;
   handleToggleInlineDictionaryExpanded: () => void;
   handleRetryInlineDictionary: () => void;
+  dictionaryDrawer: Accessor<DictionaryDrawerState>;
+  handleLookupSelection: (
+    request: {
+      term: string;
+      contextSentence?: string;
+      sourceLanguage?: LanguageId | "auto";
+      region: QuickTranslateSelectionRegion | "drawer";
+    },
+    lookupOptions?: { drillDown?: boolean },
+  ) => void;
+  handleLookupBack: () => void;
+  handleRetryDictionaryDrawer: () => void;
+  handlePromoteDictionaryTerm: () => void;
+  handleCloseDictionaryDrawer: () => void;
   retryLoadPresets: () => void;
   notifyOverlayOpenChange: (menuId: string, open: boolean) => void;
 }
@@ -337,6 +357,167 @@ export function createQuickTranslateSession(
   let activeInlineKey: string | null = null;
 
   const INLINE_DICTIONARY_DEBOUNCE_MS = 260;
+  const MAX_DRAWER_HISTORY = 10;
+
+  const drawerOpenSignal = signal(false);
+  const drawerActiveSignal = signal<DictionaryDrawerEntryState | null>(null);
+  const drawerStackSignal = signal<DictionaryDrawerEntryState[]>([]);
+  let drawerAbort: AbortController | null = null;
+  let drawerEpoch = 0;
+
+  const cancelDrawerLookup = () => {
+    drawerEpoch += 1;
+    if (drawerAbort !== null) {
+      drawerAbort.abort();
+      drawerAbort = null;
+    }
+  };
+
+  const handleCloseDictionaryDrawer = () => {
+    cancelDrawerLookup();
+    drawerOpenSignal.set(false);
+    drawerActiveSignal.set(null);
+    drawerStackSignal.set([]);
+    options.onOverlayOpenChange?.("dictionary-drawer", false);
+  };
+
+  const executeDrawerQuery = async (query: DictionaryDrawerQuery) => {
+    if (
+      disposed ||
+      options.windowOpen?.() === false ||
+      !isDictionaryConfigured(dictionaryChannels)
+    ) {
+      return;
+    }
+    cancelDrawerLookup();
+    const epoch = drawerEpoch;
+    drawerOpenSignal.set(true);
+    drawerActiveSignal.set({ status: "loading", query });
+    options.onOverlayOpenChange?.("dictionary-drawer", true);
+
+    const controller = new AbortController();
+    drawerAbort = controller;
+    const run = options.lookupDictionary ?? lookupWord;
+
+    let outcome: LookupWordOutcome;
+    try {
+      outcome = await run(
+        {
+          term: query.term,
+          contextSentence: query.contextSentence,
+          sourceLanguage: query.sourceLanguage,
+          explanationLanguage: query.explanationLanguage,
+        },
+        { signal: controller.signal },
+      );
+    } catch {
+      if (disposed || epoch !== drawerEpoch) return;
+      if (drawerAbort === controller) drawerAbort = null;
+      drawerActiveSignal.set({
+        status: "error",
+        query,
+        message: t(dictionaryFailureKey("unknown")),
+      });
+      return;
+    }
+
+    if (disposed || epoch !== drawerEpoch) return;
+    if (drawerAbort === controller) drawerAbort = null;
+
+    if (!outcome.ok) {
+      if (outcome.failure === "cancelled") return;
+      drawerActiveSignal.set({
+        status: "error",
+        query,
+        message: t(dictionaryFailureKey(outcome.failure)),
+      });
+      return;
+    }
+
+    if (outcome.result.kind === "not_found") {
+      drawerActiveSignal.set({ status: "not_found", query });
+      return;
+    }
+
+    drawerActiveSignal.set({ status: "entry", query, entry: outcome.result.entry });
+  };
+
+  const handleLookupSelection: QuickTranslateSession["handleLookupSelection"] = (
+    request,
+    lookupOptions,
+  ) => {
+    const term = normalizeLookupTerm(request.term);
+    if (!term || !isDictionaryConfigured(dictionaryChannels)) return;
+
+    const currentActive = drawerActiveSignal();
+    const isDrillDown =
+      (lookupOptions?.drillDown === true || request.region === "drawer") &&
+      drawerOpenSignal() &&
+      currentActive !== null;
+
+    if (isDrillDown && currentActive) {
+      const nextStack = [...drawerStackSignal(), currentActive].slice(-MAX_DRAWER_HISTORY);
+      drawerStackSignal.set(nextStack);
+    } else if (!isDrillDown) {
+      drawerStackSignal.set([]);
+    }
+
+    const explanationLanguage =
+      request.region === "source"
+        ? resolveDictionaryExplanationLanguage("source")
+        : request.region === "drawer" && currentActive
+          ? currentActive.query.explanationLanguage
+          : resolveDictionaryExplanationLanguage("target");
+
+    const sourceHint =
+      request.region === "drawer"
+        ? (currentActive?.query.sourceLanguage ?? request.sourceLanguage)
+        : request.sourceLanguage;
+
+    void executeDrawerQuery({
+      term,
+      contextSentence: request.contextSentence?.trim() || undefined,
+      sourceLanguage: sourceHint,
+      explanationLanguage,
+      region: request.region,
+    });
+  };
+
+  const handleLookupBack = () => {
+    const stack = drawerStackSignal();
+    if (stack.length === 0) return;
+    const previous = stack[stack.length - 1]!;
+    drawerStackSignal.set(stack.slice(0, -1));
+    if (previous.status === "entry" || previous.status === "not_found") {
+      cancelDrawerLookup();
+      drawerActiveSignal.set(previous);
+      return;
+    }
+    void executeDrawerQuery(previous.query);
+  };
+
+  const handleRetryDictionaryDrawer = () => {
+    const current = drawerActiveSignal();
+    if (!current || !drawerOpenSignal()) return;
+    void executeDrawerQuery(current.query);
+  };
+
+  const handlePromoteDictionaryTerm = () => {
+    const active = drawerActiveSignal();
+    if (!active) return;
+    const term = active.status === "entry" ? active.entry.term : active.query.term;
+    batch(() => {
+      handleCloseDictionaryDrawer();
+      historySnapshot.set(null);
+      invalidateAllCards();
+      languageDetection.cancelPending();
+      languageDetection.syncText(term);
+      (options.onRestoreSourceText ?? options.onSourceTextChange)(term);
+      sourceCollapsed.set(false);
+    });
+    executeAllCards("manual");
+    void runInlineLookup(true);
+  };
 
   const uiFallbackExplanationLanguage = (): LanguageId =>
     activeLanguagePreference() === "zh-CN" ? "zh" : "en";
@@ -720,6 +901,7 @@ export function createQuickTranslateSession(
     windowEpoch += 1;
     clearSharedDebounce();
     cancelInlineLookup(true);
+    handleCloseDictionaryDrawer();
     languageDetection.cancelPending();
     prefsStore.clearSaveError();
     cards.set(
@@ -756,6 +938,7 @@ export function createQuickTranslateSession(
     languageDetection.dispose();
     clearSharedDebounce();
     cancelInlineLookup(true);
+    cancelDrawerLookup();
     for (const runtime of cardRuntimes.values()) {
       cancelRuntime(runtime);
     }
@@ -1218,11 +1401,13 @@ export function createQuickTranslateSession(
     options.onSourceTextChange("");
     invalidateAllCards();
     cancelInlineLookup(true);
+    handleCloseDictionaryDrawer();
   };
 
   const handleRestoreHistory = (snapshot: HistorySnapshot) => {
     batch(() => {
       cancelInlineLookup(true);
+      handleCloseDictionaryDrawer();
       invalidateAllCards();
       languageDetection.cancelPending();
       languageDetection.syncText(snapshot.sourceText);
@@ -1640,6 +1825,16 @@ export function createQuickTranslateSession(
       }
     },
     handleRetryInlineDictionary: () => void runInlineLookup(true),
+    dictionaryDrawer: () => ({
+      open: drawerOpenSignal(),
+      canGoBack: drawerStackSignal().length > 0,
+      active: drawerActiveSignal(),
+    }),
+    handleLookupSelection,
+    handleLookupBack,
+    handleRetryDictionaryDrawer,
+    handlePromoteDictionaryTerm,
+    handleCloseDictionaryDrawer,
     retryLoadPresets: () => void store.load(),
     notifyOverlayOpenChange: (menuId: string, open: boolean) =>
       options.onOverlayOpenChange?.(menuId, open),

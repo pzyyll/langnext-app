@@ -507,6 +507,7 @@ dictionary:
   back: Back
   close: Close
   promoteToSource: Look up in main view
+  notFound: 'No entry found for "%{term}".'
   error:
     unconfigured: Configure a dictionary model in Settings.
     unsupported: This dictionary channel does not support the request.

@@ -5,6 +5,7 @@ import { Button } from "../../components/ui/button";
 import { Icon } from "../../components/ui/icon";
 import { TranslationOutput } from "../../components/ui/translation-output";
 import { getLanguageLabel, isLanguageId } from "../../framework/languages";
+import type { QuickTranslateSelectionMenu, TextSelectionEventPayload } from "./selection-types";
 
 function resultLanguages(result: HistoryResult): string {
   const { sourceLanguage, targetLanguage } = result;
@@ -16,7 +17,12 @@ function resultLanguages(result: HistoryResult): string {
     : "";
 }
 
-function HistoryResultCard(props: { result: HistoryResult; markdownEnabled: boolean }) {
+function HistoryResultCard(props: {
+  result: HistoryResult;
+  markdownEnabled: boolean;
+  onSelectionChange?: (event: TextSelectionEventPayload, result: HistoryResult) => void;
+  selectionMenu?: QuickTranslateSelectionMenu;
+}) {
   const copyStatus = signal<"idle" | "copied" | "failed">("idle");
   const copyLabel = () =>
     t(copyStatus() === "copied" ? "quickTranslate.copied" : "quickTranslate.copy");
@@ -63,6 +69,8 @@ function HistoryResultCard(props: { result: HistoryResult; markdownEnabled: bool
         text={props.result.text}
         markdownEnabled={props.markdownEnabled}
         streaming={false}
+        onSelectionChange={(event) => props.onSelectionChange?.(event, props.result)}
+        selectionMenu={props.selectionMenu}
       />
       <If when={copyStatus() === "failed"}>
         <Text role="alert" class="text-xs text-destructive">
@@ -77,6 +85,8 @@ function HistoryResultCard(props: { result: HistoryResult; markdownEnabled: bool
 export function QuickTranslateHistoryResults(props: {
   snapshot: HistorySnapshot | null;
   markdownEnabled: boolean;
+  onSelectionChange?: (event: TextSelectionEventPayload, result: HistoryResult) => void;
+  selectionMenu?: QuickTranslateSelectionMenu;
 }) {
   return (
     <View class="border-t border-border/70" testID="quick-translate-history-results">
@@ -85,7 +95,12 @@ export function QuickTranslateHistoryResults(props: {
         key={(result) => `${props.snapshot?.id}:${result.position}`}
       >
         {(result) => (
-          <HistoryResultCard result={result()} markdownEnabled={props.markdownEnabled} />
+          <HistoryResultCard
+            result={result()}
+            markdownEnabled={props.markdownEnabled}
+            onSelectionChange={props.onSelectionChange}
+            selectionMenu={props.selectionMenu}
+          />
         )}
       </Each>
     </View>

@@ -19,7 +19,10 @@ import { alignmentModel } from "../features/quick-translate/alignment-model";
 import { beginHistoryAction } from "../features/quick-translate/history";
 import { QuickTranslateHistoryMenu } from "../features/quick-translate/history-menu";
 import { QuickTranslateLanguageBar } from "../features/quick-translate/language-menu";
+import { DockedDictionaryDrawer } from "../features/quick-translate/dictionary-drawer";
 import { QuickTranslateFooter, QuickTranslatePopup } from "../features/quick-translate/popup";
+import { createDictionarySelectionCoordinator } from "../features/quick-translate/selection-coordinator";
+import { createQuickSpeechCoordinator } from "../features/quick-translate/speech";
 import {
   autoTranslatePreference,
   doubleCopyEnabled,
@@ -189,8 +192,27 @@ function QuickTranslateWindowBody(props: {
   const isCurrentWindow = computed(() => props.controller.attachedWindow() === win);
   const headerHeight = signal(0);
   const contentHeight = signal(0);
+  const drawerHeight = signal(0);
   const footerHeight = signal(0);
   const scrollRevision = signal(0);
+  const headerOverlays = signal<Readonly<Record<string, boolean>>>({});
+  const setHeaderOverlay = (menuId: string, open: boolean) => {
+    const next = { ...headerOverlays() };
+    if (open) next[menuId] = true;
+    else delete next[menuId];
+    headerOverlays.set(next);
+    session.notifyOverlayOpenChange(menuId, open);
+  };
+  const speech = createQuickSpeechCoordinator({
+    session,
+    playbackAllowed: () => props.controller.attachedWindow()?.state()?.visible === true,
+  });
+  const selection = createDictionarySelectionCoordinator({ session });
+  effect(() => {
+    if (!session.dictionaryDrawer().open && drawerHeight() !== 0) {
+      drawerHeight.set(0);
+    }
+  });
   let lastScrollOffset = { x: 0, y: 0 };
   let fitId = 0;
   const markdownActionLabel = () =>
@@ -239,6 +261,7 @@ function QuickTranslateWindowBody(props: {
     if (!isCurrentWindow()) return;
     const header = headerHeight();
     const content = contentHeight();
+    const drawer = session.dictionaryDrawer().open ? drawerHeight() : 0;
     const footer = footerHeight();
     const ready = readyToFit();
     if (!ready || header <= 0 || content <= 0 || footer <= 0) {
@@ -246,7 +269,7 @@ function QuickTranslateWindowBody(props: {
       return;
     }
     const id = ++fitId;
-    const height = header + content + footer + ROOT_BORDER_HEIGHT;
+    const height = header + content + drawer + footer + ROOT_BORDER_HEIGHT;
     props.controller.traceHeightFit("fit-scheduled", {
       fitId: id,
       header,
@@ -293,8 +316,8 @@ function QuickTranslateWindowBody(props: {
             onSelectSourceLanguage={(language) => session.handleSourceLanguageChange(language)}
             onSelectTargetLanguage={(language) => session.handleTargetLanguageChange(language)}
             onSwapLanguages={() => session.handleSwapLanguages()}
-            onSourceOpenChange={(open) => session.notifyOverlayOpenChange("source-language", open)}
-            onTargetOpenChange={(open) => session.notifyOverlayOpenChange("target-language", open)}
+            onSourceOpenChange={(open) => setHeaderOverlay("source-language", open)}
+            onTargetOpenChange={(open) => setHeaderOverlay("target-language", open)}
           />
         </View>
         <View desktop={{ windowDrag: false }} class="shrink-0 flex-row items-center gap-0.5">
@@ -364,7 +387,7 @@ function QuickTranslateWindowBody(props: {
           <QuickTranslateHistoryMenu
             available={props.controller.isOpen() && !props.controller.dismissalSuspended()}
             draftRevision={props.controller.draftRevision}
-            onOpenChange={(open) => session.notifyOverlayOpenChange("history", open)}
+            onOpenChange={(open) => setHeaderOverlay("history", open)}
             onRestore={session.handleRestoreHistory}
             onFocusSource={props.controller.focusSourceInput}
           />
@@ -403,6 +426,7 @@ function QuickTranslateWindowBody(props: {
         </View>
       </View>
       <Scroll
+        testID="quick-translate-scroll"
         class="min-h-0 flex-1"
         onScroll={({ offset }) => {
           if (offset.x === lastScrollOffset.x && offset.y === lastScrollOffset.y) return;
@@ -438,9 +462,33 @@ function QuickTranslateWindowBody(props: {
             sentenceAlignmentEnabled={sentenceAlignmentEnabled}
             semanticModelReady={() => sentenceAlignmentEnabled() && alignmentModel.ready()}
             onAttachSourceInput={(node) => props.controller.attachSourceInput(node)}
+            speech={speech}
+            selection={selection}
+            externalOverlayOpen={() => Object.values(headerOverlays()).some(Boolean)}
           />
         </View>
       </Scroll>
+      <DockedDictionaryDrawer
+        state={session.dictionaryDrawer()}
+        speakControl={speech.control("drawer-dictionary")}
+        speechError={speech.drawerDictionaryError()}
+        onSpeak={() => {
+          if (speech.control("drawer-dictionary").busy) speech.cancel();
+          else speech.speakDrawerDictionary();
+        }}
+        onBack={session.handleLookupBack}
+        onPromote={session.handlePromoteDictionaryTerm}
+        onClose={session.handleCloseDictionaryDrawer}
+        onRetry={session.handleRetryDictionaryDrawer}
+        onDrillDown={(term) =>
+          session.handleLookupSelection({ term, region: "drawer" }, { drillDown: true })
+        }
+        onSelectionChange={(event, fullText) =>
+          selection.handleSelection("drawer", event, { fullText })
+        }
+        selectionMenu={selection.selectionMenu()}
+        onLayoutHeight={(height) => drawerHeight.set(height)}
+      />
       <View class="shrink-0" onLayout={({ bounds }) => footerHeight.set(bounds.size.height)}>
         <QuickTranslateFooter session={session} />
       </View>

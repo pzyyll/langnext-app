@@ -507,6 +507,7 @@ dictionary:
   back: 返回
   close: 关闭
   promoteToSource: 放入主输入框查词与翻译
+  notFound: "未找到“%{term}”的词典释义。"
   error:
     unconfigured: 请先在设置中配置词典模型。
     unsupported: 当前词典渠道不支持该请求。

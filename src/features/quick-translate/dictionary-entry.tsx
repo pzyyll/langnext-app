@@ -2,6 +2,7 @@ import { Text, View } from "nsh";
 import { t } from "nsh/i18n";
 import { Button } from "../../components/ui/button";
 import type { DictionaryEntry } from "../../integrations/dictionary";
+import type { QuickTranslateSelectionMenu, TextSelectionEventPayload } from "./selection-types";
 
 export interface DictionaryEntryViewProps {
   testIdPrefix: string;
@@ -9,6 +10,8 @@ export interface DictionaryEntryViewProps {
   contextSentence?: string;
   extraPhoneticsFrom?: number;
   onLookupSynonym?: (term: string) => void;
+  onSelectionChange?: (event: TextSelectionEventPayload, fullText: string) => void;
+  selectionMenu?: QuickTranslateSelectionMenu;
 }
 
 /** Shared structured dictionary entry body used by both the inline band and docked drawer. */
@@ -69,18 +72,37 @@ export function DictionaryEntryView(props: DictionaryEntryViewProps) {
                   </Text>
                 </View>
               </If>
-              <View selectable class="min-w-0 flex-1">
+              <View
+                selectable
+                class="min-w-0 flex-1"
+                onSelectionChange={(event) =>
+                  props.onSelectionChange?.(event, sense.glosses.join("; "))
+                }
+                selectionMenu={props.selectionMenu}
+              >
                 <Text class="text-sm leading-snug text-foreground">{sense.glosses.join("; ")}</Text>
               </View>
             </View>
 
             <If when={Boolean(sense.example)}>
               <View class="gap-0.5 pl-2">
-                <View selectable>
+                <View
+                  selectable
+                  onSelectionChange={(event) =>
+                    props.onSelectionChange?.(event, sense.example ?? "")
+                  }
+                  selectionMenu={props.selectionMenu}
+                >
                   <Text class="text-xs text-muted-foreground">{sense.example ?? ""}</Text>
                 </View>
                 <If when={Boolean(sense.exampleTranslation)}>
-                  <View selectable>
+                  <View
+                    selectable
+                    onSelectionChange={(event) =>
+                      props.onSelectionChange?.(event, sense.exampleTranslation ?? "")
+                    }
+                    selectionMenu={props.selectionMenu}
+                  >
                     <Text class="text-xs text-muted-foreground/80">
                       {sense.exampleTranslation ?? ""}
                     </Text>

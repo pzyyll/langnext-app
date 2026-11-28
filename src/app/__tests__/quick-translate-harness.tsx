@@ -4,6 +4,7 @@ import { t } from "nsh/i18n";
 import { loadSplitRailWidths } from "../../components/layout/split-rail";
 import { Button } from "../../components/ui/button";
 import { loadModelsState } from "../../features/models/store";
+import { dictionaryChannels } from "../../features/dictionary/store";
 import { ocrChannels } from "../../features/ocr/store";
 import { presetsStore } from "../../features/presets/store";
 import { loadQuickTranslatePreferences } from "../../features/quick-translate/preferences";
@@ -446,6 +447,7 @@ void Promise.all([
   Storage.getItem(HARNESS_SELECTION_HINT_MODE_KEY),
   Storage.getItem("__test.qt.openNearWorkAreaBottom"),
   loadSentenceAlignment(),
+  dictionaryChannels.load(),
 ]).then(
   ([
     ,

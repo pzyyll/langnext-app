@@ -6,6 +6,7 @@ import { expect, open, test, type StubRequest, type StubResponse } from "nsh/tes
 import { GOOGLE_DETECTION_URL } from "../integrations/detect/vendor/google-free";
 import { GOOGLE_CLOUD_TTS_URL } from "../integrations/tts/vendor/google-cloud";
 import { DEFAULT_GOOGLE_VOICE_PREFERENCES } from "../integrations/tts/vendor/google-preferences";
+import { DICTIONARY_CHANNELS_STORAGE_KEY } from "../features/dictionary/store";
 import { LANGUAGE_DETECTION_PREFERENCES_STORAGE_KEY } from "../features/language-detection/preferences";
 import { DETECT_COLLECTION_STORAGE_KEY } from "../features/language-detection/store";
 import { makeChannel, makeModel, makeSeedStorage } from "../features/models/__tests__/fixtures";
@@ -4678,6 +4679,171 @@ test("alignment window: collapsed Markdown preview opens a sentence popover that
   expect(app.window("quick-translate").state()?.visible).toBe(true);
 
   // Second Escape closes the Quick Translate window.
+  await app.keyboard.press("escape");
+  await app.waitUntil(() => app.window("quick-translate").state() === null);
+});
+
+test("dictionary window: docks drawer between scroll and footer, supports history selection, and layers Escape", async () => {
+  const dictBaseUrl = "https://dict.test/v1";
+  const dictUrl = `POST ${dictBaseUrl}/chat/completions`;
+  const saved = new Map<string, HistorySnapshot>();
+  const app = await open(HARNESS_ENTRY, {
+    ...viewport,
+    clock: {},
+    modules: {
+      "langnext-native": {
+        "TranslationHistoryNative.record": (
+          id: string,
+          sourceText: string | null,
+          result: HistoryResult,
+        ) => {
+          if (sourceText !== null) saved.set(id, { id, sourceText, results: [] });
+          saved.get(id)?.results.push(result);
+        },
+        "TranslationHistoryNative.listRecent": () =>
+          [...saved.values()]
+            .reverse()
+            .map(({ id, sourceText }) => ({ id, preview: sourceText.replaceAll("\n", " ") })),
+        "TranslationHistoryNative.read": (id: string) => saved.get(id) ?? null,
+      },
+    },
+    storage: {
+      ...makeSeedStorage({
+        channels: [
+          makeChannel({
+            id: "ch-1",
+            presetId: "openai",
+            adapterId: "openai-compatible",
+            enabled: true,
+          }),
+          makeChannel({
+            id: "ch-dict",
+            displayName: "Dict AI",
+            adapterId: "openai-compatible",
+            baseUrl: dictBaseUrl,
+            enabled: true,
+          }),
+        ],
+        models: [
+          makeModel({
+            id: "m-1",
+            providerId: "ch-1",
+            modelKey: "gpt-4o",
+            sourceAdapterId: "openai-compatible",
+            enabled: true,
+          }),
+          makeModel({
+            id: "m-dict",
+            providerId: "ch-dict",
+            modelKey: "gpt-4.1-mini",
+            sourceAdapterId: "openai-compatible",
+            enabled: true,
+          }),
+        ],
+        credentials: { "ch-1": "sk-test", "ch-dict": "sk-dict" },
+      }),
+      [PRESETS_STORAGE_KEY]: JSON.stringify({ version: 1, items: [quickPreset] }),
+      [QUICK_TRANSLATE_PREFERENCES_KEY]: popupPreferences({
+        autoTranslate: false,
+        sourceLanguage: "en",
+        targetLanguage: "zh",
+        cards: [{ id: "card-1", presetId: quickPreset.id }],
+      }),
+      [DICTIONARY_CHANNELS_STORAGE_KEY]: JSON.stringify({
+        version: 1,
+        order: ["ai"],
+        channels: {
+          ai: {
+            enabled: true,
+            configured: true,
+            config: { modelId: "m-dict" },
+            credentialRef: null,
+          },
+        },
+      }),
+    },
+    network: {
+      "POST https://api.openai.com/v1/chat/completions": {
+        status: 200,
+        body: { choices: [{ message: { content: "Fleeting spring glory fades away today" } }] },
+      },
+      [dictUrl]: {
+        status: 200,
+        body: {
+          choices: [
+            {
+              message: {
+                content: JSON.stringify({
+                  found: true,
+                  term: "ephemeral",
+                  phonetics: [{ label: "US", ipa: "/ɪˈfɛmərəl/" }],
+                  senses: [{ partOfSpeech: "adj.", glosses: ["短暂的"] }],
+                  contextSenseSummary: "此处意为“转瞬即逝”。",
+                }),
+              },
+            },
+          ],
+        },
+      },
+    },
+  });
+
+  await app.press("id:harness-tray-quick-translate");
+  await app.waitFor("id:quick-translate-source");
+  await app.type("id:quick-translate-source", "Fame and beauty feel ephemeral right now");
+  await app.keyboard.press("shift+enter");
+  await app.type("id:quick-translate-source", "Next sentence here.");
+  await app.keyboard.press("enter");
+  await app.waitFor(
+    "id:quick-translate-card-card-1 >> text:Fleeting spring glory fades away today",
+  );
+  await app.waitUntil(() => [...saved.values()][0]?.results.length === 1);
+
+  // Restore via history and select inside restored history result to open pill + drawer.
+  const historyEntry =
+    "role:menuitem[Fame and beauty feel ephemeral right now Next sentence here.]";
+  await app.press("id:quick-translate-history");
+  await app.waitFor(historyEntry);
+  await app.keyboard.press("arrowdown");
+  await app.keyboard.press("enter");
+  await app.waitUntil(() => !app.shows(historyEntry));
+  await app.waitFor("id:quick-translate-history-result-text");
+
+  await app.drag("id:quick-translate-history-result-text", { x: -80, y: 0 });
+  await app.clock!.runFor(200);
+  await app.waitFor("id:quick-translate-dictionary-pill");
+
+  // First Escape closes pill alone; drawer stays closed and window stays open.
+  await app.keyboard.press("escape");
+  await app.waitUntil(() => !app.shows("id:quick-translate-dictionary-pill"));
+  expect(app.window("quick-translate").state()?.visible).toBe(true);
+
+  // Open pill again -> press pill -> opens docked drawer outside scroll above footer.
+  await app.drag(
+    "id:quick-translate-source >> text:Fame and beauty feel ephemeral right now >> nth=0",
+    { x: -80, y: 0 },
+  );
+  await app.clock!.runFor(200);
+  await app.waitFor("id:quick-translate-dictionary-pill");
+  await app.press("id:quick-translate-dictionary-pill");
+  await app.waitFor("id:quick-translate-dictionary-drawer");
+
+  const surfaceLayout = app.layout("id:quick-translate-surface");
+  const drawerLayout = app.layout("id:quick-translate-dictionary-drawer");
+  const scrollLayout = app.layout("id:quick-translate-scroll");
+  expect(surfaceLayout).toBeTruthy();
+  expect(drawerLayout).toBeTruthy();
+  if (scrollLayout && drawerLayout) {
+    expect(drawerLayout.y).toBeGreaterThanOrEqual(scrollLayout.y + scrollLayout.height - 1);
+  }
+  const winState = app.window("quick-translate").state()!;
+  expect(winState.contentBounds.size.height).toBeLessThanOrEqual(760);
+
+  // Layered Escape: closes drawer first while window remains visible, then next Escape closes window.
+  await app.keyboard.press("escape");
+  await app.waitUntil(() => !app.shows("id:quick-translate-dictionary-drawer"));
+  expect(app.window("quick-translate").state()?.visible).toBe(true);
+
   await app.keyboard.press("escape");
   await app.waitUntil(() => app.window("quick-translate").state() === null);
 });
