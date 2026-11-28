@@ -4948,7 +4948,7 @@ test("quick anki dictionary: adds source dictionary entry via unified drawer, bl
   await app.waitFor("id:quick-translate-source");
   await app.type("id:quick-translate-source", "ephemeral");
   await app.keyboard.press("enter");
-  await app.waitFor("id:quick-translate-source-toolbar >> text:US /ɪˈfɛmərəl/");
+  await app.waitFor("id:quick-translate-source-toolbar >> text:/ɪˈfɛmərəl/");
   await app.waitFor("id:quick-translate-card-card-1 >> text:短暂的");
 
   await app.press("id:quick-translate-dictionary-open");
@@ -5013,7 +5013,7 @@ test("quick anki dictionary: adds drawer entry with context sentence, hides when
   await disabledApp.waitFor("id:quick-translate-source");
   await disabledApp.type("id:quick-translate-source", "ephemeral");
   await disabledApp.keyboard.press("enter");
-  await disabledApp.waitFor("id:quick-translate-source-toolbar >> text:US /ɪˈfɛmərəl/");
+  await disabledApp.waitFor("id:quick-translate-source-toolbar >> text:/ɪˈfɛmərəl/");
   await disabledApp.press("id:quick-translate-dictionary-open");
   await disabledApp.waitFor("id:quick-translate-dictionary-drawer >> text:US /ɪˈfɛmərəl/");
   expect(disabledApp.shows("id:quick-translate-dictionary-drawer-add-anki")).toBe(false);

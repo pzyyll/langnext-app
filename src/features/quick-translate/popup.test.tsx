@@ -6114,7 +6114,8 @@ test("dictionary inline: shows phonetic and See dictionary in source toolbar and
   expect(app.shows("id:quick-translate-source-phonetic")).toBe(false);
   await app.keyboard.press("enter");
 
-  await app.waitFor("id:quick-translate-source-toolbar >> text:US /ɪˈfɛmərəl/");
+  await app.waitFor("id:quick-translate-source-toolbar >> text:/ɪˈfɛmərəl/");
+  expect(app.shows("id:quick-translate-source-toolbar >> text:US /ɪˈfɛmərəl/")).toBe(false);
   expect(app.shows("id:quick-translate-source-toolbar >> id:quick-translate-dictionary-open")).toBe(
     true,
   );
@@ -6122,6 +6123,9 @@ test("dictionary inline: shows phonetic and See dictionary in source toolbar and
   expect(app.shows("role:button[See dictionary]")).toBe(false);
   expect(app.spanStyle("id:quick-translate-dictionary-open >> text:See dictionary").underline).toBe(
     true,
+  );
+  expect(app.spanStyle("id:quick-translate-dictionary-open >> text:See dictionary").color).toBe(
+    app.spanStyle("id:quick-translate-source-phonetic >> text:/ɪˈfɛmərəl/").color,
   );
   expect(app.shows("id:quick-translate-dictionary-drawer")).toBe(false);
   expect(app.shows("id:quick-translate-card-card-1 >> text:短暂的")).toBe(true);
@@ -6199,7 +6203,7 @@ test("dictionary inline: hides link until entry resolves, hides silently on erro
 
   // Resubmitting recovers the entry, revealing phonetic and See dictionary together.
   await app.keyboard.press("enter");
-  await app.waitFor("id:quick-translate-source-toolbar >> text:US /ɪˈfɛmərəl/");
+  await app.waitFor("id:quick-translate-source-toolbar >> text:/ɪˈfɛmərəl/");
   expect(app.shows("role:link[See dictionary]")).toBe(true);
   await app.press("role:link[See dictionary]");
   await app.waitFor("id:quick-translate-dictionary-drawer >> text:US /ɪˈfɛmərəl/");
@@ -6402,7 +6406,7 @@ test("dictionary selection: shows 180ms pill for source, result, and back-transl
   // Promote active drawer entry into source input -> closes drawer, translates, shows source toolbar dictionary trigger.
   await app.press("id:quick-translate-dictionary-drawer-promote");
   await app.waitUntil(() => !app.shows("id:quick-translate-dictionary-drawer"));
-  await app.waitFor("id:quick-translate-source-toolbar >> text:US /ɪˈfɛmərəl/");
+  await app.waitFor("id:quick-translate-source-toolbar >> text:/ɪˈfɛmərəl/");
   expect(app.shows("id:quick-translate-dictionary-open")).toBe(true);
   await app.waitFor("id:quick-translate-card-card-1 >> text:短暂的");
   expect(dictRequests.length).toBeGreaterThanOrEqual(3);

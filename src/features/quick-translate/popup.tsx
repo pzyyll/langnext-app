@@ -2060,9 +2060,7 @@ export function QuickTranslatePopup(props: QuickTranslatePopupProps) {
   const sourceDictionaryPhonetic = () => {
     const state = props.session.sourceDictionary();
     if (state.status !== "entry") return "";
-    const first = state.entry.phonetics[0];
-    if (!first) return "";
-    return first.label ? `${first.label} ${first.ipa}` : first.ipa;
+    return state.entry.phonetics[0]?.ipa ?? "";
   };
   const showSourceDictionaryAction = () =>
     hasSourceText() &&
@@ -2152,7 +2150,7 @@ export function QuickTranslatePopup(props: QuickTranslatePopupProps) {
                 props.session.handleOpenSourceDictionary();
               }}
             >
-              <Text class="text-xs font-medium text-brand underline">
+              <Text class="text-xs text-muted-foreground underline">
                 {t("dictionary.seeDictionary")}
               </Text>
             </View>
