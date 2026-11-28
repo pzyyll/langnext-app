@@ -4847,3 +4847,252 @@ test("dictionary window: docks drawer between scroll and footer, supports histor
   await app.keyboard.press("escape");
   await app.waitUntil(() => app.window("quick-translate").state() === null);
 });
+
+function dictionaryAnkiStorage(wordbookEnabled: boolean, dictBaseUrl: string) {
+  return {
+    ...makeSeedStorage({
+      channels: [
+        makeChannel({
+          id: "ch-1",
+          presetId: "openai",
+          adapterId: "openai-compatible",
+          enabled: true,
+        }),
+        makeChannel({
+          id: "ch-dict",
+          displayName: "Dict AI",
+          adapterId: "openai-compatible",
+          baseUrl: dictBaseUrl,
+          enabled: true,
+        }),
+      ],
+      models: [
+        makeModel({
+          id: "m-1",
+          providerId: "ch-1",
+          modelKey: "gpt-4o",
+          sourceAdapterId: "openai-compatible",
+          enabled: true,
+        }),
+        makeModel({
+          id: "m-dict",
+          providerId: "ch-dict",
+          modelKey: "gpt-4.1-mini",
+          sourceAdapterId: "openai-compatible",
+          enabled: true,
+        }),
+      ],
+      credentials: { "ch-1": "sk-test", "ch-dict": "sk-dict" },
+    }),
+    [PRESETS_STORAGE_KEY]: JSON.stringify({ version: 1, items: [quickPreset] }),
+    [QUICK_TRANSLATE_PREFERENCES_KEY]: popupPreferences({
+      autoTranslate: false,
+      sourceLanguage: "en",
+      targetLanguage: "zh",
+      cards: [{ id: "card-1", presetId: quickPreset.id }],
+    }),
+    [DICTIONARY_CHANNELS_STORAGE_KEY]: JSON.stringify({
+      version: 1,
+      order: ["ai"],
+      channels: {
+        ai: { enabled: true, configured: true, config: { modelId: "m-dict" }, credentialRef: null },
+      },
+    }),
+    "settings.language": "en",
+    "settings.wordbook.anki.v1": wordbookBinding(wordbookEnabled),
+  };
+}
+
+test("quick anki dictionary: adds inline dictionary entry, blocks concurrent card write, and preserves format", async () => {
+  const dictBaseUrl = "https://dict.test/v1";
+  const dictUrl = `POST ${dictBaseUrl}/chat/completions`;
+  const app = await open(HARNESS_ENTRY, {
+    ...viewport,
+    storage: dictionaryAnkiStorage(true, dictBaseUrl),
+    network: {
+      "POST https://api.openai.com/v1/chat/completions": {
+        body: { choices: [{ message: { content: "短暂的" } }] },
+      },
+      [dictUrl]: {
+        status: 200,
+        body: {
+          choices: [
+            {
+              message: {
+                content: JSON.stringify({
+                  found: true,
+                  term: "ephemeral",
+                  phonetics: [{ label: "US", ipa: "/ɪˈfɛmərəl/" }],
+                  senses: [
+                    {
+                      partOfSpeech: "adj.",
+                      glosses: ["短暂的", "转瞬即逝的"],
+                      example: "Fashion is by nature ephemeral.",
+                      exampleTranslation: "时尚本质上是转瞬即逝的。",
+                    },
+                  ],
+                }),
+              },
+            },
+          ],
+        },
+      },
+      ["POST " + ANKI_URL]: ankiReadNetwork({
+        delay: 1500,
+        body: { jsonrpc: "2.0", result: { noteId: "1550000000021", cardIds: ["1550000000022"] } },
+      }),
+    },
+  });
+
+  await app.press("id:harness-tray-quick-translate");
+  await app.waitFor("id:quick-translate-source");
+  await app.type("id:quick-translate-source", "ephemeral");
+  await app.keyboard.press("enter");
+  await app.waitFor("id:quick-translate-dictionary-inline >> text:US /ɪˈfɛmərəl/");
+  await app.waitFor("id:quick-translate-card-card-1 >> text:短暂的");
+
+  await app.press("id:quick-translate-dictionary-inline-add-anki");
+  await app.waitFor("id:quick-translate-dictionary-inline >> text:Adding…");
+  await app.press("id:quick-translate-card-card-1 >> id:quick-translate-add-anki");
+  expect(app.shows("id:quick-translate-card-card-1 >> text:Adding…")).toBe(false);
+
+  await app.waitFor("id:quick-translate-dictionary-inline >> text:Added to Anki");
+  expect(app.shows("id:quick-translate-card-card-1 >> text:Added to Anki")).toBe(false);
+  const creates = app.requests().filter((request) => (request.body ?? "").includes("notes.create"));
+  expect(creates).toHaveLength(1);
+  const created = JSON.parse(creates[0]!.body ?? "") as {
+    params: { fields: Record<string, string> };
+  };
+  expect(created.params.fields.Front).toBe("ephemeral");
+  expect(created.params.fields.Back).toBe(
+    "US /ɪˈfɛmərəl/<br>adj. 短暂的; 转瞬即逝的<br>Fashion is by nature ephemeral.<br>时尚本质上是转瞬即逝的。",
+  );
+});
+
+test("quick anki dictionary: adds drawer entry with context sentence, hides when disabled, and handles duplicate errors", async () => {
+  const dictBaseUrl = "https://dict.test/v1";
+  const dictUrl = `POST ${dictBaseUrl}/chat/completions`;
+  const disabledApp = await open(HARNESS_ENTRY, {
+    ...viewport,
+    storage: dictionaryAnkiStorage(false, dictBaseUrl),
+    network: {
+      "POST https://api.openai.com/v1/chat/completions": {
+        body: { choices: [{ message: { content: "短暂的" } }] },
+      },
+      [dictUrl]: {
+        status: 200,
+        body: {
+          choices: [
+            {
+              message: {
+                content: JSON.stringify({
+                  found: true,
+                  term: "ephemeral",
+                  phonetics: [{ label: "US", ipa: "/ɪˈfɛmərəl/" }],
+                  senses: [{ partOfSpeech: "adj.", glosses: ["短暂的"] }],
+                }),
+              },
+            },
+          ],
+        },
+      },
+    },
+  });
+
+  await disabledApp.press("id:harness-tray-quick-translate");
+  await disabledApp.waitFor("id:quick-translate-source");
+  await disabledApp.type("id:quick-translate-source", "ephemeral");
+  await disabledApp.keyboard.press("enter");
+  await disabledApp.waitFor("id:quick-translate-dictionary-inline >> text:US /ɪˈfɛmərəl/");
+  expect(disabledApp.shows("id:quick-translate-dictionary-inline-add-anki")).toBe(false);
+
+  let createCalls = 0;
+  const app = await open(HARNESS_ENTRY, {
+    ...viewport,
+    storage: dictionaryAnkiStorage(true, dictBaseUrl),
+    network: {
+      "POST https://api.openai.com/v1/chat/completions": {
+        body: { choices: [{ message: { content: "美丽转瞬即逝。" } }] },
+      },
+      [dictUrl]: {
+        status: 200,
+        body: {
+          choices: [
+            {
+              message: {
+                content: JSON.stringify({
+                  found: true,
+                  term: "ephemeral",
+                  phonetics: [{ label: "US", ipa: "/ɪˈfɛmərəl/" }],
+                  senses: [{ partOfSpeech: "adj.", glosses: ["短暂的"] }],
+                  contextSenseSummary: "此处意为“短暂的”。",
+                }),
+              },
+            },
+          ],
+        },
+      },
+      ["POST " + ANKI_URL]: (request): StubResponse => {
+        const body = JSON.parse(request.body ?? "{}") as { id?: unknown; method?: string };
+        if (body.method !== "notes.create") {
+          return ankiReadNetwork({ body: {} })(request);
+        }
+        createCalls += 1;
+        if (createCalls === 1) {
+          return {
+            body: {
+              jsonrpc: "2.0",
+              id: body.id,
+              error: {
+                code: -32602,
+                message: "Validation failed.",
+                data: { type: "validationFailed", details: { issues: [{ type: "duplicate" }] } },
+              },
+            },
+          };
+        }
+        return {
+          body: {
+            jsonrpc: "2.0",
+            id: body.id,
+            result: { noteId: "1550000000031", cardIds: ["1550000000032"] },
+          },
+        };
+      },
+    },
+  });
+
+  await app.press("id:harness-tray-quick-translate");
+  await app.waitFor("id:quick-translate-source");
+  await app.type("id:quick-translate-source", "Fame and beauty feel ephemeral right now");
+  await app.keyboard.press("shift+enter");
+  await app.type("id:quick-translate-source", "Next sentence here.");
+  await app.keyboard.press("enter");
+  await app.waitFor("id:quick-translate-card-card-1 >> text:美丽转瞬即逝。");
+
+  await app.drag(
+    "id:quick-translate-source >> text:Fame and beauty feel ephemeral right now >> nth=0",
+    { x: -80, y: 0 },
+  );
+  await app.waitFor("id:quick-translate-dictionary-pill");
+  await app.press("id:quick-translate-dictionary-pill");
+  await app.waitFor("id:quick-translate-dictionary-drawer >> text:US /ɪˈfɛmərəl/");
+
+  await app.press("id:quick-translate-dictionary-drawer-add-anki");
+  await app.waitFor(
+    "id:quick-translate-dictionary-drawer >> text:This source already exists. Its translation was not changed.",
+  );
+  expect(app.shows("id:quick-translate-dictionary-drawer >> text:Added to Anki")).toBe(false);
+
+  await app.press("id:quick-translate-dictionary-drawer-add-anki");
+  await app.waitFor("id:quick-translate-dictionary-drawer >> text:Added to Anki");
+  const creates = app.requests().filter((request) => (request.body ?? "").includes("notes.create"));
+  expect(creates).toHaveLength(2);
+  const created = JSON.parse(creates[1]!.body ?? "") as {
+    params: { fields: Record<string, string> };
+  };
+  expect(created.params.fields.Front).toBe("ephemeral");
+  expect(created.params.fields.Back).toBe(
+    "US /ɪˈfɛmərəl/<br>adj. 短暂的<br>Fame and beauty feel ephemeral right now",
+  );
+});

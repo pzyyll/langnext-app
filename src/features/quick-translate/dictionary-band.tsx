@@ -1,4 +1,3 @@
-import type { JSX } from "nsh";
 import { Text, View } from "nsh";
 import { t } from "nsh/i18n";
 import { motion } from "../../components/motion";
@@ -6,12 +5,19 @@ import { Button } from "../../components/ui/button";
 import { Icon, type IconName } from "../../components/ui/icon";
 import { Skeleton } from "../../components/ui/skeleton";
 import type { DictionaryEntry } from "../../integrations/dictionary";
+import { AnkiAddButton, AnkiStatusText, type CardAnkiState } from "./anki-control";
 import { DictionaryEntryView } from "./dictionary-entry";
 
 export type InlineDictionaryViewState =
   | { status: "hidden" }
   | { status: "loading"; term: string }
-  | { status: "entry"; term: string; entry: DictionaryEntry; expanded: boolean }
+  | {
+      status: "entry";
+      term: string;
+      entry: DictionaryEntry;
+      expanded: boolean;
+      anki: CardAnkiState;
+    }
   | { status: "error"; term: string; message: string };
 
 export interface DictionarySpeakControlState {
@@ -30,7 +36,8 @@ export interface InlineDictionaryBandProps {
   onToggleExpand: () => void;
   onRetry: () => void;
   onLookupSynonym?: (term: string) => void;
-  ankiAction?: JSX.Element;
+  ankiEnabled?: boolean;
+  onAddToAnki?: () => void;
 }
 
 /** Compact inline dictionary strip rendered between source input and translation stream for whole-word queries. */
@@ -131,7 +138,13 @@ export function InlineDictionaryBand(props: InlineDictionaryBandProps) {
                   <Text class="truncate text-xs text-muted-foreground">{primaryPreview()}</Text>
                 </If>
               </View>
-              {props.ankiAction}
+              <If when={Boolean(props.ankiEnabled && props.onAddToAnki)}>
+                <AnkiAddButton
+                  testID="quick-translate-dictionary-inline-add-anki"
+                  anki={entryState()!.anki}
+                  onPress={() => props.onAddToAnki?.()}
+                />
+              </If>
               <Button
                 testID="quick-translate-dictionary-inline-toggle"
                 variant="ghost"
@@ -149,6 +162,14 @@ export function InlineDictionaryBand(props: InlineDictionaryBandProps) {
                 />
               </Button>
             </View>
+
+            <If when={entryState()!.anki.status !== "idle"}>
+              <AnkiStatusText
+                testID="quick-translate-dictionary-inline-anki-status"
+                anki={entryState()!.anki}
+                class="pt-1"
+              />
+            </If>
 
             <If when={props.speechError !== null}>
               <Text

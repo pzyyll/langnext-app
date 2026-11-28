@@ -19,7 +19,8 @@ Langnext is a desktop application for translation.
 - **History.** Open a recent translation again.
 - **Text-to-speech.** Read a translation aloud through Google Cloud TTS or Azure Speech.
 - **Back-translation.** Translate a result back toward the source language.
-- **Wordbook.** Save one Quick Translate result to a local Anki deck.
+- **Dictionary.** Look up a single word inline in Quick Translate, or select any word or short phrase across Quick Translate text to open the docked dictionary drawer (`Alt+D`, `Alt+Left` to step back, `Esc` to dismiss). Configure dictionary channels in **Settings**.
+- **Wordbook.** Save a Quick Translate result or dictionary entry to a local Anki deck.
 - **Language detection.** Resolve an automatic language choice with a model, Google, or Google Cloud.
 - **Appearance.** Use Light, Dark, or the system appearance.
 - **Interface language.** Use the system language, English, or Simplified Chinese.

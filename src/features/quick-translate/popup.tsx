@@ -42,6 +42,7 @@ import googleCloudIcon from "../../../assets/icons/google-cloud.svg";
 import googleIcon from "../../../assets/icons/google.svg";
 import { ProviderMark } from "../../modules/ai/ui/provider-mark";
 import { createLogger } from "../../services/log";
+import { AnkiAddButton, AnkiStatusText } from "./anki-control";
 import { isLanguageId, type LanguageId } from "../../framework/languages";
 import { presetChannelMark } from "../presets/model-choices";
 import type { TranslationPreset } from "../presets/types";
@@ -974,30 +975,11 @@ function PresetCardRow(props: PresetCardRowProps) {
                     );
                   })()}
                 >
-                  <Button
+                  <AnkiAddButton
                     testID="quick-translate-add-anki"
-                    size="icon-xs"
-                    variant="ghost"
-                    tooltip={
-                      props.card().anki.status === "added"
-                        ? t("quickTranslate.ankiAdded")
-                        : props.card().anki.status === "adding"
-                          ? t("quickTranslate.ankiAdding")
-                          : t("quickTranslate.ankiAdd")
-                    }
-                    accessibilityLabel={t("quickTranslate.ankiAdd")}
+                    anki={props.card().anki}
                     onPress={() => props.onAddToAnki(props.card().id)}
-                  >
-                    <Icon
-                      name={
-                        props.card().anki.status === "added"
-                          ? "mdi:check"
-                          : "mdi:share-variant-outline"
-                      }
-                      tone={props.card().anki.status === "added" ? "success" : "muted-foreground"}
-                      class="size-3.5"
-                    />
-                  </Button>
+                  />
                 </If>
                 <Button
                   testID="quick-translate-copy"
@@ -1060,23 +1042,7 @@ function PresetCardRow(props: PresetCardRowProps) {
             </If>
             <If when={props.card().anki.status !== "idle"}>
               <View class="px-4 pb-2.5">
-                <Text
-                  testID="quick-translate-anki-status"
-                  role={props.card().anki.status === "error" ? "alert" : undefined}
-                  class={
-                    props.card().anki.status === "error"
-                      ? "text-xs text-destructive"
-                      : "text-xs text-muted-foreground"
-                  }
-                >
-                  {(() => {
-                    const anki = props.card().anki;
-                    if (anki.status === "adding") return t("quickTranslate.ankiAdding");
-                    if (anki.status === "added") return t("quickTranslate.ankiAdded");
-                    if (anki.status === "error") return anki.message;
-                    return "";
-                  })()}
-                </Text>
+                <AnkiStatusText testID="quick-translate-anki-status" anki={props.card().anki} />
               </View>
             </If>
             <If when={props.card().copyError !== null}>
@@ -2459,6 +2425,8 @@ export function QuickTranslatePopup(props: QuickTranslatePopupProps) {
           }}
           onToggleExpand={props.session.handleToggleInlineDictionaryExpanded}
           onRetry={props.session.handleRetryInlineDictionary}
+          ankiEnabled={props.session.ankiEnabled()}
+          onAddToAnki={props.session.handleAddInlineDictionaryToAnki}
           onLookupSynonym={(term) => {
             closeSentencePopover("cancel");
             selection.clear();

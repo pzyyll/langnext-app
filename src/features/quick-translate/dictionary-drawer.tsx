@@ -1,4 +1,3 @@
-import type { JSX } from "nsh";
 import { Scroll, Text, View } from "nsh";
 import { t } from "nsh/i18n";
 import { motion } from "../../components/motion";
@@ -7,6 +6,7 @@ import { Icon } from "../../components/ui/icon";
 import { Skeleton } from "../../components/ui/skeleton";
 import type { LanguageId } from "../../framework/languages";
 import type { DictionaryEntry } from "../../integrations/dictionary";
+import { AnkiAddButton, AnkiStatusText, type CardAnkiState } from "./anki-control";
 import type { DictionarySpeakControlState } from "./dictionary-band";
 import { DictionaryEntryView } from "./dictionary-entry";
 import type {
@@ -25,7 +25,7 @@ export interface DictionaryDrawerQuery {
 
 export type DictionaryDrawerEntryState =
   | { status: "loading"; query: DictionaryDrawerQuery }
-  | { status: "entry"; query: DictionaryDrawerQuery; entry: DictionaryEntry }
+  | { status: "entry"; query: DictionaryDrawerQuery; entry: DictionaryEntry; anki: CardAnkiState }
   | { status: "not_found"; query: DictionaryDrawerQuery }
   | { status: "error"; query: DictionaryDrawerQuery; message: string };
 
@@ -48,7 +48,8 @@ export interface DockedDictionaryDrawerProps {
   onSelectionChange?: (event: TextSelectionEventPayload, fullText: string) => void;
   selectionMenu?: QuickTranslateSelectionMenu;
   onLayoutHeight?: (height: number) => void;
-  ankiAction?: JSX.Element;
+  ankiEnabled?: boolean;
+  onAddToAnki?: () => void;
 }
 
 /** Non-modal docked lexical dictionary drawer mounted between the translation scroll view and footer. */
@@ -134,7 +135,13 @@ export function DockedDictionaryDrawer(props: DockedDictionaryDrawerProps) {
             >
               <Icon name="mdi:arrow-top-left" tone="muted-foreground" class="size-3.5" />
             </Button>
-            {props.ankiAction}
+            <If when={Boolean(props.ankiEnabled && props.onAddToAnki && entryState() !== null)}>
+              <AnkiAddButton
+                testID="quick-translate-dictionary-drawer-add-anki"
+                anki={entryState()!.anki}
+                onPress={() => props.onAddToAnki?.()}
+              />
+            </If>
             <Button
               testID="quick-translate-dictionary-drawer-close"
               variant="ghost"
@@ -147,6 +154,14 @@ export function DockedDictionaryDrawer(props: DockedDictionaryDrawerProps) {
             </Button>
           </View>
         </View>
+
+        <If when={entryState() !== null && entryState()!.anki.status !== "idle"}>
+          <AnkiStatusText
+            testID="quick-translate-dictionary-drawer-anki-status"
+            anki={entryState()!.anki}
+            class="px-4 pt-1.5"
+          />
+        </If>
 
         <If when={props.speechError !== null}>
           <Text

@@ -3,6 +3,7 @@ import type { AnkiAddFailure, AnkiAddInput, AnkiTarget } from "../wordbook/anki-
 import { batch, cleanup, Clipboard, effect, signal, untracked, type Accessor } from "nsh";
 import { t } from "nsh/i18n";
 import type { SelectItem } from "../../components/ui/select";
+import { formatDictionaryAnkiNote } from "../dictionary/anki-format";
 import { dictionaryFailureKey } from "../../integrations/dictionary";
 import { isInlineLexicalQuery, normalizeLookupTerm } from "../dictionary/lexical-query";
 import {
@@ -14,6 +15,7 @@ import {
 } from "../dictionary/lookup";
 import { dictionaryChannels } from "../dictionary/store";
 import { language as activeLanguagePreference } from "../settings/language";
+import type { CardAnkiState } from "./anki-control";
 import type { InlineDictionaryViewState } from "./dictionary-band";
 import type {
   DictionaryDrawerEntryState,
@@ -88,11 +90,7 @@ export type CardResultState =
     }
   | { status: "error"; message: string; text?: string };
 
-export type CardAnkiState =
-  | { status: "idle" }
-  | { status: "adding" }
-  | { status: "added" }
-  | { status: "error"; message: string };
+export type { CardAnkiState } from "./anki-control";
 
 const idleAnki: CardAnkiState = { status: "idle" };
 
@@ -253,6 +251,8 @@ export interface QuickTranslateSession {
   handleCopyCard: (cardId: string) => void;
   ankiEnabled: Accessor<boolean>;
   handleAddToAnki: (cardId: string) => void;
+  handleAddInlineDictionaryToAnki: () => void;
+  handleAddDrawerDictionaryToAnki: () => void;
   handleBackTranslate: (cardId: string) => void;
   handleCloseBackTranslation: (cardId: string) => void;
   handleRetryBackTranslation: (cardId: string) => void;
@@ -439,7 +439,7 @@ export function createQuickTranslateSession(
       return;
     }
 
-    drawerActiveSignal.set({ status: "entry", query, entry: outcome.result.entry });
+    drawerActiveSignal.set({ status: "entry", query, entry: outcome.result.entry, anki: idleAnki });
   };
 
   const handleLookupSelection: QuickTranslateSession["handleLookupSelection"] = (
@@ -456,7 +456,11 @@ export function createQuickTranslateSession(
       currentActive !== null;
 
     if (isDrillDown && currentActive) {
-      const nextStack = [...drawerStackSignal(), currentActive].slice(-MAX_DRAWER_HISTORY);
+      const pushed =
+        currentActive.status === "entry" && currentActive.anki.status === "adding"
+          ? { ...currentActive, anki: idleAnki }
+          : currentActive;
+      const nextStack = [...drawerStackSignal(), pushed].slice(-MAX_DRAWER_HISTORY);
       drawerStackSignal.set(nextStack);
     } else if (!isDrillDown) {
       drawerStackSignal.set([]);
@@ -647,6 +651,7 @@ export function createQuickTranslateSession(
       term,
       entry: outcome.result.entry,
       expanded: false,
+      anki: idleAnki,
     });
   };
 
@@ -1712,61 +1717,125 @@ export function createQuickTranslateSession(
 
   let ankiInFlight = false;
 
-  const handleAddToAnki = (cardId: string) => {
+  const submitAnkiNote = (input: {
+    note: { sourceText: string; translatedText: string };
+    isStillCurrent: () => boolean;
+    applyState: (state: CardAnkiState) => void;
+  }) => {
     if (ankiInFlight || !options.addToAnki || !options.currentAnkiBinding) return;
-    const card = cards().find((item) => item.id === cardId);
-    const runtime = cardRuntimes.get(cardId);
     const binding = options.currentAnkiBinding();
-    if (!card || !runtime || !binding || card.result.status !== "success") return;
-    const translated = card.result.text;
-    const source = runtime.context?.text ?? "";
-    if (translated.trim().length === 0 || source.trim().length === 0) return;
-    const expectedQuery = runtime.selectedQuery;
+    if (!binding) return;
+    if (
+      input.note.sourceText.trim().length === 0 ||
+      input.note.translatedText.trim().length === 0
+    ) {
+      return;
+    }
     const expectedEpoch = windowEpoch;
     ankiInFlight = true;
-    updateCard(cardId, (item) => ({ ...item, anki: { status: "adding" } }));
+    input.applyState({ status: "adding" });
     void options
       .addToAnki({
         target: binding,
-        sourceText: source,
-        translatedText: translated,
-        isCurrent: () => {
-          const latest = options.currentAnkiBinding?.() ?? null;
-          const currentRuntime = cardRuntimes.get(cardId);
-          return (
-            sameAnkiTarget(latest, binding) &&
-            currentRuntime === runtime &&
-            currentRuntime.selectedQuery === expectedQuery
-          );
-        },
+        sourceText: input.note.sourceText,
+        translatedText: input.note.translatedText,
+        isCurrent: () =>
+          sameAnkiTarget(options.currentAnkiBinding?.() ?? null, binding) && input.isStillCurrent(),
       })
       .then((result) => {
-        const currentRuntime = cardRuntimes.get(cardId);
-        const latestCard = cards().find((item) => item.id === cardId);
         const fresh =
+          !disposed &&
           windowEpoch === expectedEpoch &&
-          currentRuntime === runtime &&
-          currentRuntime.selectedQuery === expectedQuery &&
-          latestCard?.result.status === "success" &&
-          latestCard.result.text === translated &&
-          sameAnkiTarget(options.currentAnkiBinding?.() ?? null, binding);
+          sameAnkiTarget(options.currentAnkiBinding?.() ?? null, binding) &&
+          input.isStillCurrent();
         if (!fresh) return;
         if (!result.ok && result.failure === "notCurrent") {
-          updateCard(cardId, (item) => ({ ...item, anki: idleAnki }));
+          input.applyState(idleAnki);
           return;
         }
         if (result.ok) {
-          updateCard(cardId, (item) => ({ ...item, anki: { status: "added" } }));
+          input.applyState({ status: "added" });
           return;
         }
-        updateCard(cardId, (item) => ({
-          ...item,
-          anki: { status: "error", message: t(ANKI_FAILURE[result.failure]) },
-        }));
+        input.applyState({ status: "error", message: t(ANKI_FAILURE[result.failure]) });
       })
       .finally(() => {
         ankiInFlight = false;
       });
+  };
+
+  const handleAddToAnki = (cardId: string) => {
+    const card = cards().find((item) => item.id === cardId);
+    const runtime = cardRuntimes.get(cardId);
+    if (!card || !runtime || card.result.status !== "success") return;
+    const translated = card.result.text;
+    const source = runtime.context?.text ?? "";
+    const expectedQuery = runtime.selectedQuery;
+    submitAnkiNote({
+      note: { sourceText: source, translatedText: translated },
+      isStillCurrent: () => {
+        const currentRuntime = cardRuntimes.get(cardId);
+        const latestCard = cards().find((item) => item.id === cardId);
+        return (
+          currentRuntime === runtime &&
+          currentRuntime.selectedQuery === expectedQuery &&
+          latestCard?.result.status === "success" &&
+          latestCard.result.text === translated
+        );
+      },
+      applyState: (anki) => updateCard(cardId, (item) => ({ ...item, anki })),
+    });
+  };
+
+  const handleAddInlineDictionaryToAnki = () => {
+    const current = inlineDictionary();
+    if (current.status !== "entry") return;
+    const expectedInlineEpoch = inlineEpoch;
+    const expectedEntry = current.entry;
+    const note = formatDictionaryAnkiNote(current.entry);
+    submitAnkiNote({
+      note,
+      isStillCurrent: () => {
+        const latest = inlineDictionary();
+        return (
+          inlineEpoch === expectedInlineEpoch &&
+          latest.status === "entry" &&
+          latest.entry === expectedEntry
+        );
+      },
+      applyState: (anki) => {
+        const latest = inlineDictionary();
+        if (latest.status === "entry" && latest.entry === expectedEntry) {
+          inlineDictionary.set({ ...latest, anki });
+        }
+      },
+    });
+  };
+
+  const handleAddDrawerDictionaryToAnki = () => {
+    const current = drawerActiveSignal();
+    if (!drawerOpenSignal() || !current || current.status !== "entry") return;
+    const expectedDrawerEpoch = drawerEpoch;
+    const expectedEntry = current.entry;
+    const note = formatDictionaryAnkiNote(current.entry, current.query.contextSentence);
+    submitAnkiNote({
+      note,
+      isStillCurrent: () => {
+        const latest = drawerActiveSignal();
+        return (
+          drawerOpenSignal() &&
+          drawerEpoch === expectedDrawerEpoch &&
+          latest?.status === "entry" &&
+          latest.entry === expectedEntry
+        );
+      },
+      applyState: (anki) => {
+        const latest = drawerActiveSignal();
+        if (latest?.status === "entry" && latest.entry === expectedEntry) {
+          drawerActiveSignal.set({ ...latest, anki });
+        }
+      },
+    });
   };
 
   return {
@@ -1813,6 +1882,8 @@ export function createQuickTranslateSession(
     handleCopyCard,
     ankiEnabled: () => options.ankiEnabled?.() ?? false,
     handleAddToAnki,
+    handleAddInlineDictionaryToAnki,
+    handleAddDrawerDictionaryToAnki,
     handleBackTranslate,
     handleCloseBackTranslation,
     handleRetryBackTranslation,

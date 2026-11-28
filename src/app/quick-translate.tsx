@@ -480,6 +480,8 @@ function QuickTranslateWindowBody(props: {
         onPromote={session.handlePromoteDictionaryTerm}
         onClose={session.handleCloseDictionaryDrawer}
         onRetry={session.handleRetryDictionaryDrawer}
+        ankiEnabled={session.ankiEnabled()}
+        onAddToAnki={session.handleAddDrawerDictionaryToAnki}
         onDrillDown={(term) =>
           session.handleLookupSelection({ term, region: "drawer" }, { drillDown: true })
         }
