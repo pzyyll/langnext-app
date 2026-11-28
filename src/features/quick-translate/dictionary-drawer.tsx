@@ -2,18 +2,25 @@ import { Scroll, Text, View } from "nsh";
 import { t } from "nsh/i18n";
 import { motion } from "../../components/motion";
 import { Button } from "../../components/ui/button";
-import { Icon } from "../../components/ui/icon";
+import { Icon, type IconName } from "../../components/ui/icon";
 import { Skeleton } from "../../components/ui/skeleton";
 import type { LanguageId } from "../../framework/languages";
 import type { DictionaryEntry } from "../../integrations/dictionary";
 import { AnkiAddButton, AnkiStatusText, type CardAnkiState } from "./anki-control";
-import type { DictionarySpeakControlState } from "./dictionary-band";
 import { DictionaryEntryView } from "./dictionary-entry";
 import type {
   QuickTranslateSelectionMenu,
   QuickTranslateSelectionRegion,
   TextSelectionEventPayload,
 } from "./selection-types";
+
+export interface DictionarySpeakControlState {
+  disabled: boolean;
+  tooltip?: string;
+  label: string;
+  icon: IconName;
+  busy: boolean;
+}
 
 export interface DictionaryDrawerQuery {
   term: string;

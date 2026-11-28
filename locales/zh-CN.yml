@@ -498,8 +498,7 @@ languageDetection:
     missingNativeLanguage: 请设置母语，或选择具体的目标语言。
     missingPreferredLanguage: 请设置母语对应的目标语言，或选择具体的目标语言。
 dictionary:
-  expand: 展开词典
-  collapse: 收起词典
+  seeDictionary: 查询词典
   loading: 正在查词…
   lookUp: 查词
   forms: 词形变化

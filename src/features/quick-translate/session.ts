@@ -4,7 +4,7 @@ import { batch, cleanup, Clipboard, effect, signal, untracked, type Accessor } f
 import { t } from "nsh/i18n";
 import type { SelectItem } from "../../components/ui/select";
 import { formatDictionaryAnkiNote } from "../dictionary/anki-format";
-import { dictionaryFailureKey } from "../../integrations/dictionary";
+import { dictionaryFailureKey, type DictionaryEntry } from "../../integrations/dictionary";
 import { isInlineLexicalQuery, normalizeLookupTerm } from "../dictionary/lexical-query";
 import {
   isDictionaryConfigured,
@@ -16,7 +16,6 @@ import {
 import { dictionaryChannels } from "../dictionary/store";
 import { language as activeLanguagePreference } from "../settings/language";
 import type { CardAnkiState } from "./anki-control";
-import type { InlineDictionaryViewState } from "./dictionary-band";
 import type {
   DictionaryDrawerEntryState,
   DictionaryDrawerQuery,
@@ -212,7 +211,17 @@ export interface QuickTranslateSessionOptions {
   ) => Promise<LookupWordOutcome>;
 }
 
-export type InlineDictionaryState = InlineDictionaryViewState;
+export type SourceDictionaryState =
+  | { status: "hidden" }
+  | { status: "loading"; term: string }
+  | {
+      status: "entry";
+      term: string;
+      entry: DictionaryEntry;
+      explanationLanguage: string;
+    }
+  | { status: "not_found"; term: string }
+  | { status: "error"; term: string };
 
 export interface QuickTranslateSession {
   sourceText: Accessor<string>;
@@ -251,15 +260,13 @@ export interface QuickTranslateSession {
   handleCopyCard: (cardId: string) => void;
   ankiEnabled: Accessor<boolean>;
   handleAddToAnki: (cardId: string) => void;
-  handleAddInlineDictionaryToAnki: () => void;
   handleAddDrawerDictionaryToAnki: () => void;
   handleBackTranslate: (cardId: string) => void;
   handleCloseBackTranslation: (cardId: string) => void;
   handleRetryBackTranslation: (cardId: string) => void;
   handleCopyBackTranslation: (cardId: string) => void;
-  inlineDictionary: Accessor<InlineDictionaryState>;
-  handleToggleInlineDictionaryExpanded: () => void;
-  handleRetryInlineDictionary: () => void;
+  sourceDictionary: Accessor<SourceDictionaryState>;
+  handleOpenSourceDictionary: () => void;
   dictionaryDrawer: Accessor<DictionaryDrawerState>;
   handleLookupSelection: (
     request: {
@@ -350,7 +357,7 @@ export function createQuickTranslateSession(
   let debounceTimer: ReturnType<typeof setTimeout> | null = null;
   let lastHandledDeliverySeq = 0;
   const cardRuntimes = new Map<string, CardRuntime>();
-  const inlineDictionary = signal<InlineDictionaryState>({ status: "hidden" });
+  const inlineDictionary = signal<SourceDictionaryState>({ status: "hidden" });
   let inlineTimer: ReturnType<typeof setTimeout> | null = null;
   let inlineAbort: AbortController | null = null;
   let inlineEpoch = 0;
@@ -440,6 +447,19 @@ export function createQuickTranslateSession(
     }
 
     drawerActiveSignal.set({ status: "entry", query, entry: outcome.result.entry, anki: idleAnki });
+    if (
+      query.region === "source" &&
+      !query.contextSentence &&
+      normalizeLookupTerm(options.sourceText()).toLowerCase() === query.term.toLowerCase()
+    ) {
+      activeInlineKey = `${query.term.toLowerCase()}\0${sourceLanguage()}\0${query.explanationLanguage}`;
+      inlineDictionary.set({
+        status: "entry",
+        term: query.term,
+        entry: outcome.result.entry,
+        explanationLanguage: query.explanationLanguage,
+      });
+    }
   };
 
   const handleLookupSelection: QuickTranslateSession["handleLookupSelection"] = (
@@ -615,11 +635,7 @@ export function createQuickTranslateSession(
       if (disposed || epoch !== inlineEpoch) return;
       if (inlineAbort === controller) inlineAbort = null;
       activeInlineKey = null;
-      inlineDictionary.set({
-        status: "error",
-        term,
-        message: t(dictionaryFailureKey("unknown")),
-      });
+      inlineDictionary.set({ status: "error", term });
       return;
     }
 
@@ -631,18 +647,14 @@ export function createQuickTranslateSession(
       if (outcome.failure === "cancelled" || outcome.failure === "unconfigured") {
         inlineDictionary.set({ status: "hidden" });
       } else {
-        inlineDictionary.set({
-          status: "error",
-          term,
-          message: t(dictionaryFailureKey(outcome.failure)),
-        });
+        inlineDictionary.set({ status: "error", term });
       }
       return;
     }
 
     if (outcome.result.kind === "not_found") {
       activeInlineKey = null;
-      inlineDictionary.set({ status: "hidden" });
+      inlineDictionary.set({ status: "not_found", term });
       return;
     }
 
@@ -650,8 +662,39 @@ export function createQuickTranslateSession(
       status: "entry",
       term,
       entry: outcome.result.entry,
-      expanded: false,
-      anki: idleAnki,
+      explanationLanguage,
+    });
+  };
+
+  const handleOpenSourceDictionary = () => {
+    const raw = options.sourceText();
+    const term = normalizeLookupTerm(raw);
+    if (!term || !isInlineLexicalQuery(raw) || !isDictionaryConfigured(dictionaryChannels)) {
+      return;
+    }
+    const current = inlineDictionary();
+    if (current.status === "entry" && current.term.toLowerCase() === term.toLowerCase()) {
+      cancelDrawerLookup();
+      drawerStackSignal.set([]);
+      drawerOpenSignal.set(true);
+      drawerActiveSignal.set({
+        status: "entry",
+        query: {
+          term: current.entry.term,
+          sourceLanguage: sourceLanguage(),
+          explanationLanguage: current.explanationLanguage,
+          region: "source",
+        },
+        entry: current.entry,
+        anki: idleAnki,
+      });
+      options.onOverlayOpenChange?.("dictionary-drawer", true);
+      return;
+    }
+    handleLookupSelection({
+      term,
+      sourceLanguage: sourceLanguage(),
+      region: "source",
     });
   };
 
@@ -1787,31 +1830,6 @@ export function createQuickTranslateSession(
     });
   };
 
-  const handleAddInlineDictionaryToAnki = () => {
-    const current = inlineDictionary();
-    if (current.status !== "entry") return;
-    const expectedInlineEpoch = inlineEpoch;
-    const expectedEntry = current.entry;
-    const note = formatDictionaryAnkiNote(current.entry);
-    submitAnkiNote({
-      note,
-      isStillCurrent: () => {
-        const latest = inlineDictionary();
-        return (
-          inlineEpoch === expectedInlineEpoch &&
-          latest.status === "entry" &&
-          latest.entry === expectedEntry
-        );
-      },
-      applyState: (anki) => {
-        const latest = inlineDictionary();
-        if (latest.status === "entry" && latest.entry === expectedEntry) {
-          inlineDictionary.set({ ...latest, anki });
-        }
-      },
-    });
-  };
-
   const handleAddDrawerDictionaryToAnki = () => {
     const current = drawerActiveSignal();
     if (!drawerOpenSignal() || !current || current.status !== "entry") return;
@@ -1882,20 +1900,13 @@ export function createQuickTranslateSession(
     handleCopyCard,
     ankiEnabled: () => options.ankiEnabled?.() ?? false,
     handleAddToAnki,
-    handleAddInlineDictionaryToAnki,
     handleAddDrawerDictionaryToAnki,
     handleBackTranslate,
     handleCloseBackTranslation,
     handleRetryBackTranslation,
     handleCopyBackTranslation,
-    inlineDictionary: () => inlineDictionary(),
-    handleToggleInlineDictionaryExpanded: () => {
-      const current = inlineDictionary();
-      if (current.status === "entry") {
-        inlineDictionary.set({ ...current, expanded: !current.expanded });
-      }
-    },
-    handleRetryInlineDictionary: () => void runInlineLookup(true),
+    sourceDictionary: () => inlineDictionary(),
+    handleOpenSourceDictionary,
     dictionaryDrawer: () => ({
       open: drawerOpenSignal(),
       canGoBack: drawerStackSignal().length > 0,

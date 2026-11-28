@@ -9,18 +9,17 @@ import { synthesizeSpeech } from "../tts/channels";
 import { playMp3Bytes } from "../tts/playback";
 import { prepareQuickSpeech, quickSpeechFailureMessage } from "../tts/quick-speech";
 import { ttsChannels } from "../tts/store";
-import type { DictionarySpeakControlState } from "./dictionary-band";
+import type { DictionarySpeakControlState } from "./dictionary-drawer";
 import type { QuickTranslateSession } from "./session";
 
 type SpeechOwner =
   | { kind: "source"; text: string; selection: SourceLanguageId }
-  | { kind: "dictionary"; slot: "inline" | "drawer"; term: string }
+  | { kind: "dictionary"; term: string }
   | { kind: "result"; cardId: string; text: string; language: string }
   | { kind: "back-translation"; cardId: string; text: string; language: string };
 
 export type SpeechControlTarget =
   | "source"
-  | "inline-dictionary"
   | "drawer-dictionary"
   | { kind: "result" | "back-translation"; cardId: string };
 
@@ -28,25 +27,22 @@ export interface QuickSpeechCoordinator {
   cancel: () => void;
   control: (target: SpeechControlTarget) => DictionarySpeakControlState;
   speakSource: () => void;
-  speakInlineDictionary: () => void;
   speakDrawerDictionary: () => void;
   speakResult: (cardId: string) => void;
   speakBackTranslation: (cardId: string) => void;
   sourceError: Accessor<string | null>;
-  inlineDictionaryError: Accessor<string | null>;
   drawerDictionaryError: Accessor<string | null>;
   resultError: (cardId: string) => string | null;
   backTranslationError: (cardId: string) => string | null;
 }
 
-/** Coordinates single-voice TTS synthesis and playback across source, cards, and dictionary panels. */
+/** Coordinates single-voice TTS synthesis and playback across source, cards, and dictionary drawer. */
 export function createQuickSpeechCoordinator(options: {
   session: QuickTranslateSession;
   playbackAllowed?: Accessor<boolean>;
 }): QuickSpeechCoordinator {
   const { session } = options;
   const sourceSpeechError = signal<string | null>(null);
-  const inlineDictionarySpeechError = signal<string | null>(null);
   const drawerDictionarySpeechError = signal<string | null>(null);
   const resultSpeechErrors = signal<Readonly<Record<string, string>>>({});
   const backTranslationSpeechErrors = signal<Readonly<Record<string, string>>>({});
@@ -89,22 +85,10 @@ export function createQuickSpeechCoordinator(options: {
   effect(() => {
     const owner = speechOwner();
     if (owner?.kind !== "dictionary" || speechPhase() === "idle") return;
-    if (owner.slot === "inline") {
-      const inline = session.inlineDictionary();
-      const currentTerm = inline.status === "entry" ? inline.entry.term : "";
-      if (currentTerm !== owner.term) cancel();
-    } else {
-      const drawer = session.dictionaryDrawer();
-      const active = drawer.open ? drawer.active : null;
-      const currentTerm = active?.status === "entry" ? active.entry.term : "";
-      if (currentTerm !== owner.term) cancel();
-    }
-  });
-
-  effect(() => {
-    if (session.inlineDictionary().status !== "entry") {
-      inlineDictionarySpeechError.set(null);
-    }
+    const drawer = session.dictionaryDrawer();
+    const active = drawer.open ? drawer.active : null;
+    const currentTerm = active?.status === "entry" ? active.entry.term : "";
+    if (currentTerm !== owner.term) cancel();
   });
 
   effect(() => {
@@ -311,24 +295,12 @@ export function createQuickSpeechCoordinator(options: {
     });
   };
 
-  const speakInlineDictionary = () => {
-    const inline = session.inlineDictionary();
-    if (inline.status !== "entry") return;
-    const selected = session.sourceLanguage();
-    void runSpeech({
-      owner: { kind: "dictionary", slot: "inline", term: inline.entry.term },
-      text: inline.entry.term,
-      language: selected === AUTO_LANGUAGE ? null : selected,
-      report: (message) => inlineDictionarySpeechError.set(message),
-    });
-  };
-
   const speakDrawerDictionary = () => {
     const drawer = session.dictionaryDrawer();
     if (!drawer.open || drawer.active?.status !== "entry") return;
     const srcLang = drawer.active.query.sourceLanguage;
     void runSpeech({
-      owner: { kind: "dictionary", slot: "drawer", term: drawer.active.entry.term },
+      owner: { kind: "dictionary", term: drawer.active.entry.term },
       text: drawer.active.entry.term,
       language: srcLang && srcLang !== AUTO_LANGUAGE ? srcLang : null,
       detectStandalone: true,
@@ -382,11 +354,9 @@ export function createQuickSpeechCoordinator(options: {
       owner !== null &&
       (target === "source"
         ? owner.kind === "source"
-        : target === "inline-dictionary"
-          ? owner.kind === "dictionary" && owner.slot === "inline"
-          : target === "drawer-dictionary"
-            ? owner.kind === "dictionary" && owner.slot === "drawer"
-            : owner.kind === target.kind && owner.cardId === target.cardId);
+        : target === "drawer-dictionary"
+          ? owner.kind === "dictionary"
+          : owner.kind === target.kind && owner.cardId === target.cardId);
 
     const phase = mine ? speechPhase() : "idle";
     if (phase === "loading") {
@@ -424,12 +394,10 @@ export function createQuickSpeechCoordinator(options: {
     cancel,
     control,
     speakSource,
-    speakInlineDictionary,
     speakDrawerDictionary,
     speakResult,
     speakBackTranslation,
     sourceError: () => sourceSpeechError(),
-    inlineDictionaryError: () => inlineDictionarySpeechError(),
     drawerDictionaryError: () => drawerDictionarySpeechError(),
     resultError: (cardId: string) => resultSpeechErrors()[cardId] ?? null,
     backTranslationError: (cardId: string) => backTranslationSpeechErrors()[cardId] ?? null,

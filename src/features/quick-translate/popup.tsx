@@ -44,6 +44,9 @@ import { ProviderMark } from "../../modules/ai/ui/provider-mark";
 import { createLogger } from "../../services/log";
 import { AnkiAddButton, AnkiStatusText } from "./anki-control";
 import { isLanguageId, type LanguageId } from "../../framework/languages";
+import { isInlineLexicalQuery } from "../dictionary/lexical-query";
+import { isDictionaryConfigured } from "../dictionary/lookup";
+import { dictionaryChannels } from "../dictionary/store";
 import { presetChannelMark } from "../presets/model-choices";
 import type { TranslationPreset } from "../presets/types";
 import { AlignedTranslation, type SentenceSegment } from "./aligned-translation";
@@ -60,7 +63,6 @@ import {
   type SentencePopoverDismissal,
 } from "./sentence-popover-trace";
 import type { CardResultState, CardViewItem, QuickTranslateSession } from "./session";
-import { InlineDictionaryBand } from "./dictionary-band";
 import {
   createDictionarySelectionCoordinator,
   type DictionarySelectionCoordinator,
@@ -1917,11 +1919,9 @@ export function QuickTranslatePopup(props: QuickTranslatePopupProps) {
   const cancelSpeech = speech.cancel;
   const speechControl = speech.control;
   const speakSource = speech.speakSource;
-  const speakInlineDictionary = speech.speakInlineDictionary;
   const speakResult = speech.speakResult;
   const speakBackTranslation = speech.speakBackTranslation;
   const sourceSpeechError = speech.sourceError;
-  const inlineDictionarySpeechError = speech.inlineDictionaryError;
   const resultSpeechError = speech.resultError;
   const backTranslationSpeechError = speech.backTranslationError;
 
@@ -2057,6 +2057,21 @@ export function QuickTranslatePopup(props: QuickTranslatePopupProps) {
     return null;
   };
   const hasToolbarStatus = () => showOcrError() || showOcrBusy() || selectionMessage() !== null;
+  const sourceDictionaryPhonetic = () => {
+    const state = props.session.sourceDictionary();
+    if (state.status !== "entry") return "";
+    const first = state.entry.phonetics[0];
+    if (!first) return "";
+    return first.label ? `${first.label} ${first.ipa}` : first.ipa;
+  };
+  const showSourceDictionaryAction = () =>
+    hasSourceText() &&
+    isDictionaryConfigured(dictionaryChannels) &&
+    !showingHistory() &&
+    isInlineLexicalQuery(sourceText()) &&
+    props.session.sourceDictionary().status !== "not_found" &&
+    sourceSpeechError() === null &&
+    !hasToolbarStatus();
   const hasSourceToolbar = () => hasSourceText() || hasToolbarStatus();
 
   const renderSourceActions = (extraClass = "") => (
@@ -2114,6 +2129,31 @@ export function QuickTranslatePopup(props: QuickTranslatePopupProps) {
               {sourceSpeechError() ?? ""}
             </Text>
           </If>
+        </If>
+        <If when={showSourceDictionaryAction()}>
+          <View class="min-w-0 flex-1 flex-row items-center gap-1.5">
+            <If when={Boolean(sourceDictionaryPhonetic())}>
+              <Text
+                testID="quick-translate-source-phonetic"
+                class="min-w-0 shrink truncate text-xs text-muted-foreground"
+              >
+                {sourceDictionaryPhonetic()}
+              </Text>
+            </If>
+            <Button
+              testID="quick-translate-dictionary-open"
+              variant="brand-ghost"
+              size="xs"
+              class="shrink-0 px-1.5"
+              label={t("dictionary.seeDictionary")}
+              accessibilityLabel={t("dictionary.seeDictionary")}
+              onPress={() => {
+                closeSentencePopover("cancel");
+                selection.clear();
+                props.session.handleOpenSourceDictionary();
+              }}
+            />
+          </View>
         </If>
         <If when={showOcrError()}>
           <Text
@@ -2412,31 +2452,6 @@ export function QuickTranslatePopup(props: QuickTranslatePopupProps) {
             {props.session.prefsSaveError() ?? ""}
           </Text>
         </View>
-      </If>
-
-      <If when={!showingHistory()}>
-        <InlineDictionaryBand
-          state={props.session.inlineDictionary()}
-          speakControl={speechControl("inline-dictionary")}
-          speechError={inlineDictionarySpeechError()}
-          onSpeak={() => {
-            if (speechControl("inline-dictionary").busy) cancelSpeech();
-            else speakInlineDictionary();
-          }}
-          onToggleExpand={props.session.handleToggleInlineDictionaryExpanded}
-          onRetry={props.session.handleRetryInlineDictionary}
-          ankiEnabled={props.session.ankiEnabled()}
-          onAddToAnki={props.session.handleAddInlineDictionaryToAnki}
-          onLookupSynonym={(term) => {
-            closeSentencePopover("cancel");
-            selection.clear();
-            props.session.handleLookupSelection({
-              term,
-              sourceLanguage: props.session.sourceLanguage(),
-              region: "source",
-            });
-          }}
-        />
       </If>
 
       <If when={showingHistory()}>

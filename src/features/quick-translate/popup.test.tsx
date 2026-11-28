@@ -6037,7 +6037,8 @@ test("dictionary inline: stays hidden and makes zero dictionary requests when un
   await unconfigured.type("id:quick-translate-source", "ephemeral");
   await unconfigured.keyboard.press("enter");
   await unconfigured.waitFor("id:quick-translate-card-card-1 >> text:短暂的");
-  expect(unconfigured.shows("id:quick-translate-dictionary-inline")).toBe(false);
+  expect(unconfigured.shows("id:quick-translate-dictionary-open")).toBe(false);
+  expect(unconfigured.shows("id:quick-translate-source-phonetic")).toBe(false);
   expect(unconfigured.requests().filter((req) => req.url.includes("dict.test"))).toHaveLength(0);
 
   const sentenceApp = await open(POPUP_HARNESS, {
@@ -6055,11 +6056,12 @@ test("dictionary inline: stays hidden and makes zero dictionary requests when un
   await sentenceApp.type("id:quick-translate-source", "Today is a nice day.");
   await sentenceApp.keyboard.press("enter");
   await sentenceApp.waitFor("id:quick-translate-card-card-1 >> text:今天是个好天气。");
-  expect(sentenceApp.shows("id:quick-translate-dictionary-inline")).toBe(false);
+  expect(sentenceApp.shows("id:quick-translate-dictionary-open")).toBe(false);
+  expect(sentenceApp.shows("id:quick-translate-source-phonetic")).toBe(false);
   expect(sentenceApp.requests().filter((req) => req.url.includes("dict.test"))).toHaveLength(0);
 });
 
-test("dictionary inline: renders compact band for whole word, expands secondary senses, and speaks pronunciation", async () => {
+test("dictionary inline: shows phonetic and See dictionary in source toolbar and opens full entry in drawer", async () => {
   const app = await open(POPUP_HARNESS, {
     ...viewport,
     storage: dictionarySeed({}, { autoTranslate: false, withTts: true }),
@@ -6109,25 +6111,32 @@ test("dictionary inline: renders compact band for whole word, expands secondary 
   await app.type("id:quick-translate-source", "ephemeral");
   await app.keyboard.press("enter");
 
-  await app.waitFor("id:quick-translate-dictionary-inline");
-  await app.waitFor("id:quick-translate-dictionary-inline >> text:/ɪˈfɛmərəl/");
-  expect(app.shows("id:quick-translate-dictionary-inline-details")).toBe(false);
+  await app.waitFor("id:quick-translate-source-toolbar >> text:US /ɪˈfɛmərəl/");
+  expect(app.shows("id:quick-translate-source-toolbar >> id:quick-translate-dictionary-open")).toBe(
+    true,
+  );
+  expect(app.shows("id:quick-translate-dictionary-drawer")).toBe(false);
   expect(app.shows("id:quick-translate-card-card-1 >> text:短暂的")).toBe(true);
 
-  await app.press("id:quick-translate-dictionary-inline-toggle");
-  await app.waitFor("id:quick-translate-dictionary-inline-details");
-  expect(app.texts()).toContain("Fashion is by nature ephemeral.");
-  expect(app.texts()).toContain("短生植物");
-  expect(app.texts()).toContain("noun: ephemerality");
-  expect(app.texts()).toContain("transient");
-
-  await app.press("id:quick-translate-dictionary-inline-speak");
+  await app.press("id:quick-translate-speak-source");
   await app.waitUntil(() => app.requests().some((request) => request.url === GOOGLE_CLOUD_TTS_URL));
   const ttsReq = app.requests().find((request) => request.url === GOOGLE_CLOUD_TTS_URL)!;
   expect(JSON.parse(ttsReq.body ?? "").input.text).toBe("ephemeral");
+
+  const dictRequestsBeforeOpen = app
+    .requests()
+    .filter((req) => req.url.includes("dict.test")).length;
+  await app.press("id:quick-translate-dictionary-open");
+  await app.waitFor("id:quick-translate-dictionary-drawer >> text:Fashion is by nature ephemeral.");
+  expect(app.texts()).toContain("短生植物");
+  expect(app.texts()).toContain("noun: ephemerality");
+  expect(app.texts()).toContain("transient");
+  expect(app.requests().filter((req) => req.url.includes("dict.test"))).toHaveLength(
+    dictRequestsBeforeOpen,
+  );
 });
 
-test("dictionary inline: hides silently on not_found, retries errors, and discards stale responses after clear", async () => {
+test("dictionary inline: hides silently on not_found, retries via drawer on error, and discards stale responses after clear", async () => {
   let dictCalls = 0;
   const app = await open(POPUP_HARNESS, {
     ...viewport,
@@ -6152,7 +6161,7 @@ test("dictionary inline: hides silently on not_found, retries errors, and discar
                     content: JSON.stringify({
                       found: true,
                       term: "ephemeral",
-                      phonetics: [],
+                      phonetics: [{ label: "US", ipa: "/ɪˈfɛmərəl/" }],
                       senses: [{ partOfSpeech: "adj.", glosses: ["短暂的"] }],
                     }),
                   },
@@ -6175,21 +6184,24 @@ test("dictionary inline: hides silently on not_found, retries errors, and discar
   await app.type("id:quick-translate-source", "ephemeral");
   await app.keyboard.press("enter");
 
-  await app.waitFor("id:quick-translate-dictionary-inline-error");
-  expect(app.shows("id:quick-translate-dictionary-inline-retry")).toBe(true);
+  await app.waitUntil(() => dictCalls === 1);
+  expect(app.shows("id:quick-translate-dictionary-open")).toBe(true);
+  expect(app.shows("id:quick-translate-source-phonetic")).toBe(false);
 
-  await app.press("id:quick-translate-dictionary-inline-retry");
-  await app.waitFor("id:quick-translate-dictionary-inline-term");
-  expect(app.texts()).toContain("adj. 短暂的");
+  // Clicking See dictionary opens the drawer cleanly and shows recovered entry once retried.
+  await app.press("id:quick-translate-dictionary-open");
+  await app.waitFor("id:quick-translate-source-toolbar >> text:US /ɪˈfɛmərəl/");
+  await app.waitFor("id:quick-translate-dictionary-drawer >> text:US /ɪˈfɛmərəl/");
+  await app.press("id:quick-translate-dictionary-drawer-close");
 
-  // not_found hides inline band cleanly without showing error or empty box.
+  // not_found hides See dictionary cleanly without showing error.
   await app.press("id:quick-translate-clear");
   await app.type("id:quick-translate-source", "zzz");
   await app.keyboard.press("enter");
   await app.waitUntil(() => dictCalls === 3);
   await app.wait(50);
-  expect(app.shows("id:quick-translate-dictionary-inline")).toBe(false);
-  expect(app.shows("id:quick-translate-dictionary-inline-error")).toBe(false);
+  expect(app.shows("id:quick-translate-dictionary-open")).toBe(false);
+  expect(app.shows("id:quick-translate-source-phonetic")).toBe(false);
 
   // Stale in-flight response arriving after source clear is discarded.
   const deferredApp = await open(POPUP_HARNESS, {
@@ -6208,13 +6220,14 @@ test("dictionary inline: hides silently on not_found, retries errors, and discar
   await deferredApp.waitFor("id:quick-translate-source");
   await deferredApp.type("id:quick-translate-source", "ephemeral");
   await deferredApp.keyboard.press("enter");
-  await deferredApp.waitFor("id:quick-translate-dictionary-inline-loading");
+  await deferredApp.waitFor("id:quick-translate-dictionary-open");
 
   await deferredApp.press("id:quick-translate-clear");
-  expect(deferredApp.shows("id:quick-translate-dictionary-inline")).toBe(false);
+  expect(deferredApp.shows("id:quick-translate-dictionary-open")).toBe(false);
 
   await deferredApp.press("id:harness-resolve-dict");
-  expect(deferredApp.shows("id:quick-translate-dictionary-inline")).toBe(false);
+  expect(deferredApp.shows("id:quick-translate-source-phonetic")).toBe(false);
+  expect(deferredApp.shows("id:quick-translate-dictionary-open")).toBe(false);
 });
 
 test("dictionary selection: shows 180ms pill for source, result, and back-translation, supports Alt+D, drill-down, Alt+Left back, and promote", async () => {
@@ -6375,10 +6388,11 @@ test("dictionary selection: shows 180ms pill for source, result, and back-transl
   await app.press("id:quick-translate-dictionary-pill");
   await app.waitFor("id:quick-translate-dictionary-drawer");
 
-  // Promote active drawer entry into source input -> closes drawer, translates, shows inline band.
+  // Promote active drawer entry into source input -> closes drawer, translates, shows source toolbar dictionary trigger.
   await app.press("id:quick-translate-dictionary-drawer-promote");
   await app.waitUntil(() => !app.shows("id:quick-translate-dictionary-drawer"));
-  await app.waitFor("id:quick-translate-dictionary-inline");
+  await app.waitFor("id:quick-translate-source-toolbar >> text:US /ɪˈfɛmərəl/");
+  expect(app.shows("id:quick-translate-dictionary-open")).toBe(true);
   await app.waitFor("id:quick-translate-card-card-1 >> text:短暂的");
   expect(dictRequests.length).toBeGreaterThanOrEqual(3);
 });

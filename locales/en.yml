@@ -498,8 +498,7 @@ languageDetection:
     missingNativeLanguage: Set your native language, or choose a concrete target language.
     missingPreferredLanguage: Set the target language for your native language, or choose a concrete target language.
 dictionary:
-  expand: Expand dictionary
-  collapse: Collapse dictionary
+  seeDictionary: See dictionary
   loading: Looking up word…
   lookUp: Look up
   forms: Forms

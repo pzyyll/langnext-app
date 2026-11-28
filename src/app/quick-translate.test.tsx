@@ -4903,7 +4903,7 @@ function dictionaryAnkiStorage(wordbookEnabled: boolean, dictBaseUrl: string) {
   };
 }
 
-test("quick anki dictionary: adds inline dictionary entry, blocks concurrent card write, and preserves format", async () => {
+test("quick anki dictionary: adds source dictionary entry via unified drawer, blocks concurrent card write, and preserves format", async () => {
   const dictBaseUrl = "https://dict.test/v1";
   const dictUrl = `POST ${dictBaseUrl}/chat/completions`;
   const app = await open(HARNESS_ENTRY, {
@@ -4948,22 +4948,25 @@ test("quick anki dictionary: adds inline dictionary entry, blocks concurrent car
   await app.waitFor("id:quick-translate-source");
   await app.type("id:quick-translate-source", "ephemeral");
   await app.keyboard.press("enter");
-  await app.waitFor("id:quick-translate-dictionary-inline >> text:US /ɪˈfɛmərəl/");
+  await app.waitFor("id:quick-translate-source-toolbar >> text:US /ɪˈfɛmərəl/");
   await app.waitFor("id:quick-translate-card-card-1 >> text:短暂的");
 
-  await app.press("id:quick-translate-dictionary-inline-add-anki");
+  await app.press("id:quick-translate-dictionary-open");
+  await app.waitFor("id:quick-translate-dictionary-drawer >> text:US /ɪˈfɛmərəl/");
+
+  await app.press("id:quick-translate-dictionary-drawer-add-anki");
   await app.waitUntil(
-    () => app.accessibility("id:quick-translate-dictionary-inline-add-anki")?.label === "Adding…",
+    () => app.accessibility("id:quick-translate-dictionary-drawer-add-anki")?.label === "Adding…",
   );
-  expect(app.shows("id:quick-translate-dictionary-inline >> text:Adding…")).toBe(false);
+  expect(app.shows("id:quick-translate-dictionary-drawer >> text:Adding…")).toBe(false);
   await app.press("id:quick-translate-card-card-1 >> id:quick-translate-add-anki");
   expect(app.shows("id:quick-translate-card-card-1 >> text:Adding…")).toBe(false);
 
   await app.waitUntil(
     () =>
-      app.accessibility("id:quick-translate-dictionary-inline-add-anki")?.label === "Added to Anki",
+      app.accessibility("id:quick-translate-dictionary-drawer-add-anki")?.label === "Added to Anki",
   );
-  expect(app.shows("id:quick-translate-dictionary-inline >> text:Added to Anki")).toBe(false);
+  expect(app.shows("id:quick-translate-dictionary-drawer >> text:Added to Anki")).toBe(false);
   expect(app.shows("id:quick-translate-card-card-1 >> text:Added to Anki")).toBe(false);
   const creates = app.requests().filter((request) => (request.body ?? "").includes("notes.create"));
   expect(creates).toHaveLength(1);
@@ -5010,8 +5013,10 @@ test("quick anki dictionary: adds drawer entry with context sentence, hides when
   await disabledApp.waitFor("id:quick-translate-source");
   await disabledApp.type("id:quick-translate-source", "ephemeral");
   await disabledApp.keyboard.press("enter");
-  await disabledApp.waitFor("id:quick-translate-dictionary-inline >> text:US /ɪˈfɛmərəl/");
-  expect(disabledApp.shows("id:quick-translate-dictionary-inline-add-anki")).toBe(false);
+  await disabledApp.waitFor("id:quick-translate-source-toolbar >> text:US /ɪˈfɛmərəl/");
+  await disabledApp.press("id:quick-translate-dictionary-open");
+  await disabledApp.waitFor("id:quick-translate-dictionary-drawer >> text:US /ɪˈfɛmərəl/");
+  expect(disabledApp.shows("id:quick-translate-dictionary-drawer-add-anki")).toBe(false);
 
   let createCalls = 0;
   const app = await open(HARNESS_ENTRY, {

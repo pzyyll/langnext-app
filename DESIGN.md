@@ -142,14 +142,15 @@ Settings → Application → Appearance → Font picks the family every window d
 
 ## Quick Translate Dictionary
 
-Quick Translate supports two contextual dictionary surfaces backed by **Settings → Integrations → Dictionary**: an inline collapsible lexicon band when the source input is a single word or short term, and a two-stage `[Look up]` pill plus non-modal docked drawer when the user highlights a term inside the source editor, translation output, back-translation, or restored history. Settings → Dictionary reuses the shared CapabilitySection layout, breadcrumb, and `popup`/`popupHidden` add-channel dialog transitions.
+Quick Translate supports two dictionary entry points backed by **Settings → Integrations → Dictionary**, unified in a single non-modal docked drawer:
+
+1. **Whole-word source queries:** Displays the primary phonetic beside `[🔊]` and `[See dictionary]` (`查询词典`) inside the source toolbar without repeating the headword below the input; clicking opens the docked drawer with the full structured entry (zero extra request when already cached/loaded).
+2. **In-text selection lookups:** Highlighting a word or short phrase across the source editor, translation output, back-translation, restored history, or drawer glosses triggers a 180 ms `[Look up]` pill, `Alt+D` shortcut, or native context menu opening the same docked drawer. Settings → Dictionary reuses the shared CapabilitySection layout, breadcrumb, and `popup`/`popupHidden` add-channel dialog transitions.
 
 ### Motion Inventory
 
 | Surface                    | Change                                                | Motion                                                                                    | Reduced Motion         |
 | -------------------------- | ----------------------------------------------------- | ----------------------------------------------------------------------------------------- | ---------------------- |
-| Inline dictionary band     | Mounts between source input and translation cards     | Reveals in place without shifting translation scroll anchors                              | Instant show/hide      |
-| Inline dictionary chevron  | Expand/collapse toggle (`disclosureIcon`)             | Shared `disclosureIcon` rotation (`150ms`)                                                | Instant flip           |
 | Selection `[Look up]` pill | Opens near highlighted text bounds                    | Shared `popup` / `popupHidden` opacity & scale                                            | Instant appear/dismiss |
 | Docked dictionary drawer   | Slides open above footer outside scroll area          | Smooth height/opacity settle (`160ms` `easeOut`) while stream viewport compresses cleanly | Instant dock/close     |
 | Drawer drill-down entry    | Replacing active entry from synonym/example selection | Immediate content swap in-frame (`120ms` fade) with back arrow active                     | Instant swap           |
