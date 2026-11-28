@@ -3,6 +3,7 @@
 import { getIntegrationRegistry, type Diagnostic } from "../framework/integrations";
 import { registerAiIntegrations } from "../integrations/ai";
 import { registerDetectIntegrations } from "../integrations/detect";
+import { registerDictionaryIntegrations } from "../integrations/dictionary";
 import { registerOcrIntegrations } from "../integrations/ocr";
 import { ttsChannelDefinitions } from "../integrations/tts";
 import { createLogger } from "../services/log";
@@ -25,6 +26,7 @@ export function initializeIntegrations(): void {
   registerAiIntegrations(registry);
   registerOcrIntegrations(registry);
   registerDetectIntegrations(registry);
+  registerDictionaryIntegrations(registry);
   for (const definition of ttsChannelDefinitions) {
     registry.registerCapability(definition);
   }

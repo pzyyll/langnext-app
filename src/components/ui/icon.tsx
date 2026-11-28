@@ -26,8 +26,11 @@ import lightningIcon from "../../../assets/icons/lightning.svg";
 import markdownOutlineIcon from "../../../assets/icons/markdown-outline.svg";
 import markdownSolidIcon from "../../../assets/icons/markdown-solid.svg";
 import mdiArrowCollapseIcon from "../../../assets/icons/mdi--arrow-collapse.svg";
+import mdiArrowLeftIcon from "../../../assets/icons/mdi--arrow-left.svg";
 import mdiArrowRightBottomIcon from "../../../assets/icons/mdi--arrow-right-bottom.svg";
+import mdiArrowTopLeftIcon from "../../../assets/icons/mdi--arrow-top-left.svg";
 import mdiArrowULeftTopIcon from "../../../assets/icons/mdi--arrow-u-left-top.svg";
+import mdiBookOpenVariantOutlineIcon from "../../../assets/icons/mdi--book-open-variant-outline.svg";
 import mdiCheckIcon from "../../../assets/icons/mdi--check.svg";
 import mdiChevronDownIcon from "../../../assets/icons/mdi--chevron-down.svg";
 import mdiChevronRightIcon from "../../../assets/icons/mdi--chevron-right.svg";
@@ -98,8 +101,11 @@ const ICONS = {
   "markdown-outline": markdownOutlineIcon,
   "markdown-solid": markdownSolidIcon,
   "mdi:arrow-collapse": mdiArrowCollapseIcon,
+  "mdi:arrow-left": mdiArrowLeftIcon,
   "mdi:arrow-right-bottom": mdiArrowRightBottomIcon,
+  "mdi:arrow-top-left": mdiArrowTopLeftIcon,
   "mdi:arrow-u-left-top": mdiArrowULeftTopIcon,
+  "mdi:book-open-variant-outline": mdiBookOpenVariantOutlineIcon,
   "mdi:check": mdiCheckIcon,
   "mdi:chevron-down": mdiChevronDownIcon,
   "mdi:chevron-right": mdiChevronRightIcon,

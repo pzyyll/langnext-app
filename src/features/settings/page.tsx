@@ -19,6 +19,7 @@ import {
   type CapabilityId,
   type ChannelCollection,
 } from "../../framework/integrations";
+import { dictionaryChannels } from "../dictionary/store";
 import { detectChannels } from "../language-detection/store";
 import { ocrChannels } from "../ocr/store";
 import { ttsChannels } from "../tts/store";
@@ -43,6 +44,7 @@ export type SettingsSection =
   | "shortcuts"
   | "quick-translate"
   | "language-detection"
+  | "dictionary"
   | "ocr"
   | "tts"
   | "wordbook";
@@ -75,6 +77,7 @@ const SETTINGS_GROUPS: readonly SettingsGroup[] = [
     labelKey: "settings.groups.integrations",
     sections: [
       { id: "language-detection", labelKey: "settings.sections.languageDetection" },
+      { id: "dictionary", labelKey: "settings.sections.dictionary" },
       { id: "ocr", labelKey: "settings.sections.ocr" },
       { id: "tts", labelKey: "settings.sections.tts" },
       { id: "wordbook", labelKey: "settings.sections.wordbook" },
@@ -92,7 +95,7 @@ function sectionLabelKey(section: SettingsSection) {
 
 const selectedSection = signal<SettingsSection>("general");
 
-type CapabilitySectionId = "language-detection" | "ocr" | "tts";
+type CapabilitySectionId = "language-detection" | "dictionary" | "ocr" | "tts";
 
 interface CapabilitySectionMeta {
   capability: CapabilityId;
@@ -104,7 +107,7 @@ interface CapabilitySectionMeta {
   breadcrumbLabelKey: string;
 }
 
-/** The three integration sections rendered by the shared capability host. */
+/** The four integration sections rendered by the shared capability host. */
 const CAPABILITY_SECTIONS: Record<CapabilitySectionId, CapabilitySectionMeta> = {
   "language-detection": {
     capability: "detect",
@@ -114,6 +117,15 @@ const CAPABILITY_SECTIONS: Record<CapabilitySectionId, CapabilitySectionMeta> = 
     emptyKey: "settings.languageDetection.emptyTitle",
     priorityHintKey: "settings.languageDetection.priorityHint",
     breadcrumbLabelKey: "settings.languageDetection.breadcrumbLabel",
+  },
+  dictionary: {
+    capability: "dictionary",
+    testIdPrefix: "settings-dictionary",
+    titleKey: "settings.sections.dictionary",
+    addKey: "settings.dictionary.addChannel",
+    emptyKey: "settings.dictionary.emptyTitle",
+    priorityHintKey: "settings.dictionary.priorityHint",
+    breadcrumbLabelKey: "settings.dictionary.breadcrumbLabel",
   },
   ocr: {
     capability: "ocr",
@@ -136,12 +148,18 @@ const CAPABILITY_SECTIONS: Record<CapabilitySectionId, CapabilitySectionMeta> = 
 };
 
 function isCapabilitySection(section: SettingsSection): section is CapabilitySectionId {
-  return section === "language-detection" || section === "ocr" || section === "tts";
+  return (
+    section === "language-detection" ||
+    section === "dictionary" ||
+    section === "ocr" ||
+    section === "tts"
+  );
 }
 
 function collectionFor(capability: CapabilityId): ChannelCollection {
   if (capability === "tts") return ttsChannels;
   if (capability === "ocr") return ocrChannels;
+  if (capability === "dictionary") return dictionaryChannels;
   return detectChannels;
 }
 
@@ -422,6 +440,7 @@ export function SettingsPage(props: {
   const activeSectionLabelKey = () => sectionLabelKey(selectedSection());
   const selectedChannel = signal<string | null>(null);
   const detectionAddBusy = signal(false);
+  const dictionaryAddBusy = signal(false);
   const ocrAddBusy = signal(false);
   const ttsAddBusy = signal(false);
   const sectionDialogOpen = signal(false);
@@ -446,9 +465,11 @@ export function SettingsPage(props: {
     proceed?.();
   };
   let detectionAddButtonNode: ViewRef | null = null;
+  let dictionaryAddButtonNode: ViewRef | null = null;
   let ocrAddButtonNode: ViewRef | null = null;
   let ttsAddButtonNode: ViewRef | null = null;
   let openDetectionAddDialog: (() => void) | null = null;
+  let openDictionaryAddDialog: (() => void) | null = null;
   let openOcrAddDialog: (() => void) | null = null;
   let openTtsAddDialog: (() => void) | null = null;
 
@@ -500,6 +521,7 @@ export function SettingsPage(props: {
     );
   };
   const showDetectionAddButton = () => showAddButton("language-detection");
+  const showDictionaryAddButton = () => showAddButton("dictionary");
   const showOcrAddButton = () => showAddButton("ocr");
   const showTtsAddButton = () => showAddButton("tts");
   const headerPaddingClass = () =>
@@ -638,6 +660,19 @@ export function SettingsPage(props: {
                           <Icon name="info" tone="muted-foreground" class="size-4" />
                         </View>
                       </If>
+                      <If when={selectedSection() === "dictionary"}>
+                        <View
+                          testID="settings-dictionary-priority-info"
+                          accessibilityLabel={t("settings.dictionary.priorityHint")}
+                          tooltip={buildTooltip(t("settings.dictionary.priorityHint"), "top", {
+                            align: "start",
+                            disabled: sectionDialogOpen(),
+                          })}
+                          class="shrink-0 items-center justify-center p-1"
+                        >
+                          <Icon name="info" tone="muted-foreground" class="size-4" />
+                        </View>
+                      </If>
                     </View>
                   }
                 >
@@ -656,6 +691,17 @@ export function SettingsPage(props: {
                       detectionAddButtonNode = node;
                     }}
                     onPress={() => openDetectionAddDialog?.()}
+                  />
+                </If>
+                <If when={showDictionaryAddButton()}>
+                  <AddChannelHeaderButton
+                    testID="settings-dictionary-add"
+                    label={t("settings.dictionary.addChannel")}
+                    disabled={dictionaryAddBusy()}
+                    onRef={(node) => {
+                      dictionaryAddButtonNode = node;
+                    }}
+                    onPress={() => openDictionaryAddDialog?.()}
                   />
                 </If>
                 <If when={showOcrAddButton()}>
@@ -722,6 +768,28 @@ export function SettingsPage(props: {
                       };
                     }}
                     onAddBusyChange={(busy) => detectionAddBusy.set(busy)}
+                    onDialogOpenChange={(open) => sectionDialogOpen.set(open)}
+                  />
+                </If>
+                <If when={selectedSection() === "dictionary"}>
+                  <CapabilitySection
+                    capability="dictionary"
+                    testIdPrefix="settings-dictionary"
+                    registry={getIntegrationRegistry()}
+                    collection={dictionaryChannels}
+                    labels={capabilityLabels("dictionary")}
+                    compact={compact()}
+                    selected={selectedChannel()}
+                    onSelect={(id) => selectedChannel.set(id)}
+                    hostServices={modelHostServices("text", props.onNavigateToModels)}
+                    getAddButtonRef={() => dictionaryAddButtonNode}
+                    onRegisterAddTrigger={(open) => {
+                      openDictionaryAddDialog = open;
+                      return () => {
+                        if (openDictionaryAddDialog === open) openDictionaryAddDialog = null;
+                      };
+                    }}
+                    onAddBusyChange={(busy) => dictionaryAddBusy.set(busy)}
                     onDialogOpenChange={(open) => sectionDialogOpen.set(open)}
                   />
                 </If>

@@ -139,3 +139,17 @@ Settings → Application → Appearance → Font picks the family every window d
 | Font select trigger  | Hover, focus, press     | Shared `navigationFeedback`, focus ring                 | Immediate color change  |
 | Every window's texts | Choosing a font         | Relayout in the chosen family at once; nothing animates | Same                    |
 | Save failure alert   | Appears below the field | Replaces in place; no pulse or travel                   | Same                    |
+
+## Quick Translate Dictionary
+
+Quick Translate supports two contextual dictionary surfaces backed by **Settings → Integrations → Dictionary**: an inline collapsible lexicon band when the source input is a single word or short term, and a two-stage `[Look up]` pill plus non-modal docked drawer when the user highlights a term inside the source editor, translation output, back-translation, or restored history. Settings → Dictionary reuses the shared CapabilitySection layout, breadcrumb, and `popup`/`popupHidden` add-channel dialog transitions.
+
+### Motion Inventory
+
+| Surface                    | Change                                                | Motion                                                                                    | Reduced Motion         |
+| -------------------------- | ----------------------------------------------------- | ----------------------------------------------------------------------------------------- | ---------------------- |
+| Inline dictionary band     | Mounts between source input and translation cards     | Reveals in place without shifting translation scroll anchors                              | Instant show/hide      |
+| Inline dictionary chevron  | Expand/collapse toggle (`disclosureIcon`)             | Shared `disclosureIcon` rotation (`150ms`)                                                | Instant flip           |
+| Selection `[Look up]` pill | Opens near highlighted text bounds                    | Shared `popup` / `popupHidden` opacity & scale                                            | Instant appear/dismiss |
+| Docked dictionary drawer   | Slides open above footer outside scroll area          | Smooth height/opacity settle (`160ms` `easeOut`) while stream viewport compresses cleanly | Instant dock/close     |
+| Drawer drill-down entry    | Replacing active entry from synonym/example selection | Immediate content swap in-frame (`120ms` fade) with back arrow active                     | Instant swap           |

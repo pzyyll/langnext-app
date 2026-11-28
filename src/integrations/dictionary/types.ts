@@ -37,6 +37,8 @@ export interface DictionaryLookupInput {
   contextSentence?: string;
   sourceLanguage?: LanguageId | "auto";
   explanationLanguage: string;
+  signal?: AbortSignal;
+  timeoutMs?: number;
 }
 
 export type DictionaryChannelFailure =
@@ -47,7 +49,35 @@ export type DictionaryChannelFailure =
   | "timeout"
   | "network"
   | "invalid_response"
+  | "cancelled"
   | "unknown";
+
+const DICTIONARY_FAILURE_SET = new Set<string>([
+  "unconfigured",
+  "unsupported",
+  "auth",
+  "rate_limit",
+  "timeout",
+  "network",
+  "invalid_response",
+  "cancelled",
+  "unknown",
+]);
+
+/** Structured failure thrown by a dictionary channel so the chain can classify retry/fallback policy. */
+export class DictionaryChannelError extends Error {
+  readonly failure: DictionaryChannelFailure;
+
+  constructor(failure: DictionaryChannelFailure, message?: string) {
+    super(message ?? failure);
+    this.name = "DictionaryChannelError";
+    this.failure = failure;
+  }
+}
+
+export function isDictionaryChannelFailure(value: unknown): value is DictionaryChannelFailure {
+  return typeof value === "string" && DICTIONARY_FAILURE_SET.has(value);
+}
 
 export type DictionaryChannelOutcome =
   | { ok: true; result: DictionaryLookupResult }

@@ -61,7 +61,7 @@ export interface IntegrationRegistry {
   diagnostics(): Diagnostic[];
 }
 
-const CAPABILITY_IDS: readonly string[] = ["tts", "ocr", "detect"];
+const CAPABILITY_IDS: readonly string[] = ["tts", "ocr", "detect", "dictionary"];
 
 function blankId(value: unknown): boolean {
   return typeof value !== "string" || value.trim().length === 0;

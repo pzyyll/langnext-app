@@ -1,6 +1,7 @@
 import { expect, test } from "nsh/test";
 import type { CapabilityChannelDefinition } from "../framework/integrations";
 import { detectChannelDefinitions } from "./detect";
+import { dictionaryChannelDefinitions } from "./dictionary";
 import { ocrChannelDefinitions } from "./ocr";
 import { ttsChannelDefinitions } from "./tts";
 
@@ -11,6 +12,7 @@ function builtInChannels(): ErasedChannel[] {
     ...(ttsChannelDefinitions as unknown as ErasedChannel[]),
     ...(ocrChannelDefinitions as unknown as ErasedChannel[]),
     ...(detectChannelDefinitions as unknown as ErasedChannel[]),
+    ...(dictionaryChannelDefinitions as unknown as ErasedChannel[]),
   ];
 }
 

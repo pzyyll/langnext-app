@@ -1,11 +1,7 @@
 // ABOUTME: Language detection: one bounded sample through enabled channels in priority order.
 // ABOUTME: Channel readiness and execution live in the detect definitions; failures fall through.
 import type { TextGenerationRequest } from "../../modules/ai/contracts/protocol";
-import {
-  aiClient,
-  type AiClientCallOptions,
-  type AiClientInput,
-} from "../../modules/ai/runtime/client";
+import type { AiClientCallOptions, AiClientInput } from "../../modules/ai/runtime/client";
 import type { FetchLike } from "../../services/http";
 import { createLogger } from "../../services/log";
 import {
@@ -17,8 +13,6 @@ import {
   type CredentialRecord,
   type HostModels,
   type HostServices,
-  type ModelConnectionRoute,
-  type ResolvedModelRoute,
 } from "../../framework/integrations";
 import type { LanguageId } from "../../framework/languages";
 import {
@@ -27,7 +21,8 @@ import {
   type DetectionChannelFailure,
   type DetectionRequest,
 } from "../../integrations/detect";
-import { resolveSavedModelRequest, type SavedModelRequestResolution } from "../models/store";
+import { createTextHostModels } from "../models/host-models";
+import type { SavedModelRequestResolution } from "../models/store";
 import { detectChannels } from "./store";
 import type { EnabledDetectionChannel } from "./preferences";
 
@@ -87,64 +82,13 @@ export function boundDetectionSample(text: string): string {
   return codePoints.slice(0, MAX_SAMPLE_CODE_POINTS).join("");
 }
 
-function toResolvedRoute(resolved: SavedModelRequestResolution): ResolvedModelRoute {
-  if (!resolved.ok) return { ok: false, reason: resolved.reason };
-  return {
-    ok: true,
-    modelId: resolved.modelId,
-    modelKey: resolved.modelKey,
-    connection: {
-      providerTypeId: resolved.connection.providerTypeId,
-      protocolId: resolved.connection.protocolId,
-      baseUrl: resolved.connection.baseUrl,
-      credential: resolved.connection.credential,
-    },
-  };
-}
-
-function toClientInput(connection: ModelConnectionRoute): AiClientInput {
-  return {
-    providerTypeId: connection.providerTypeId as AiClientInput["providerTypeId"],
-    protocolId: connection.protocolId as AiClientInput["protocolId"],
-    baseUrl: connection.baseUrl,
-    credential: connection.credential,
-  };
-}
-
 /** Builds the AI access one detection call shares; each saved model resolves once per call. */
-function detectionModels(
-  options: DetectLanguageOptions,
-  resolved: Map<string, Promise<ResolvedModelRoute>>,
-): HostModels {
-  const resolveModel =
-    options.resolveSavedModelRequest ??
-    ((modelId: string) => resolveSavedModelRequest(modelId, "text"));
-  const generate = options.generateText ?? aiClient.generateText;
-
-  return {
-    resolveSaved: (modelId) => {
-      let pending = resolved.get(modelId);
-      if (pending === undefined) {
-        pending = resolveModel(modelId).then(toResolvedRoute);
-        resolved.set(modelId, pending);
-      }
-      return pending;
-    },
-    generateText: (connection, request, callOptions) =>
-      generate(
-        toClientInput(connection),
-        {
-          modelId: request.modelId,
-          system: request.system,
-          user: request.user,
-          disableReasoning: request.disableReasoning,
-        },
-        callOptions,
-      ),
-    generateTextFromImage: async () => {
-      throw new Error("Language detection does not read images.");
-    },
-  };
+function detectionModels(options: DetectLanguageOptions): HostModels {
+  return createTextHostModels({
+    purpose: "text",
+    resolveSavedModelRequest: options.resolveSavedModelRequest,
+    generateText: options.generateText,
+  });
 }
 
 /** Reads one channel's credential record for this attempt; never logs a value. */
@@ -257,7 +201,7 @@ export async function detectLanguage(
   }
   if (attempts.length === 0) return failure("failed");
 
-  const models = detectionModels(options, new Map());
+  const models = detectionModels(options);
   const request: DetectionRequest = {
     sample,
     signal: options.signal,

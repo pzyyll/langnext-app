@@ -52,6 +52,7 @@ settings:
     shortcuts: Shortcuts
     quickTranslate: Quick Translate
     languageDetection: Language Detection
+    dictionary: Dictionary
     ocr: OCR
     tts: Text-to-Speech
     wordbook: Wordbook
@@ -404,6 +405,32 @@ settings:
       detectorUnconfigured: Configure this detector before enabling it.
       preferenceInvalid: Choose a supported language.
       preferencesIdentical: The native language and the target language must differ.
+  dictionary:
+    title: Dictionary
+    addChannel: Add Channel
+    ai: AI Model
+    model: Model
+    notConfigured: Not configured
+    saved: Dictionary channel saved
+    breadcrumbLabel: Dictionary navigation
+    priorityHint: Enabled dictionary channels run in order from top to bottom. Later ones act as backups.
+    configureBeforeEnable: Configure this channel before enabling it.
+    configureLabel: Configure %{name}
+    enableLabel: Enable %{name}
+    removeLabel: Remove %{name}
+    removeTitle: Remove Channel
+    removeDescription: 'Remove channel "%{name}" and clear its saved configuration?'
+    removeConfirm: Remove
+    emptyTitle: No dictionary channels yet
+    emptyChannels: Available channels
+    emptyAdd: Add %{name}
+    error:
+      storageReadFailed: Could not read the saved dictionary settings.
+      storageMalformed: The saved dictionary settings are unreadable.
+      storageUnsupportedVersion: The saved dictionary settings use an unsupported version.
+      storageWriteFailed: Could not save the dictionary settings. Check storage and try again.
+      modelIdBlank: Choose a model for dictionary lookup.
+      channelUnconfigured: Configure this channel before enabling it.
   wordbook:
     provider: Anki
     enable: Enable Anki
@@ -470,6 +497,17 @@ languageDetection:
     failed: Language detection failed. Choose the source language.
     missingNativeLanguage: Set your native language, or choose a concrete target language.
     missingPreferredLanguage: Set the target language for your native language, or choose a concrete target language.
+dictionary:
+  error:
+    unconfigured: Configure a dictionary model in Settings.
+    unsupported: This dictionary channel does not support the request.
+    auth: Check the dictionary model's API key.
+    rate_limit: Dictionary requests hit a rate limit.
+    timeout: Dictionary lookup timed out.
+    network: Dictionary lookup failed due to a network error.
+    invalid_response: Dictionary returned an invalid response.
+    cancelled: Dictionary lookup cancelled.
+    unknown: Dictionary lookup failed.
 models:
   title: Models
   channel:

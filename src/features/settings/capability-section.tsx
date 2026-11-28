@@ -55,6 +55,7 @@ const EMPTY_ICONS: Record<CapabilityId, IconName> = {
   tts: "mdi:tts",
   ocr: "mdi:ocr",
   detect: "mdi:translate",
+  dictionary: "mdi:book-open-variant-outline",
 };
 
 /** Domain titles and copy the shared host cannot infer from a definition. */

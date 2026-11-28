@@ -3,6 +3,7 @@ import { initializeIntegrations } from "./src/app/integrations-setup";
 import { AppShell } from "./src/app/shell";
 import { StartupError, startupFailureMessage } from "./src/app/startup-error";
 import { loadSplitRailWidths } from "./src/components/layout/split-rail";
+import { dictionaryChannels } from "./src/features/dictionary/store";
 import { languageDetectionPreferences } from "./src/features/language-detection/preferences";
 import { detectChannels } from "./src/features/language-detection/store";
 import { loadModelsState } from "./src/features/models/store";
@@ -59,6 +60,7 @@ async function startApp() {
       loadSkippedNoticeDismissal(),
       languageDetectionPreferences.load(),
       detectChannels.load(),
+      dictionaryChannels.load(),
       ocrChannels.load(),
       ttsChannels.load(),
       wordbookSettingsStore.load(),

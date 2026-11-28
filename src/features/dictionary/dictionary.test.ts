@@ -1,9 +1,20 @@
 import { expect, test } from "nsh/test";
 import {
+  createChannelCollection,
+  createCredentialVault,
+  createIntegrationRegistry,
+  setIntegrationRegistry,
+  type CapabilityChannelDefinition,
+} from "../../framework/integrations";
+import {
+  aiDictionaryChannel,
   buildDictionaryPrompt,
   dictionaryFailureKey,
   parseDictionaryResponse,
-} from "../../integrations/dictionary/types";
+  registerDictionaryIntegrations,
+  type DictionaryLookupInput,
+  type DictionaryLookupResult,
+} from "../../integrations/dictionary";
 import { formatDictionaryAnkiNote } from "./anki-format";
 import {
   extractContextSentence,
@@ -11,6 +22,13 @@ import {
   isSelectionLookupCandidate,
   normalizeLookupTerm,
 } from "./lexical-query";
+import {
+  clearDictionaryCache,
+  isDictionaryConfigured,
+  lookupWord,
+  type LookupWordOptions,
+} from "./lookup";
+import { DICTIONARY_CHANNELS_STORAGE_KEY, createDictionaryChannels } from "./store";
 
 test("dictionary lexical: normalizeLookupTerm trims outer punctuation and collapses spaces", () => {
   expect(normalizeLookupTerm("  “ephemeral,”  ")).toBe("ephemeral");
@@ -251,4 +269,271 @@ test("dictionary anki format: formats term, phonetics, senses, and context sente
     sourceText: "ephemeral",
     translatedText: "adj. short-lived\nMayflies are ephemeral.",
   });
+});
+
+function memoryVaultStorage(seed: Record<string, string> = {}) {
+  const store = { ...seed };
+  return {
+    store,
+    storage: {
+      getItem: async (key: string) => store[key] ?? null,
+      setItem: async (key: string, value: string) => {
+        store[key] = value;
+      },
+      removeItem: async (key: string) => {
+        delete store[key];
+      },
+    },
+  };
+}
+
+function fakeDeferred<T>() {
+  let resolve!: (value: T) => void;
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((res, rej) => {
+    resolve = res;
+    reject = rej;
+  });
+  return { promise, resolve, reject };
+}
+
+test("dictionary lookup: reports unconfigured when no dictionary channel is enabled", async () => {
+  clearDictionaryCache();
+  const { storage } = memoryVaultStorage();
+  const channels = createDictionaryChannels(storage);
+  await channels.load();
+
+  expect(isDictionaryConfigured(channels)).toBe(false);
+  const outcome = await lookupWord({ term: "ephemeral", explanationLanguage: "zh" }, { channels });
+  expect(outcome).toEqual({ ok: false, failure: "unconfigured" });
+});
+
+test("dictionary lookup: caches normalized queries and invalidates on context or channel change", async () => {
+  clearDictionaryCache();
+  const registry = createIntegrationRegistry();
+  registerDictionaryIntegrations(registry);
+  setIntegrationRegistry(registry);
+
+  const { storage } = memoryVaultStorage({
+    [DICTIONARY_CHANNELS_STORAGE_KEY]: JSON.stringify({
+      version: 1,
+      order: ["ai"],
+      channels: {
+        ai: { enabled: true, configured: true, config: { modelId: "m1" }, credentialRef: null },
+      },
+    }),
+  });
+  const channels = createDictionaryChannels(storage);
+  await channels.load();
+  expect(isDictionaryConfigured(channels)).toBe(true);
+
+  let modelCalls = 0;
+  const options: LookupWordOptions = {
+    channels,
+    resolveSavedModelRequest: async (modelId) => ({
+      ok: true,
+      modelId,
+      connection: {
+        providerTypeId: "openai",
+        protocolId: "openai-responses",
+        baseUrl: "https://api.example.com/v1",
+        credential: "sk-test",
+      },
+      modelKey: modelId === "m2" ? "gpt-4.1" : "gpt-4.1-mini",
+    }),
+    generateText: async (_conn, req) => {
+      modelCalls += 1;
+      return JSON.stringify({
+        found: true,
+        term: "ephemeral",
+        phonetics: [{ label: "US", ipa: "/ɪˈfɛmərəl/" }],
+        senses: [{ partOfSpeech: "adj.", glosses: [`gloss-${req.modelId}-${modelCalls}`] }],
+      });
+    },
+  };
+
+  const first = await lookupWord({ term: "ephemeral", explanationLanguage: "zh" }, options);
+  const second = await lookupWord({ term: "  “EPHEMERAL,”  ", explanationLanguage: "zh" }, options);
+  expect(first.ok).toBe(true);
+  expect(second).toEqual(first);
+  expect(modelCalls).toBe(1);
+
+  const withContext = await lookupWord(
+    { term: "ephemeral", contextSentence: "Youth is ephemeral.", explanationLanguage: "zh" },
+    options,
+  );
+  expect(withContext.ok).toBe(true);
+  expect(modelCalls).toBe(2);
+
+  await channels.save("ai", { modelId: "m2" }, { mode: "keep" });
+  const afterConfigChange = await lookupWord(
+    { term: "ephemeral", explanationLanguage: "zh" },
+    options,
+  );
+  expect(afterConfigChange.ok).toBe(true);
+  expect(modelCalls).toBe(3);
+  if (afterConfigChange.ok && afterConfigChange.result.kind === "entry") {
+    expect(afterConfigChange.result.entry.senses[0]!.glosses[0]).toBe("gloss-gpt-4.1-3");
+  }
+});
+
+test("dictionary lookup: deduplicates concurrent in-flight identical requests", async () => {
+  clearDictionaryCache();
+  const registry = createIntegrationRegistry();
+  registerDictionaryIntegrations(registry);
+  setIntegrationRegistry(registry);
+
+  const { storage } = memoryVaultStorage({
+    [DICTIONARY_CHANNELS_STORAGE_KEY]: JSON.stringify({
+      version: 1,
+      order: ["ai"],
+      channels: {
+        ai: { enabled: true, configured: true, config: { modelId: "m1" }, credentialRef: null },
+      },
+    }),
+  });
+  const channels = createDictionaryChannels(storage);
+  await channels.load();
+
+  const gate = fakeDeferred<string>();
+  let calls = 0;
+  const options: LookupWordOptions = {
+    channels,
+    resolveSavedModelRequest: async (modelId) => ({
+      ok: true,
+      modelId,
+      connection: {
+        providerTypeId: "openai",
+        protocolId: "openai-responses",
+        baseUrl: "https://api.example.com/v1",
+        credential: "sk-test",
+      },
+      modelKey: "gpt-4.1-mini",
+    }),
+    generateText: () => {
+      calls += 1;
+      return gate.promise;
+    },
+  };
+
+  const p1 = lookupWord({ term: "resilience", explanationLanguage: "zh" }, options);
+  const p2 = lookupWord({ term: "  resilience  ", explanationLanguage: "zh" }, options);
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  expect(calls).toBe(1);
+
+  gate.resolve(
+    JSON.stringify({
+      found: true,
+      term: "resilience",
+      phonetics: [],
+      senses: [{ partOfSpeech: "n.", glosses: ["韧性"] }],
+    }),
+  );
+
+  const [r1, r2] = await Promise.all([p1, p2]);
+  expect(r1).toEqual(r2);
+  expect(calls).toBe(1);
+});
+
+test("dictionary lookup: falls back along enabled channel priority and never caches failures", async () => {
+  clearDictionaryCache();
+  const attempts: string[] = [];
+
+  const primary: CapabilityChannelDefinition<
+    { fail: boolean },
+    DictionaryLookupInput,
+    DictionaryLookupResult
+  > = {
+    id: "primary",
+    capability: "dictionary",
+    labelKey: "settings.dictionary.ai",
+    icon: aiDictionaryChannel.icon,
+    configurable: false,
+    config: { parse: () => ({ fail: true }), defaults: () => ({ fail: true }) },
+    credential: null,
+    describe: () => "Primary",
+    readiness: async () => ({ ready: true }),
+    execute: async (_binding, input) => {
+      attempts.push("primary");
+      if (input.term === "cancel-me") {
+        const { DictionaryChannelError } = await import("../../integrations/dictionary/types");
+        throw new DictionaryChannelError("cancelled");
+      }
+      const { DictionaryChannelError } = await import("../../integrations/dictionary/types");
+      throw new DictionaryChannelError("rate_limit");
+    },
+    failureKey: dictionaryFailureKey,
+  };
+
+  const backup: CapabilityChannelDefinition<
+    Record<string, never>,
+    DictionaryLookupInput,
+    DictionaryLookupResult
+  > = {
+    id: "backup",
+    capability: "dictionary",
+    labelKey: "settings.dictionary.ai",
+    icon: aiDictionaryChannel.icon,
+    configurable: false,
+    config: { parse: () => ({}), defaults: () => ({}) },
+    credential: null,
+    describe: () => "Backup",
+    readiness: async () => ({ ready: true }),
+    execute: async (_binding, input) => {
+      attempts.push("backup");
+      return {
+        kind: "entry",
+        entry: {
+          found: true,
+          term: input.term,
+          phonetics: [],
+          senses: [{ partOfSpeech: "n.", glosses: ["备用释义"] }],
+        },
+      };
+    },
+    failureKey: dictionaryFailureKey,
+  };
+
+  const definitions = [
+    primary as unknown as CapabilityChannelDefinition<unknown, unknown, unknown>,
+    backup as unknown as CapabilityChannelDefinition<unknown, unknown, unknown>,
+  ];
+  const { storage } = memoryVaultStorage({
+    [DICTIONARY_CHANNELS_STORAGE_KEY]: JSON.stringify({
+      version: 1,
+      order: ["primary", "backup"],
+      channels: {
+        primary: { enabled: true, configured: true, config: {}, credentialRef: null },
+        backup: { enabled: true, configured: true, config: {}, credentialRef: null },
+      },
+    }),
+  });
+  const channels = createChannelCollection({
+    capability: "dictionary",
+    storage,
+    storageKey: DICTIONARY_CHANNELS_STORAGE_KEY,
+    vault: createCredentialVault({ storage, namespace: "secret.dict.test" }),
+    definitions: () => definitions,
+    policy: { enableOnFirstSave: true },
+  });
+  await channels.load();
+
+  const fallbackResult = await lookupWord(
+    { term: "Fallback", explanationLanguage: "zh" },
+    { channels },
+  );
+  expect(attempts).toEqual(["primary", "backup"]);
+  expect(fallbackResult.ok).toBe(true);
+
+  attempts.length = 0;
+  const cancelledResult = await lookupWord(
+    { term: "cancel-me", explanationLanguage: "zh" },
+    { channels },
+  );
+  expect(attempts).toEqual(["primary"]);
+  expect(cancelledResult).toEqual({ ok: false, failure: "cancelled" });
+
+  // Retrying after failure must attempt again (failures are not cached).
+  await lookupWord({ term: "cancel-me", explanationLanguage: "zh" }, { channels });
+  expect(attempts).toEqual(["primary", "primary"]);
 });

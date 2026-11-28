@@ -8,7 +8,7 @@ import type { Logger } from "../../services/log";
 export type IntegrationAxis = "protocol" | "provider" | "provider-presentation" | "capability";
 
 /** Capability domains that render through one shared settings host. */
-export type CapabilityId = "tts" | "ocr" | "detect";
+export type CapabilityId = "tts" | "ocr" | "detect" | "dictionary";
 
 /** Which saved-model purpose a capability asks for. */
 export type ModelPurpose = "text" | "image";

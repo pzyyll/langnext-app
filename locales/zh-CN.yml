@@ -52,6 +52,7 @@ settings:
     shortcuts: 快捷键
     quickTranslate: 快捷翻译
     languageDetection: 语言检测
+    dictionary: 词典
     ocr: OCR
     tts: 语音合成
     wordbook: 生词本
@@ -404,6 +405,32 @@ settings:
       detectorUnconfigured: 请先配置此检测器再启用。
       preferenceInvalid: 请选择受支持的语言。
       preferencesIdentical: 母语与目标语言必须不同。
+  dictionary:
+    title: 词典
+    addChannel: 添加渠道
+    ai: AI 模型
+    model: 模型
+    notConfigured: 未配置
+    saved: 词典渠道已保存
+    breadcrumbLabel: 词典导航
+    priorityHint: 已启用的词典渠道按从上到下顺序执行，后续渠道作为备用。
+    configureBeforeEnable: 请先配置此渠道再启用。
+    configureLabel: 配置 %{name}
+    enableLabel: 启用 %{name}
+    removeLabel: 移除 %{name}
+    removeTitle: 移除渠道
+    removeDescription: "确定移除渠道“%{name}”并清除其已保存配置吗？"
+    removeConfirm: 移除
+    emptyTitle: 暂无词典渠道
+    emptyChannels: 可用渠道
+    emptyAdd: 添加 %{name}
+    error:
+      storageReadFailed: 无法读取已保存的词典设置。
+      storageMalformed: 已保存的词典设置无法解析。
+      storageUnsupportedVersion: 已保存的词典设置版本不受支持。
+      storageWriteFailed: 无法保存词典设置，请检查存储后重试。
+      modelIdBlank: 请为词典选择模型。
+      channelUnconfigured: 请先配置此渠道再启用。
   wordbook:
     provider: Anki
     enable: 启用 Anki
@@ -470,6 +497,17 @@ languageDetection:
     failed: 语言检测失败，请手动选择源语言。
     missingNativeLanguage: 请设置母语，或选择具体的目标语言。
     missingPreferredLanguage: 请设置母语对应的目标语言，或选择具体的目标语言。
+dictionary:
+  error:
+    unconfigured: 请先在设置中配置词典模型。
+    unsupported: 当前词典渠道不支持该请求。
+    auth: 请检查词典模型的 API Key。
+    rate_limit: 词典请求触发频率限制。
+    timeout: 词典查询超时。
+    network: 词典查询遇到网络错误。
+    invalid_response: 词典返回了无效结果。
+    cancelled: 词典查询已取消。
+    unknown: 词典查询失败。
 models:
   title: 模型
   channel:

@@ -16,6 +16,7 @@ import {
   LANGUAGE_DETECTION_PREFERENCES_STORAGE_KEY,
   type LanguageDetectionPreferences,
 } from "../language-detection/preferences";
+import { DICTIONARY_CHANNELS_STORAGE_KEY } from "../dictionary/store";
 import {
   DETECT_COLLECTION_STORAGE_KEY,
   DETECT_CREDENTIAL_NAMESPACE,
@@ -4042,4 +4043,68 @@ test("font: applies the saved family to the window and saves a new choice", asyn
   await app.press("System font");
   await app.waitUntil(() => app.storage()[FONT_STORAGE_KEY] === "system");
   expect(app.spanStyle("id:settings-font >> text:System font").fontFamily ?? null).toBeNull();
+});
+
+test("dictionary settings: adds AI Model channel, saves a text model, and persists across reopen", async () => {
+  const seed = {
+    "settings.language": "en",
+    ...makeSeedStorage({
+      channels: [makeChannel({ id: "ch-openai", displayName: "OpenAI Main", enabled: true })],
+      models: [
+        makeModel({ id: "m-1", providerId: "ch-openai", modelKey: "gpt-4.1-mini", enabled: true }),
+      ],
+    }),
+  };
+  const app = await open(APP_ENTRY, { ...viewport, storage: seed });
+
+  await app.press("id:nav-settings");
+  await app.press("id:settings-nav-dictionary");
+  await app.waitFor("id:settings-dictionary-empty");
+  expect(app.shows("id:settings-dictionary-empty-channel-ai")).toBe(true);
+
+  await app.press("id:settings-dictionary-empty-channel-ai");
+  await app.waitFor("id:settings-dictionary-detail-card");
+  expect(app.enabled("id:settings-dictionary-save")).toBe(false);
+
+  await app.press("id:settings-dictionary-model");
+  await app.waitFor("role:option[OpenAI Main · gpt-4.1-mini]");
+  await app.press("role:option[OpenAI Main · gpt-4.1-mini]");
+  await app.waitFor("id:settings-dictionary-save");
+  expect(app.enabled("id:settings-dictionary-save")).toBe(true);
+
+  await app.press("id:settings-dictionary-save");
+  await app.waitUntil(
+    () =>
+      JSON.parse(app.storage()[DICTIONARY_CHANNELS_STORAGE_KEY] ?? "{}").channels?.ai?.config
+        ?.modelId === "m-1",
+  );
+
+  expect(JSON.parse(app.storage()[DICTIONARY_CHANNELS_STORAGE_KEY]!)).toEqual({
+    version: 1,
+    order: ["ai"],
+    channels: {
+      ai: {
+        enabled: true,
+        configured: true,
+        config: { modelId: "m-1" },
+        credentialRef: null,
+      },
+    },
+  });
+
+  await app.press("id:settings-dictionary-breadcrumb-root");
+  await app.waitFor("id:settings-dictionary-card");
+  expect(app.accessibility("id:settings-dictionary-summary-ai")?.name).toBe(
+    "OpenAI Main · gpt-4.1-mini",
+  );
+  expect(app.enabled("id:settings-dictionary-toggle-ai")).toBe(true);
+
+  const reopened = await open(APP_ENTRY, { ...viewport, storage: app.storage() });
+  await reopened.press("id:nav-settings");
+  await reopened.press("id:settings-nav-dictionary");
+  await reopened.waitFor("id:settings-dictionary-card");
+  expect(reopened.accessibility("id:settings-dictionary-summary-ai")?.name).toBe(
+    "OpenAI Main · gpt-4.1-mini",
+  );
+  expect(reopened.texts()).toContain("Primary");
 });
