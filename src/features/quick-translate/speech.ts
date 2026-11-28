@@ -244,7 +244,11 @@ export function createQuickSpeechCoordinator(options: {
       if (!detected.ok) {
         finishSpeech(token);
         if (detected.code !== "cancelled") {
-          input.report(languageResolutionErrorMessage(detected.code));
+          input.report(
+            detected.code === "unconfigured"
+              ? t("quickTranslate.speakChooseSource")
+              : languageResolutionErrorMessage(detected.code),
+          );
         }
         return;
       }
