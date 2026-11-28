@@ -65,6 +65,7 @@ import {
   type SentencePopoverDismissal,
 } from "./sentence-popover-trace";
 import type { CardResultState, CardViewItem, QuickTranslateSession } from "./session";
+import { InlineDictionaryBand, type DictionarySpeakControlState } from "./dictionary-band";
 import {
   QuickTranslateSourceEditor,
   type SourceHighlightRange,
@@ -1830,10 +1831,12 @@ export function QuickTranslatePopup(props: QuickTranslatePopupProps) {
 
   type SpeechOwner =
     | { kind: "source"; text: string; selection: SourceLanguageId }
+    | { kind: "dictionary"; slot: "inline"; term: string }
     | { kind: "result"; cardId: string; text: string; language: string }
     | { kind: "back-translation"; cardId: string; text: string; language: string };
 
   const sourceSpeechError = signal<string | null>(null);
+  const inlineDictionarySpeechError = signal<string | null>(null);
   const resultSpeechErrors = signal<Readonly<Record<string, string>>>({});
   const backTranslationSpeechErrors = signal<Readonly<Record<string, string>>>({});
   const speechPhase = signal<"idle" | "loading" | "playing">("idle");
@@ -1869,6 +1872,19 @@ export function QuickTranslatePopup(props: QuickTranslatePopupProps) {
     if (owner.text !== sourceText() || owner.selection !== props.session.sourceLanguage()) {
       cancelSpeech();
     }
+  });
+
+  effect(() => {
+    const owner = speechOwner();
+    if (owner?.kind !== "dictionary" || speechPhase() === "idle") return;
+    const inline = props.session.inlineDictionary();
+    const currentTerm = inline.status === "entry" ? inline.entry.term : "";
+    if (currentTerm !== owner.term) cancelSpeech();
+  });
+
+  effect(() => {
+    const inline = props.session.inlineDictionary();
+    if (inline.status !== "entry") inlineDictionarySpeechError.set(null);
   });
 
   effect(() => {
@@ -2042,6 +2058,18 @@ export function QuickTranslatePopup(props: QuickTranslatePopupProps) {
     });
   };
 
+  const speakInlineDictionary = () => {
+    const inline = props.session.inlineDictionary();
+    if (inline.status !== "entry") return;
+    const selected = props.session.sourceLanguage();
+    void runSpeech({
+      owner: { kind: "dictionary", slot: "inline", term: inline.entry.term },
+      text: inline.entry.term,
+      language: selected === AUTO_LANGUAGE ? null : selected,
+      report: (message) => inlineDictionarySpeechError.set(message),
+    });
+  };
+
   const speakResult = (cardId: string) => {
     const card = props.session.cards().find((item) => item.id === cardId);
     if (card === undefined || card.result.status !== "success") return;
@@ -2083,14 +2111,19 @@ export function QuickTranslatePopup(props: QuickTranslatePopupProps) {
   };
 
   const speechControl = (
-    target: "source" | { kind: "result" | "back-translation"; cardId: string },
-  ) => {
+    target:
+      | "source"
+      | "inline-dictionary"
+      | { kind: "result" | "back-translation"; cardId: string },
+  ): DictionarySpeakControlState => {
     const owner = speechOwner();
     const mine =
       owner !== null &&
       (target === "source"
         ? owner.kind === "source"
-        : owner.kind === target.kind && owner.cardId === target.cardId);
+        : target === "inline-dictionary"
+          ? owner.kind === "dictionary" && owner.slot === "inline"
+          : owner.kind === target.kind && owner.cardId === target.cardId);
     const phase = mine ? speechPhase() : "idle";
     if (phase === "loading") {
       return {
@@ -2111,7 +2144,7 @@ export function QuickTranslatePopup(props: QuickTranslatePopupProps) {
       };
     }
     const readyLabel =
-      target !== "source" && target.kind === "back-translation"
+      typeof target !== "string" && target.kind === "back-translation"
         ? t("quickTranslate.speakBackTranslation")
         : t("quickTranslate.speak");
     return {
@@ -2593,6 +2626,20 @@ export function QuickTranslatePopup(props: QuickTranslatePopupProps) {
             {props.session.prefsSaveError() ?? ""}
           </Text>
         </View>
+      </If>
+
+      <If when={!showingHistory()}>
+        <InlineDictionaryBand
+          state={props.session.inlineDictionary()}
+          speakControl={speechControl("inline-dictionary")}
+          speechError={inlineDictionarySpeechError()}
+          onSpeak={() => {
+            if (speechControl("inline-dictionary").busy) cancelSpeech();
+            else speakInlineDictionary();
+          }}
+          onToggleExpand={props.session.handleToggleInlineDictionaryExpanded}
+          onRetry={props.session.handleRetryInlineDictionary}
+        />
       </If>
 
       <If when={showingHistory()}>

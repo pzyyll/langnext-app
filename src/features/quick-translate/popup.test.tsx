@@ -1,6 +1,7 @@
 import { t } from "nsh/i18n";
 import { expect, open, test } from "nsh/test";
 import { initializeAiModules } from "../../app/ai-setup";
+import { DICTIONARY_CHANNELS_STORAGE_KEY } from "../dictionary/store";
 import { GOOGLE_CLOUD_TTS_URL } from "../../integrations/tts/vendor/google-cloud";
 import { DEFAULT_GOOGLE_VOICE_PREFERENCES } from "../../integrations/tts/vendor/google-preferences";
 import { LANGUAGE_DETECTION_PREFERENCES_STORAGE_KEY } from "../language-detection/preferences";
@@ -5952,4 +5953,266 @@ test("sentence source popover: opens on non-link Markdown fragments, preserves l
   await app.keyboard.press("escape");
   await app.waitUntil(() => !app.shows(popover));
   expect(app.accessibility(preview)?.value).toBe("Sentence 2 of 2: Second sentence follows.");
+});
+
+const DICT_BASE_URL = "https://dict.test/v1";
+const DICT_URL = `POST ${DICT_BASE_URL}/chat/completions`;
+
+function dictionarySeed(
+  extra: Record<string, string> = {},
+  options: { autoTranslate?: boolean; withTts?: boolean } = {},
+) {
+  const dictChannel = makeChannel({
+    id: "ch-dict",
+    displayName: "Dict AI",
+    adapterId: "openai-compatible",
+    baseUrl: DICT_BASE_URL,
+    enabled: true,
+  });
+  const dictModel = makeModel({
+    id: "m-dict",
+    providerId: "ch-dict",
+    modelKey: "gpt-4.1-mini",
+    sourceAdapterId: "openai-compatible",
+    enabled: true,
+  });
+  const translateChannel = makeChannel({
+    id: "ch-openai",
+    presetId: "openai",
+    adapterId: "openai-compatible",
+    enabled: true,
+  });
+  const translateModel = makeModel({
+    id: "m-1",
+    providerId: "ch-openai",
+    modelKey: "gpt-4o",
+    sourceAdapterId: "openai-compatible",
+    enabled: true,
+  });
+  const preset = makePreset({ id: "preset-1" });
+  return makeSeedStorage({
+    channels: [translateChannel, dictChannel],
+    models: [translateModel, dictModel],
+    credentials: { "ch-openai": "sk-test", "ch-dict": "sk-dict" },
+    extra: {
+      [PRESETS_STORAGE_KEY]: JSON.stringify({ version: 1, items: [preset] }),
+      [QUICK_TRANSLATE_PREFERENCES_KEY]: JSON.stringify({
+        version: 1,
+        doubleCopyEnabled: false,
+        autoTranslate: options.autoTranslate ?? true,
+        sourceLanguage: "en",
+        targetLanguage: "zh",
+        cards: [{ id: "card-1", presetId: "preset-1", templateId: null, collapsed: false }],
+      }),
+      [DICTIONARY_CHANNELS_STORAGE_KEY]: JSON.stringify({
+        version: 1,
+        order: ["ai"],
+        channels: {
+          ai: {
+            enabled: true,
+            configured: true,
+            config: { modelId: "m-dict" },
+            credentialRef: null,
+          },
+        },
+      }),
+      ...(options.withTts ? enabledTtsStorage() : {}),
+      ...extra,
+    },
+  });
+}
+
+test("dictionary inline: stays hidden and makes zero dictionary requests when unconfigured or given a sentence", async () => {
+  const unconfigured = await open(POPUP_HARNESS, {
+    ...viewport,
+    storage: seedWithPresets([makePreset()]),
+    network: {
+      "POST https://api.openai.com/v1/chat/completions": {
+        status: 200,
+        body: { choices: [{ message: { content: "短暂的" } }] },
+      },
+    },
+  });
+  await unconfigured.waitFor("id:quick-translate-source");
+  await unconfigured.type("id:quick-translate-source", "ephemeral");
+  await unconfigured.keyboard.press("enter");
+  await unconfigured.waitFor("id:quick-translate-card-card-1 >> text:短暂的");
+  expect(unconfigured.shows("id:quick-translate-dictionary-inline")).toBe(false);
+  expect(unconfigured.requests().filter((req) => req.url.includes("dict.test"))).toHaveLength(0);
+
+  const sentenceApp = await open(POPUP_HARNESS, {
+    ...viewport,
+    storage: dictionarySeed({}, { autoTranslate: false }),
+    network: {
+      "POST https://api.openai.com/v1/chat/completions": {
+        status: 200,
+        body: { choices: [{ message: { content: "今天是个好天气。" } }] },
+      },
+      [DICT_URL]: { status: 200, body: { choices: [{ message: { content: "{}" } }] } },
+    },
+  });
+  await sentenceApp.waitFor("id:quick-translate-source");
+  await sentenceApp.type("id:quick-translate-source", "Today is a nice day.");
+  await sentenceApp.keyboard.press("enter");
+  await sentenceApp.waitFor("id:quick-translate-card-card-1 >> text:今天是个好天气。");
+  expect(sentenceApp.shows("id:quick-translate-dictionary-inline")).toBe(false);
+  expect(sentenceApp.requests().filter((req) => req.url.includes("dict.test"))).toHaveLength(0);
+});
+
+test("dictionary inline: renders compact band for whole word, expands secondary senses, and speaks pronunciation", async () => {
+  const app = await open(POPUP_HARNESS, {
+    ...viewport,
+    storage: dictionarySeed({}, { autoTranslate: false, withTts: true }),
+    network: {
+      "POST https://api.openai.com/v1/chat/completions": {
+        status: 200,
+        body: { choices: [{ message: { content: "短暂的" } }] },
+      },
+      [DICT_URL]: {
+        status: 200,
+        body: {
+          choices: [
+            {
+              message: {
+                content: JSON.stringify({
+                  found: true,
+                  term: "ephemeral",
+                  phonetics: [
+                    { label: "US", ipa: "/ɪˈfɛmərəl/" },
+                    { label: "UK", ipa: "/ɪˈfɛmərəl/" },
+                  ],
+                  senses: [
+                    {
+                      partOfSpeech: "adj.",
+                      glosses: ["短暂的", "转瞬即逝的"],
+                      example: "Fashion is by nature ephemeral.",
+                      exampleTranslation: "时尚本质上是转瞬即逝的。",
+                    },
+                    {
+                      partOfSpeech: "n.",
+                      glosses: ["短生植物"],
+                    },
+                  ],
+                  forms: [{ label: "noun", value: "ephemerality" }],
+                  synonyms: ["fleeting", "transient"],
+                }),
+              },
+            },
+          ],
+        },
+      },
+      [QUICK_TTS_URL]: { status: 200, body: QUICK_TTS_MP3 },
+    },
+  });
+
+  await app.waitFor("id:quick-translate-source");
+  await app.type("id:quick-translate-source", "ephemeral");
+  await app.keyboard.press("enter");
+
+  await app.waitFor("id:quick-translate-dictionary-inline");
+  await app.waitFor("id:quick-translate-dictionary-inline >> text:/ɪˈfɛmərəl/");
+  expect(app.shows("id:quick-translate-dictionary-inline-details")).toBe(false);
+  expect(app.shows("id:quick-translate-card-card-1 >> text:短暂的")).toBe(true);
+
+  await app.press("id:quick-translate-dictionary-inline-toggle");
+  await app.waitFor("id:quick-translate-dictionary-inline-details");
+  expect(app.texts()).toContain("Fashion is by nature ephemeral.");
+  expect(app.texts()).toContain("短生植物");
+  expect(app.texts()).toContain("noun: ephemerality");
+  expect(app.texts()).toContain("transient");
+
+  await app.press("id:quick-translate-dictionary-inline-speak");
+  await app.waitUntil(() => app.requests().some((request) => request.url === GOOGLE_CLOUD_TTS_URL));
+  const ttsReq = app.requests().find((request) => request.url === GOOGLE_CLOUD_TTS_URL)!;
+  expect(JSON.parse(ttsReq.body ?? "").input.text).toBe("ephemeral");
+});
+
+test("dictionary inline: hides silently on not_found, retries errors, and discards stale responses after clear", async () => {
+  let dictCalls = 0;
+  const app = await open(POPUP_HARNESS, {
+    ...viewport,
+    storage: dictionarySeed({}, { autoTranslate: false }),
+    network: {
+      "POST https://api.openai.com/v1/chat/completions": {
+        status: 200,
+        body: { choices: [{ message: { content: "译文" } }] },
+      },
+      [DICT_URL]: () => {
+        dictCalls += 1;
+        if (dictCalls === 1) {
+          return { status: 401, body: { error: { message: "bad key" } } };
+        }
+        if (dictCalls === 2) {
+          return {
+            status: 200,
+            body: {
+              choices: [
+                {
+                  message: {
+                    content: JSON.stringify({
+                      found: true,
+                      term: "ephemeral",
+                      phonetics: [],
+                      senses: [{ partOfSpeech: "adj.", glosses: ["短暂的"] }],
+                    }),
+                  },
+                },
+              ],
+            },
+          };
+        }
+        return {
+          status: 200,
+          body: {
+            choices: [{ message: { content: JSON.stringify({ found: false, term: "zzz" }) } }],
+          },
+        };
+      },
+    },
+  });
+
+  await app.waitFor("id:quick-translate-source");
+  await app.type("id:quick-translate-source", "ephemeral");
+  await app.keyboard.press("enter");
+
+  await app.waitFor("id:quick-translate-dictionary-inline-error");
+  expect(app.shows("id:quick-translate-dictionary-inline-retry")).toBe(true);
+
+  await app.press("id:quick-translate-dictionary-inline-retry");
+  await app.waitFor("id:quick-translate-dictionary-inline-term");
+  expect(app.texts()).toContain("adj. 短暂的");
+
+  // not_found hides inline band cleanly without showing error or empty box.
+  await app.press("id:quick-translate-clear");
+  await app.type("id:quick-translate-source", "zzz");
+  await app.keyboard.press("enter");
+  await app.waitUntil(() => dictCalls === 3);
+  await app.wait(50);
+  expect(app.shows("id:quick-translate-dictionary-inline")).toBe(false);
+  expect(app.shows("id:quick-translate-dictionary-inline-error")).toBe(false);
+
+  // Stale in-flight response arriving after source clear is discarded.
+  const deferredApp = await open(POPUP_HARNESS, {
+    ...viewport,
+    storage: dictionarySeed(
+      { [POPUP_HARNESS_MODE_KEY]: "dictionary-deferred" },
+      { autoTranslate: false },
+    ),
+    network: {
+      "POST https://api.openai.com/v1/chat/completions": {
+        status: 200,
+        body: { choices: [{ message: { content: "译文" } }] },
+      },
+    },
+  });
+  await deferredApp.waitFor("id:quick-translate-source");
+  await deferredApp.type("id:quick-translate-source", "ephemeral");
+  await deferredApp.keyboard.press("enter");
+  await deferredApp.waitFor("id:quick-translate-dictionary-inline-loading");
+
+  await deferredApp.press("id:quick-translate-clear");
+  expect(deferredApp.shows("id:quick-translate-dictionary-inline")).toBe(false);
+
+  await deferredApp.press("id:harness-resolve-dict");
+  expect(deferredApp.shows("id:quick-translate-dictionary-inline")).toBe(false);
 });

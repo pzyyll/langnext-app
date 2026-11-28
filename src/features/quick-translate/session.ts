@@ -3,6 +3,18 @@ import type { AnkiAddFailure, AnkiAddInput, AnkiTarget } from "../wordbook/anki-
 import { batch, cleanup, Clipboard, effect, signal, untracked, type Accessor } from "nsh";
 import { t } from "nsh/i18n";
 import type { SelectItem } from "../../components/ui/select";
+import { dictionaryFailureKey } from "../../integrations/dictionary";
+import { isInlineLexicalQuery, normalizeLookupTerm } from "../dictionary/lexical-query";
+import {
+  isDictionaryConfigured,
+  lookupWord,
+  type LookupWordOptions,
+  type LookupWordOutcome,
+  type LookupWordRequest,
+} from "../dictionary/lookup";
+import { dictionaryChannels } from "../dictionary/store";
+import { language as activeLanguagePreference } from "../settings/language";
+import type { InlineDictionaryViewState } from "./dictionary-band";
 import type { LanguageDetectionResult } from "../language-detection/detect";
 import { languageResolutionErrorMessage } from "../language-detection/messages";
 import {
@@ -189,7 +201,14 @@ export interface QuickTranslateSessionOptions {
   addToAnki?: (
     input: AnkiAddInput,
   ) => Promise<{ ok: true } | { ok: false; failure: AnkiAddFailure }>;
+  /** Lexical dictionary lookup; tests may pass a stub to control timing or failures. */
+  lookupDictionary?: (
+    request: LookupWordRequest,
+    options?: LookupWordOptions,
+  ) => Promise<LookupWordOutcome>;
 }
+
+export type InlineDictionaryState = InlineDictionaryViewState;
 
 export interface QuickTranslateSession {
   sourceText: Accessor<string>;
@@ -232,6 +251,9 @@ export interface QuickTranslateSession {
   handleCloseBackTranslation: (cardId: string) => void;
   handleRetryBackTranslation: (cardId: string) => void;
   handleCopyBackTranslation: (cardId: string) => void;
+  inlineDictionary: Accessor<InlineDictionaryState>;
+  handleToggleInlineDictionaryExpanded: () => void;
+  handleRetryInlineDictionary: () => void;
   retryLoadPresets: () => void;
   notifyOverlayOpenChange: (menuId: string, open: boolean) => void;
 }
@@ -308,6 +330,167 @@ export function createQuickTranslateSession(
   let debounceTimer: ReturnType<typeof setTimeout> | null = null;
   let lastHandledDeliverySeq = 0;
   const cardRuntimes = new Map<string, CardRuntime>();
+  const inlineDictionary = signal<InlineDictionaryState>({ status: "hidden" });
+  let inlineTimer: ReturnType<typeof setTimeout> | null = null;
+  let inlineAbort: AbortController | null = null;
+  let inlineEpoch = 0;
+  let activeInlineKey: string | null = null;
+
+  const INLINE_DICTIONARY_DEBOUNCE_MS = 260;
+
+  const uiFallbackExplanationLanguage = (): LanguageId =>
+    activeLanguagePreference() === "zh-CN" ? "zh" : "en";
+
+  const resolveDictionaryExplanationLanguage = (
+    mode: "inline" | "source" | "target",
+  ): LanguageId => {
+    const detection = languageDetectionPreferences.snapshot();
+    if (mode === "inline" || mode === "source") {
+      const target = targetLanguage();
+      if (target !== AUTO_LANGUAGE) return target;
+      return (
+        detection.nativeLanguage ??
+        detection.preferredTranslationLanguage ??
+        uiFallbackExplanationLanguage()
+      );
+    }
+    if (detection.nativeLanguage) return detection.nativeLanguage;
+    const effectiveSource = resolveEffectiveSourceLanguage();
+    if (effectiveSource && effectiveSource !== targetLanguage()) return effectiveSource;
+    return uiFallbackExplanationLanguage();
+  };
+
+  const cancelInlineLookup = (resetState = true) => {
+    inlineEpoch += 1;
+    if (inlineTimer !== null) {
+      clearTimeout(inlineTimer);
+      inlineTimer = null;
+    }
+    if (inlineAbort !== null) {
+      inlineAbort.abort();
+      inlineAbort = null;
+    }
+    if (resetState) {
+      activeInlineKey = null;
+      inlineDictionary.set({ status: "hidden" });
+    }
+  };
+
+  const runInlineLookup = async (force = false) => {
+    if (
+      disposed ||
+      options.windowOpen?.() === false ||
+      historySnapshot() !== null ||
+      !isDictionaryConfigured(dictionaryChannels)
+    ) {
+      cancelInlineLookup(true);
+      return;
+    }
+    const raw = options.sourceText();
+    if (!isInlineLexicalQuery(raw)) {
+      cancelInlineLookup(true);
+      return;
+    }
+    const term = normalizeLookupTerm(raw);
+    if (!term) {
+      cancelInlineLookup(true);
+      return;
+    }
+    const explanationLanguage = resolveDictionaryExplanationLanguage("inline");
+    const srcLang = sourceLanguage();
+    const queryKey = `${term.toLowerCase()}\0${srcLang}\0${explanationLanguage}`;
+    const current = inlineDictionary();
+    if (
+      !force &&
+      activeInlineKey === queryKey &&
+      (current.status === "loading" || current.status === "entry")
+    ) {
+      return;
+    }
+
+    cancelInlineLookup(false);
+    const epoch = inlineEpoch;
+    activeInlineKey = queryKey;
+    inlineDictionary.set({ status: "loading", term });
+    const controller = new AbortController();
+    inlineAbort = controller;
+
+    const run = options.lookupDictionary ?? lookupWord;
+    let outcome: LookupWordOutcome;
+    try {
+      outcome = await run(
+        {
+          term,
+          sourceLanguage: srcLang,
+          explanationLanguage,
+        },
+        { signal: controller.signal },
+      );
+    } catch {
+      if (disposed || epoch !== inlineEpoch) return;
+      if (inlineAbort === controller) inlineAbort = null;
+      activeInlineKey = null;
+      inlineDictionary.set({
+        status: "error",
+        term,
+        message: t(dictionaryFailureKey("unknown")),
+      });
+      return;
+    }
+
+    if (disposed || epoch !== inlineEpoch) return;
+    if (inlineAbort === controller) inlineAbort = null;
+
+    if (!outcome.ok) {
+      activeInlineKey = null;
+      if (outcome.failure === "cancelled" || outcome.failure === "unconfigured") {
+        inlineDictionary.set({ status: "hidden" });
+      } else {
+        inlineDictionary.set({
+          status: "error",
+          term,
+          message: t(dictionaryFailureKey(outcome.failure)),
+        });
+      }
+      return;
+    }
+
+    if (outcome.result.kind === "not_found") {
+      activeInlineKey = null;
+      inlineDictionary.set({ status: "hidden" });
+      return;
+    }
+
+    inlineDictionary.set({
+      status: "entry",
+      term,
+      entry: outcome.result.entry,
+      expanded: false,
+    });
+  };
+
+  const scheduleInlineLookup = () => {
+    if (!isAutoTranslate()) {
+      cancelInlineLookup(true);
+      return;
+    }
+    if (
+      disposed ||
+      options.windowOpen?.() === false ||
+      historySnapshot() !== null ||
+      !isDictionaryConfigured(dictionaryChannels) ||
+      !isInlineLexicalQuery(options.sourceText())
+    ) {
+      cancelInlineLookup(true);
+      return;
+    }
+    cancelInlineLookup(true);
+    inlineTimer = setTimeout(() => {
+      inlineTimer = null;
+      if (disposed) return;
+      void runInlineLookup(false);
+    }, INLINE_DICTIONARY_DEBOUNCE_MS);
+  };
 
   const captureActionLanguages = (): ActionLanguages => {
     const source = sourceLanguage();
@@ -536,6 +719,7 @@ export function createQuickTranslateSession(
     if (options.windowOpen?.() !== false) return;
     windowEpoch += 1;
     clearSharedDebounce();
+    cancelInlineLookup(true);
     languageDetection.cancelPending();
     prefsStore.clearSaveError();
     cards.set(
@@ -571,6 +755,7 @@ export function createQuickTranslateSession(
     disposed = true;
     languageDetection.dispose();
     clearSharedDebounce();
+    cancelInlineLookup(true);
     for (const runtime of cardRuntimes.values()) {
       cancelRuntime(runtime);
     }
@@ -789,6 +974,7 @@ export function createQuickTranslateSession(
       options.sourceText().trim().length > 0 &&
       hasEligibleExpandedCard();
     if (deliverable) executeAllCards("auto");
+    void runInlineLookup(true);
   };
 
   effect(() => {
@@ -812,6 +998,7 @@ export function createQuickTranslateSession(
     languageDetection.syncText(nextText);
     options.onSourceTextChange(nextText);
     scheduleAutoTranslate();
+    scheduleInlineLookup();
   };
 
   const handleSourceLanguageChange = (language: SourceLanguageId) => {
@@ -819,6 +1006,7 @@ export function createQuickTranslateSession(
     sourceLanguage.set(language);
     persistPreferencesState();
     scheduleAutoTranslate();
+    scheduleInlineLookup();
   };
 
   const handleTargetLanguageChange = (language: TargetLanguageId) => {
@@ -826,6 +1014,7 @@ export function createQuickTranslateSession(
     targetLanguage.set(language);
     persistPreferencesState();
     scheduleAutoTranslate();
+    scheduleInlineLookup();
   };
 
   const resolveEffectiveSourceLanguage = (): LanguageId | null => {
@@ -850,6 +1039,7 @@ export function createQuickTranslateSession(
     });
     persistPreferencesState();
     scheduleAutoTranslate();
+    scheduleInlineLookup();
   };
 
   const handleAddPresetCard = (presetId: string) => {
@@ -1027,10 +1217,12 @@ export function createQuickTranslateSession(
     languageDetection.syncText("");
     options.onSourceTextChange("");
     invalidateAllCards();
+    cancelInlineLookup(true);
   };
 
   const handleRestoreHistory = (snapshot: HistorySnapshot) => {
     batch(() => {
+      cancelInlineLookup(true);
       invalidateAllCards();
       languageDetection.cancelPending();
       languageDetection.syncText(snapshot.sourceText);
@@ -1419,6 +1611,7 @@ export function createQuickTranslateSession(
     handleSourceSubmit: () => {
       historySnapshot.set(null);
       executeAllCards("manual");
+      void runInlineLookup(false);
     },
     handleClearSource,
     handleRestoreHistory,
@@ -1439,6 +1632,14 @@ export function createQuickTranslateSession(
     handleCloseBackTranslation,
     handleRetryBackTranslation,
     handleCopyBackTranslation,
+    inlineDictionary: () => inlineDictionary(),
+    handleToggleInlineDictionaryExpanded: () => {
+      const current = inlineDictionary();
+      if (current.status === "entry") {
+        inlineDictionary.set({ ...current, expanded: !current.expanded });
+      }
+    },
+    handleRetryInlineDictionary: () => void runInlineLookup(true),
     retryLoadPresets: () => void store.load(),
     notifyOverlayOpenChange: (menuId: string, open: boolean) =>
       options.onOverlayOpenChange?.(menuId, open),

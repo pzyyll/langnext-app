@@ -498,6 +498,15 @@ languageDetection:
     missingNativeLanguage: 请设置母语，或选择具体的目标语言。
     missingPreferredLanguage: 请设置母语对应的目标语言，或选择具体的目标语言。
 dictionary:
+  expand: 展开词典
+  collapse: 收起词典
+  loading: 正在查词…
+  lookUp: 查词
+  forms: 词形变化
+  synonyms: 近义词
+  back: 返回
+  close: 关闭
+  promoteToSource: 放入主输入框查词与翻译
   error:
     unconfigured: 请先在设置中配置词典模型。
     unsupported: 当前词典渠道不支持该请求。

@@ -27,6 +27,8 @@ import {
   type LanguageDetectionResult,
 } from "../../language-detection/detect";
 import { languageDetectionPreferences } from "../../language-detection/preferences";
+import type { LookupWordOutcome } from "../../dictionary/lookup";
+import { dictionaryChannels } from "../../dictionary/store";
 import { detectChannels } from "../../language-detection/store";
 import { loadModelsState } from "../../models/store";
 import { createPresetsStore } from "../../presets/store";
@@ -54,6 +56,7 @@ export type HarnessMode =
   | "clipboard-error"
   | "clipboard-deferred"
   | "out-of-order"
+  | "dictionary-deferred"
   | "late-after-close"
   | "language-resolution"
   | "ocr-status"
@@ -178,6 +181,7 @@ function PopupHarnessApp(props: {
   let fifthDeferred: Deferred<TranslateWithPresetResult> | null = null;
   let streamDeferred: Deferred<TranslateWithPresetResult> | null = null;
   let streamOnText: ((text: string) => void) | null = null;
+  let dictDeferred: Deferred<LookupWordOutcome> | null = null;
   let clipboardDeferred: {
     resolve: (value: ClipboardWrite) => void;
     reject: (err: Error) => void;
@@ -411,6 +415,29 @@ function PopupHarnessApp(props: {
             />
           </View>
         </If>
+        <If when={props.mode === "dictionary-deferred"}>
+          <Button
+            testID="harness-resolve-dict"
+            size="xs"
+            variant="outline"
+            label="Resolve Dict"
+            onPress={() =>
+              dictDeferred?.resolve({
+                ok: true,
+                channelId: "ai",
+                result: {
+                  kind: "entry",
+                  entry: {
+                    found: true,
+                    term: "ephemeral",
+                    phonetics: [],
+                    senses: [{ partOfSpeech: "adj.", glosses: ["短暂的"] }],
+                  },
+                },
+              })
+            }
+          />
+        </If>
         <If when={props.mode === "multi-card"}>
           <View class="flex-row flex-wrap gap-1">
             <Button
@@ -603,6 +630,14 @@ function PopupHarnessApp(props: {
           translate={translateStub}
           detectSource={detectStub}
           clipboard={clipboardStub}
+          lookupDictionary={
+            props.mode === "dictionary-deferred"
+              ? () => {
+                  dictDeferred = createDeferred<LookupWordOutcome>();
+                  return dictDeferred.promise;
+                }
+              : undefined
+          }
         />
       </If>
     </View>
@@ -616,13 +651,15 @@ void Promise.all([
   detectChannels.load(),
   languageDetectionPreferences.load(),
   ttsChannels.load(),
+  dictionaryChannels.load(),
   Storage.getItem(POPUP_HARNESS_MODE_KEY),
-]).then(async ([, , , , , , modeRaw]) => {
+]).then(async ([, , , , , , , modeRaw]) => {
   const mode: HarnessMode =
     modeRaw === "preset-load-error-then-recover" ||
     modeRaw === "clipboard-error" ||
     modeRaw === "clipboard-deferred" ||
     modeRaw === "out-of-order" ||
+    modeRaw === "dictionary-deferred" ||
     modeRaw === "late-after-close" ||
     modeRaw === "language-resolution" ||
     modeRaw === "ocr-status" ||
